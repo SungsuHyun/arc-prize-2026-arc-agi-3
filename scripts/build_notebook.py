@@ -49,11 +49,13 @@ DATASET_SOURCES: list[str] = []
 # Set False to make commits fast/cheap once the stack is known-good.
 SMOKE_TEST = True
 
+# `shape` is the kernel-metadata `machine_shape` the Kaggle API actually honours
+# (the notebook-level "accelerator" alone is ignored and you silently get T4x2).
 _ACCELERATORS = {
-    "cpu":     {"name": "none",            "gpu": False},
-    "t4":      {"name": "nvidiaTeslaT4",   "gpu": True},
-    "p100":    {"name": "nvidiaTeslaP100", "gpu": True},
-    "rtx6000": {"name": "nvidiaRtx6000",   "gpu": True},
+    "cpu":     {"name": "none",             "gpu": False, "shape": None},
+    "t4":      {"name": "nvidiaTeslaT4",    "gpu": True,  "shape": "NvidiaTeslaT4"},
+    "p100":    {"name": "nvidiaTeslaP100",  "gpu": True,  "shape": "NvidiaTeslaP100"},
+    "rtx6000": {"name": "nvidiaRtxPro6000", "gpu": True,  "shape": "NvidiaRtxPro6000"},
 }
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -272,13 +274,16 @@ def main() -> None:
         meta = json.loads(METADATA_PATH.read_text())
         wanted = {
             "enable_gpu": _ACCELERATORS[ACCELERATOR]["gpu"],
+            "machine_shape": _ACCELERATORS[ACCELERATOR]["shape"],
             "model_sources": MODEL_SOURCES,
             "kernel_sources": KERNEL_SOURCES,
             "dataset_sources": DATASET_SOURCES,
         }
         changed = [k for k, v in wanted.items() if meta.get(k) != v]
         if changed:
-            meta.update(wanted)
+            meta.update({k: v for k, v in wanted.items() if v is not None})
+            if wanted["machine_shape"] is None:
+                meta.pop("machine_shape", None)
             METADATA_PATH.write_text(json.dumps(meta, indent=2) + "\n")
             print(f"[build_notebook] Synced {', '.join(changed)} in "
                   f"{METADATA_PATH.relative_to(ROOT)}")
