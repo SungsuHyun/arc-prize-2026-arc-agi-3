@@ -40,6 +40,7 @@ ls20류(이동+게이지) 게임에서 35b도 0점인 이유는 관측이 "객�
 
 ## 결론
 
+- **Kaggle 리더보드 첫 제출: public 0.15** (submission 56466876, 커널 v4, RTX PRO 6000)
 - 채택. 내비게이션 계층(아바타/맵/BFS goto)이 LLM 없이도 ls20 lv1을 풀고,
   LLM은 타깃 순서를 정하는 역할. 제출용 agent/my_agent.py로 복사
 - 후속(v007): (a) 클릭 게임에서 메모리/가설 이월 ablation, (b) ls20 레벨 2 —

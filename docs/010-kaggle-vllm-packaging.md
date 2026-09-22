@@ -70,8 +70,8 @@ GPTQ-int4 35B-A3B(Kaggle 미러 `awooooo/…/other/gptq-int4/1`, 22.8GB) 사용.
   재설치했기 때문. 경쟁 재실행은 `python main.py` 새 프로세스라 영향 없음.
   스모크 셀도 서브프로세스로 돌리게 수정(커널 v5)
 - **리더보드 제출 완료**: 커널 v4 → submission 56466876 (2026-09-22 14:19 UTC,
-  "v006 nav-memory + Qwen3.5-35B-A3B FP8 in-process vLLM"), 상태 PENDING(경쟁
-  재실행 중). CLI 메시지 "0 submissions remaining today"는 제출 후 남은 일일
+  "v006 nav-memory + Qwen3.5-35B-A3B FP8 in-process vLLM"), → **public 0.15**
+  (2026-09-23 채점 완료, 첫 리더보드 점수). CLI 메시지 "0 submissions remaining today"는 제출 후 남은 일일
   한도(1회/일) 안내였음
 
 ## 결론 / 다음 단계
