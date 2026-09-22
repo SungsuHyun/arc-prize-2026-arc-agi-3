@@ -18,3 +18,4 @@
 | 003 | [제출 파이프라인 점검](003-submission-pipeline.md) | 2026-09-22 | 토큰/규칙/노트북 빌드 확인, 제출 준비 완료 |
 | 004 | [실험 버전 관리 구조](004-experiment-versioning.md) | 2026-09-22 | experiments/ 구조 + exp-new/run/summary, v001 검증 |
 | 005 | [Qwen LLM 에이전트 설계](005-qwen-llm-agent-design.md) | 2026-09-22 | 3계층 하이브리드 설계, v002 스켈레톤 구현 |
+| 006 | [일괄 벤치마크 + 대시보드](006-benchmark-dashboard.md) | 2026-09-22 | make bench/dashboard, 첫 벤치마크 실행 |

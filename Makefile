@@ -21,7 +21,7 @@ GAME            ?=
 SERVE_PORT      ?= 8001
 STEPS           ?= 200
 
-.PHONY: help setup play-local pull-sample notebook submit status verify-local serve exp-new exp-run exp-summary clean _check-kaggle
+.PHONY: help setup play-local pull-sample notebook submit status verify-local serve exp-new exp-run exp-summary bench dashboard clean _check-kaggle
 
 _check-kaggle:
 	@if [ ! -s .kaggle/access_token ]; then \
@@ -93,6 +93,15 @@ exp-run: ## Run an experiment and record results: make exp-run NAME=v001 [GAME=l
 
 exp-summary: ## Compare all experiments (table + experiments/summary.json)
 	$(VENV_PY) scripts/exp_summary.py
+
+
+bench: ## Run ALL experiments under identical conditions: make bench [GAME=ls20,vc33] [STEPS=400] [ONLY=v001,v002]
+	$(VENV_PY) scripts/benchmark.py $(if $(GAME),--game $(GAME)) $(if $(STEPS),--max-steps $(STEPS)) $(if $(ONLY),--only $(ONLY))
+
+dashboard: ## Rebuild experiments/dashboard.html from latest results
+	$(VENV_PY) scripts/exp_summary.py
+	$(VENV_PY) scripts/build_dashboard.py
+	@echo "Open: file://$(PWD)/experiments/dashboard.html"
 
 
 clean: ## Remove generated artefacts (venv, downloaded games, vendored repos)

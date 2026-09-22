@@ -30,6 +30,8 @@ make play-local [GAME=ls20] [STEPS=200]   # agent/my_agent.py 로컬 실행
 make exp-new NAME=title [FROM=vNNN]       # 새 실험 버전 스캐폴드
 make exp-run NAME=vNNN [GAME=..] [STEPS=..] # 실험 실행 + results/ JSON 기록
 make exp-summary                          # 실험 비교 + experiments/summary.json
+make bench [GAME=..] [STEPS=..] [ONLY=..]  # 전 버전 동일조건 일괄 실행 + 대시보드 갱신
+make dashboard                            # experiments/dashboard.html 재생성
 make serve                                # 로컬 REST 서버 (:8001, 공식 API 동일)
 make submit && make status                # Kaggle 푸시 (리더보드 제출은 웹에서 수동)
 ```

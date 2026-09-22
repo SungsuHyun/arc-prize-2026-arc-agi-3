@@ -25,6 +25,8 @@ make exp-new NAME=tweak FROM=v002      # 기존 실험 기반으로 파생
 make exp-run NAME=v002                 # 실행 + results/에 JSON 기록 (prefix 매칭)
 make exp-run NAME=v002 GAME=ls20 STEPS=100   # 일부 게임만 빠르게
 make exp-summary                       # 전체 실험 비교 테이블 + summary.json 갱신
+make bench GAME=ls20,vc33 STEPS=400    # 모든 버전을 동일 조건으로 일괄 실행 (bench-태그)
+make dashboard                         # experiments/dashboard.html 재생성
 ```
 
 ## 결과 JSON 스키마 (dashboard 입력)
@@ -41,7 +43,8 @@ make exp-summary                       # 전체 실험 비교 테이블 + summar
 | `scorecard` | 엔진 스코어카드 전체 덤프 (레벨별 상세) |
 
 `make exp-summary`가 만드는 `experiments/summary.json`은 모든 실험×실행을
-한 파일로 모은 것으로, 추후 dashboard는 이 파일 하나만 읽으면 됩니다.
+한 파일로 모은 것이고, `experiments/dashboard.html`(자체 완결형 웹페이지)이
+이를 시각화합니다 — 브라우저로 바로 열면 됨. `make bench`가 둘 다 자동 갱신.
 
 ## 규칙
 
