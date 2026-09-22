@@ -74,6 +74,16 @@ GPTQ-int4 35B-A3B(Kaggle 미러 `awooooo/…/other/gptq-int4/1`, 22.8GB) 사용.
   (2026-09-23 채점 완료, 첫 리더보드 점수). CLI 메시지 "0 submissions remaining today"는 제출 후 남은 일일
   한도(1회/일) 안내였음
 
+### Kaggle 스모크 4·5차 (커널 v5, v6)
+
+- v5 (FP8 미러, 서브프로세스 스모크): vLLM FP8 MoE의 **DeepGEMM JIT가 nvcc≥12.9
+  요구**로 엔진 초기화 실패 (Kaggle 시스템 nvcc가 낮음). → 리더보드 제출(v4)의
+  재실행도 같은 경로였으므로 **LLM 비활성 상태로 채점된 것**이 public 0.15의 1차 원인
+- v6 (GPTQ-int4 미러 `awooooo/qwen3-5-35b-a3b-gptq-int4/other/gptq-int4/1`,
+  `VLLM_USE_DEEP_GEMM=0`, CUDA_HOME=wheel nvcc 13.4): **성공** — 로드 217s,
+  호출당 **1.6s**, JSON 계획 3/3 정상, 오류 0. RTX PRO 6000에서 in-process vLLM
+  35B 플래너가 처음으로 동작
+
 ## 결론 / 다음 단계
 
 - 오프라인 LLM 스택은 Kaggle에서 import까지, 로컬 GPU에서 생성까지 검증됨. 미해결: RTX6000 배정 —
