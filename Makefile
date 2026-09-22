@@ -22,7 +22,7 @@ SERVE_PORT      ?= 8001
 SITE_PORT       ?= 8080
 STEPS           ?= 200
 
-.PHONY: help setup play-local pull-sample notebook submit status kaggle-log wheels verify-local serve exp-new exp-run exp-summary bench dashboard site site-publish clean _check-kaggle
+.PHONY: help setup play-local pull-sample notebook submit status kaggle-log wheels llm-venv smoke-local verify-local serve exp-new exp-run exp-summary bench dashboard site site-publish clean _check-kaggle
 
 _check-kaggle:
 	@if [ ! -s .kaggle/access_token ]; then \
@@ -87,6 +87,15 @@ kaggle-log: _check-kaggle ## Print the Kaggle kernel log (KERNEL=notebooks|noteb
 
 wheels: _check-kaggle ## Push the vLLM wheel-cache kernel (internet on; output attached to the submission)
 	$(KAGGLE) kernels push -p notebooks/wheels/
+
+llm-venv: ## One-time: separate venv with vLLM for local in-process smoke tests (.venv-llm, ~5GB)
+	$(PYTHON) -m venv .venv-llm
+	.venv-llm/bin/pip install --upgrade pip
+	.venv-llm/bin/pip install vllm "arc-agi>=0.9.6" python-dotenv
+
+smoke-local: ## Local GPU smoke test of the planner backend: make smoke-local MODEL_PATH=~/models/x [BACKEND=vllm|hf] [AGENT=path]
+	@test -n "$(MODEL_PATH)" || { echo "usage: make smoke-local MODEL_PATH=<hf checkpoint dir> [BACKEND=vllm|hf]"; exit 1; }
+	.venv-llm/bin/python scripts/smoke_llm.py --model-path $(MODEL_PATH) $(if $(BACKEND),--backend $(BACKEND)) $(if $(AGENT),--agent $(AGENT))
 
 serve: ## Host the ARC-AGI-3 API locally on http://localhost:8001 (framework default)
 	$(VENV_PY) scripts/serve_local.py --port $(SERVE_PORT)

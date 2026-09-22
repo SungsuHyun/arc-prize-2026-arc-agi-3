@@ -43,9 +43,26 @@
 | 스모크 2차 (`--accelerator NvidiaRtx6000`) | pillow 재설치로 `from vllm import LLM` 통과 (vllm 0.30 / transformers 5.17 / torch 2.13+cu130 / cuda True, 설치 223s). 그러나 가속기 지정이 무시되어 여전히 **T4×2(29GiB)** → GPU 용량 가드가 35GiB 모델 로드를 건너뛰고 `backend=none`으로 안전 폴백 (호출 0, 오류 0) |
 | 로컬 4게임 벤치 (bench-20260922-071959) | v004 재현: vc33 lv2 0.321, 종합 0.080 |
 
+### 로컬 GPU 스모크 (RTX 5090 31GB, 2026-09-22 오후)
+
+RTX6000 대기열을 기다리지 않고 같은 코드 경로를 로컬에서 검증 (`make llm-venv`,
+`make smoke-local MODEL_PATH=~/models/qwen3.5-35b-a3b-gptq-int4`,
+scripts/smoke_llm.py). FP8 35B(37GB)는 31GB에 안 들어가 같은 아키텍처의
+GPTQ-int4 35B-A3B(Kaggle 미러 `awooooo/…/other/gptq-int4/1`, 22.8GB) 사용.
+
+| 시도 | 실패 원인 | 조치 |
+|---|---|---|
+| 1 | vLLM이 NVML로 GPU를 탐지하는데 드라이버/라이브러리 불일치(재부팅 전)로 플랫폼 미탐지 | 스모크 스크립트에서 non-NVML CUDA 플랫폼 강제 + 엔진 in-process(`VLLM_ENABLE_V1_MULTIPROCESSING=0`) |
+| 2 | `max_num_seqs=256 > Mamba cache blocks 164` (Qwen3.5 하이브리드 DeltaNet) | **에이전트**: `max_num_seqs=4` (QWEN_MAX_SEQS) |
+| 3 | FlashInfer 샘플러 JIT가 nvcc/ninja 요구, 빌드 실패 | **에이전트**: `VLLM_USE_FLASHINFER_SAMPLER=0`, GDN prefill `triton` (QWEN_GDN_PREFILL) |
+| 4 | — | **성공**: 로드 91s(가중치 21GB, 15s + 컴파일/그래프), 호출당 **0.6s**, 구조화 JSON 계획 3/3 정상 |
+
+2·3은 Kaggle에서도 그대로 터질 수 있는 문제라 에이전트 코드(v005/v006/my_agent)에
+반영. wheel 캐시에 ninja 추가(커널 v2).
+
 ## 결론 / 다음 단계
 
-- 오프라인 LLM 스택은 Kaggle에서 import까지 검증됨. 미해결: RTX6000 배정 —
+- 오프라인 LLM 스택은 Kaggle에서 import까지, 로컬 GPU에서 생성까지 검증됨. 미해결: RTX6000 배정 —
   kernel-metadata `machine_shape` 값(샘플은 `NvidiaTeslaT4`)의 RTX6000 명칭을
   확인해야 실제 vLLM 로드·latency 실측 가능. 값이 틀리면 조용히 T4로 배정됨
   → 확인: `machine_shape: "NvidiaRtxPro6000"` (build_notebook.py가 동기화). 3차 스모크 진행 중

@@ -309,11 +309,18 @@ class QwenPlanner:
         if key not in _ENGINES:
             t0 = time.time()
             if self.backend == "vllm":
+                # FlashInfer의 샘플러/GDN prefill은 첫 호출 때 nvcc JIT 빌드를 요구
+                # (툴킷 없는 환경에서 실패). Triton/PyTorch 경로로 고정.
+                os.environ.setdefault("VLLM_USE_FLASHINFER_SAMPLER", "0")
                 from vllm import LLM
                 _ENGINES[key] = LLM(
                     model=self.model_path, trust_remote_code=True,
                     max_model_len=int(os.getenv("QWEN_MAX_LEN", "4096")),
                     gpu_memory_utilization=float(os.getenv("QWEN_GPU_UTIL", "0.88")),
+                    # 한 번에 1개 요청만 보냄. Qwen3.5(hybrid DeltaNet)는 시퀀스마다
+                    # 상태 캐시 블록이 필요해 기본 256이면 소형 GPU에서 초기화 실패
+                    max_num_seqs=int(os.getenv("QWEN_MAX_SEQS", "4")),
+                    additional_config={"gdn_prefill_backend": os.getenv("QWEN_GDN_PREFILL", "triton")},
                     seed=1337)
             else:
                 import torch

@@ -30,6 +30,10 @@ Kaggle Model로 첨부, (2) vLLM을 오프라인 wheel로 설치, (3) 프로세�
   NvidiaRtx6000`이 무시되어 여전히 T4×2(29GiB) → GPU 용량 가드가 35GiB
   모델 로드를 건너뛰고 L2 비활성(backend=none)으로 안전 폴백
 
+- 로컬 RTX 5090 + GPTQ-int4 35B-A3B로 in-process vLLM 경로 검증: 로드 91s, 호출 0.6s,
+  오류 0. 그 과정에서 max_num_seqs=4, FlashInfer JIT 비활성(샘플러/GDN prefill)을
+  에이전트에 추가 (docs/010)
+
 ## 결론
 
 - 오프라인 LLM 스택(wheel 캐시 + 모델 첨부 + in-process 백엔드)은 Kaggle에서
