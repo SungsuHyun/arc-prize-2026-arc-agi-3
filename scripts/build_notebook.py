@@ -81,6 +81,27 @@ AVAILABLE_AGENTS: dict[str, Type[Agent]] = {
 '''
 
 
+SMOKE_SCRIPT = """import json, sys, time
+sys.path.insert(0, sys.argv[1])
+from agents.templates.my_agent import QwenPlanner, MyAgent
+p = QwenPlanner(MyAgent.MODEL)
+print('backend =', p.backend, '| model =', p.model, '| path =', p.model_path,
+      ('| note: ' + p.last_error) if p.last_error else '')
+obs = ('[PROGRESS] level 0/7 state=NOT_FINISHED\\n[AVAILABLE] 1,2,3,4\\n'
+       '[OBJECTS] color/size/bbox/center\\n c9 s15 (34,47)-(38,49) ctr(36,48)\\n'
+       ' c12 s10 (34,45)-(38,46) ctr(36,45)\\n c11 s84 (13,61)-(54,62) ctr(33,61)\\n'
+       '[RECENT]\\n a1 ACTION1: 52 cells; moved c9s15@36,43 (0,-5); resized c11 s84->82 @33,61\\n'
+       ' a2 ACTION3: 52 cells; moved c9s15@31,43 (-5,0); resized c11 s82->80 @33,61\\n'
+       '[ACTION_STATS changed/tried] ACTION1:1/1 ACTION3:1/1')
+for i in range(3):
+    t0 = time.time(); plan = p.plan(obs); dt = time.time() - t0
+    print(f'call {i}: {dt:.1f}s (load {p.load_s:.0f}s) plan={plan}')
+    print('   hypothesis:', p.last_hypothesis, '| error:', p.last_error or '-')
+print(json.dumps({'backend': p.backend, 'calls': p.calls, 'errors': p.errors,
+                  'load_s': round(p.load_s, 1), 'total_s': round(p.total_s, 1)}))
+"""
+
+
 def code_cell(source: str) -> dict:
     return {
         "cell_type": "code",
@@ -193,8 +214,11 @@ def build() -> dict:
                 python main.py --agent myagent
         """))
 
+    # The smoke test runs in a fresh `python` subprocess (like main.py in the
+    # rerun): the IPython kernel already has the image's old PIL modules
+    # imported, and the vllm import chain would hit them after the reinstall.
     smoke_cell = code_cell(dedent(f"""\
-        import os, sys, time, json, shutil
+        import os, sys, shutil, subprocess
         if not os.getenv('KAGGLE_IS_COMPETITION_RERUN'):
             # Save-and-run-all (commit) mode: emit a dummy submission so the
             # commit succeeds. The real submission.parquet is produced by the
@@ -207,28 +231,16 @@ def build() -> dict:
 
             if {SMOKE_TEST!r}:
                 # v005 smoke test: import the agent through the framework and
-                # run ONE planner call on a canned observation, on real hardware.
+                # run a few planner calls on a canned observation, on real hardware.
                 fw = '/kaggle/working/fw'
                 if not os.path.isdir(fw):
                     shutil.copytree('{COMP}/ARC-AGI-3-Agents', fw)
                 shutil.copy('/tmp/my_agent.py', fw + '/agents/templates/my_agent.py')
                 open(fw + '/agents/__init__.py', 'w').write({FRAMEWORK_INIT!r})
-                sys.path.insert(0, fw)
-                from agents.templates.my_agent import QwenPlanner, MyAgent
-                p = QwenPlanner(MyAgent.MODEL)
-                print('backend =', p.backend, '| model =', p.model, '| path =', p.model_path)
-                obs = ('[PROGRESS] level 0/7 state=NOT_FINISHED\\n[AVAILABLE] 1,2,3,4\\n'
-                       '[OBJECTS] color/size/bbox/center\\n c9 s15 (34,47)-(38,49) ctr(36,48)\\n'
-                       ' c12 s10 (34,45)-(38,46) ctr(36,45)\\n c11 s84 (13,61)-(54,62) ctr(33,61)\\n'
-                       '[RECENT]\\n a1 ACTION1: 52 cells; moved c9s15@36,43 (0,-5); resized c11 s84→82 @33,61\\n'
-                       ' a2 ACTION3: 52 cells; moved c9s15@31,43 (-5,0); resized c11 s82→80 @33,61\\n'
-                       '[ACTION_STATS changed/tried] ACTION1:1/1 ACTION3:1/1')
-                for i in range(3):
-                    t0 = time.time(); plan = p.plan(obs); dt = time.time() - t0
-                    print(f'call {{i}}: {{dt:.1f}}s (load {{p.load_s:.0f}}s) plan={{plan}}')
-                    print('   hypothesis:', p.last_hypothesis, '| error:', p.last_error or '-')
-                print(json.dumps({{'backend': p.backend, 'calls': p.calls, 'errors': p.errors,
-                                  'load_s': p.load_s, 'total_s': p.total_s}}))
+                open('/tmp/smoke.py', 'w').write({SMOKE_SCRIPT!r})
+                r = subprocess.run([sys.executable, '/tmp/smoke.py', fw], capture_output=True, text=True)
+                print(r.stdout[-6000:])
+                print(r.stderr[-3000:])
         """))
 
     if ACCELERATOR not in _ACCELERATORS:

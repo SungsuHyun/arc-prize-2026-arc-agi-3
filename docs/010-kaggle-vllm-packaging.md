@@ -60,12 +60,26 @@ GPTQ-int4 35B-A3B(Kaggle 미러 `awooooo/…/other/gptq-int4/1`, 22.8GB) 사용.
 2·3은 Kaggle에서도 그대로 터질 수 있는 문제라 에이전트 코드(v005/v006/my_agent)에
 반영. wheel 캐시에 ninja 추가(커널 v2).
 
+### Kaggle 스모크 3차 (커널 v4, `machine_shape: NvidiaRtxPro6000`)
+
+- **RTX PRO 6000 Blackwell Server Edition, 97,887 MiB** 배정 확인 — 48GB가 아니라
+  96GB (docs/005의 가정 수정). FP8 35B는 물론 bf16 35B(70GB)도 올라가는 크기
+- 설치 128s, vllm import 통과, 모델 경로/백엔드(vllm) 선택 정상
+- 플래너 호출은 `PIL._typing._Ink` ImportError로 실패 — 원인은 노트북 커널
+  프로세스가 이미지의 옛 PIL을 이미 import한 상태(matplotlib inline)에서 pillow를
+  재설치했기 때문. 경쟁 재실행은 `python main.py` 새 프로세스라 영향 없음.
+  스모크 셀도 서브프로세스로 돌리게 수정(커널 v5)
+- **리더보드 제출 완료**: 커널 v4 → submission 56466876 (2026-09-22 14:19 UTC,
+  "v006 nav-memory + Qwen3.5-35B-A3B FP8 in-process vLLM"), 상태 PENDING(경쟁
+  재실행 중). CLI 메시지 "0 submissions remaining today"는 제출 후 남은 일일
+  한도(1회/일) 안내였음
+
 ## 결론 / 다음 단계
 
 - 오프라인 LLM 스택은 Kaggle에서 import까지, 로컬 GPU에서 생성까지 검증됨. 미해결: RTX6000 배정 —
   kernel-metadata `machine_shape` 값(샘플은 `NvidiaTeslaT4`)의 RTX6000 명칭을
   확인해야 실제 vLLM 로드·latency 실측 가능. 값이 틀리면 조용히 T4로 배정됨
-  → 확인: `machine_shape: "NvidiaRtxPro6000"` (build_notebook.py가 동기화). 3차 스모크 진행 중
+  → 해결: `machine_shape: "NvidiaRtxPro6000"` (build_notebook.py가 동기화), 96GB 배정 확인
 - T4×2 경로가 필요하면 Qwen3.5-9B(bf16 18GB, TP=2) 또는 4bit 35B(GPTQ 미러
   `awooooo/qwen3-5-35b-a3b-gptq-int4`, ~20GB)로 교체 — 단 9b는 v004에서
   점수가 L1보다 나빴음
