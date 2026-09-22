@@ -216,47 +216,56 @@ function barChart(container, rows, valueKey, maxHint, tipHtml) {
   el('line', { x1: LBL, y1: 4, x2: LBL, y2: H - 20, class: 'axis' }, svg);
 }
 
-function trendChart(container, legendBox) {
-  container.innerHTML = ''; legendBox.innerHTML = '';
-  const series = exps.map((e, i) => ({
-    name: e.name, color: colorOf(i),
-    pts: (e.runs || []).map((r, j) => ({ x: j + 1, y: r.aggregate?.score ?? 0, run: r })),
-  })).filter(s => s.pts.length);
-  if (!series.length) { container.innerHTML = '<div class="empty">데이터 없음</div>'; return; }
-  const W = 960, H = 240, L = 46, R = 16, T = 12, B = 30;
-  const maxX = Math.max(2, ...series.map(s => s.pts.length));
-  const maxY = Math.max(1, ...series.flatMap(s => s.pts.map(p => p.y)));
-  const sx = x => L + (x - 1) / (maxX - 1) * (W - L - R);
-  const sy = y => T + (1 - y / maxY) * (H - T - B);
+// Per-experiment score distribution: min / median / max range plot.
+function scoreStats(e) {
+  const scores = (e.runs || []).map(r => r.aggregate?.score ?? 0).sort((a, b) => a - b);
+  if (!scores.length) return null;
+  const mid = Math.floor(scores.length / 2);
+  const median = scores.length % 2 ? scores[mid] : (scores[mid - 1] + scores[mid]) / 2;
+  return { min: scores[0], median, max: scores[scores.length - 1], n: scores.length };
+}
+
+function statsChart(container) {
+  container.innerHTML = '';
+  const rows = exps.map(e => ({ name: e.name, s: scoreStats(e) })).filter(r => r.s);
+  if (!rows.length) { container.innerHTML = '<div class="empty">데이터 없음</div>'; return; }
+  const W = 960, ROW = 34, LBL = 170, R = 190;
+  const H = rows.length * ROW + 26;
   const svg = el('svg', { viewBox: `0 0 ${W} ${H}`, width: '100%' }, container);
-  [0, .5, 1].forEach(t => {
-    const y = sy(maxY * t);
-    el('line', { x1: L, y1: y, x2: W - R, y2: y, class: 'gridline' }, svg);
-    const lbl = el('text', { x: L - 8, y: y + 4, 'text-anchor': 'end' }, svg);
-    lbl.textContent = (maxY * t).toFixed(maxY >= 10 ? 0 : 1);
+  const maxV = Math.max(1, ...rows.map(r => r.s.max));
+  const plotW = W - LBL - R;
+  const sx = v => LBL + v / maxV * plotW;
+  [0, .25, .5, .75, 1].forEach(t => {
+    const x = LBL + t * plotW;
+    el('line', { x1: x, y1: 4, x2: x, y2: H - 22, class: 'gridline' }, svg);
+    const lbl = el('text', { x, y: H - 8, 'text-anchor': 'middle' }, svg);
+    lbl.textContent = (maxV * t).toFixed(maxV >= 10 ? 0 : 2);
   });
-  for (let x = 1; x <= maxX; x++) {
-    const lbl = el('text', { x: sx(x), y: H - 10, 'text-anchor': 'middle' }, svg);
-    lbl.textContent = x;
-  }
-  series.forEach(s => {
-    if (s.pts.length > 1) {
-      const d = s.pts.map((p, i) => (i ? 'L' : 'M') + sx(p.x) + ' ' + sy(p.y)).join(' ');
-      el('path', { d, fill: 'none', stroke: s.color, 'stroke-width': 2,
-                   'stroke-linejoin': 'round' }, svg);
-    }
-    s.pts.forEach(p => {
-      const dot = el('circle', { cx: sx(p.x), cy: sy(p.y), r: 4.5, fill: s.color,
-        stroke: css('--surface-2'), 'stroke-width': 2 }, svg);
-      dot.addEventListener('mousemove', e => showTip(e,
-        `<b>${s.name}</b><br>실행 #${p.x} (${p.run.run_id})<br>` +
-        `점수 <b>${fmt(p.y)}</b> · 레벨 ${p.run.aggregate?.levels_completed ?? '–'} · ` +
-        `액션 ${p.run.aggregate?.actions ?? '–'}` +
-        (p.run.tag ? `<br><span class="muted">${p.run.tag}</span>` : '')));
-      dot.addEventListener('mouseleave', hideTip);
+  rows.forEach((r, i) => {
+    const y = i * ROW + ROW / 2;
+    const name = el('text', { x: LBL - 8, y: y + 4, 'text-anchor': 'end' }, svg);
+    name.textContent = r.name.length > 24 ? r.name.slice(0, 23) + '…' : r.name;
+    // min–max range
+    el('line', { x1: sx(r.s.min), y1: y, x2: sx(r.s.max), y2: y,
+                 stroke: css('--border'), 'stroke-width': 4,
+                 'stroke-linecap': 'round' }, svg);
+    // min / max ticks
+    [r.s.min, r.s.max].forEach(v => el('circle', {
+      cx: sx(v), cy: y, r: 4, fill: css('--surface-2'),
+      stroke: css('--text-muted'), 'stroke-width': 1.5 }, svg));
+    // median marker
+    const med = el('circle', { cx: sx(r.s.median), cy: y, r: 6,
+      fill: css('--accent'), stroke: css('--surface-2'), 'stroke-width': 2 }, svg);
+    const lbl = el('text', { x: W - R + 8, y: y + 4, class: 'val' }, svg);
+    lbl.textContent = `${fmt(r.s.min)} / ${fmt(r.s.median)} / ${fmt(r.s.max)}`;
+    const hit = el('rect', { x: 0, y: i * ROW, width: W, height: ROW,
+                             fill: 'transparent' }, svg);
+    [med, hit].forEach(n => {
+      n.addEventListener('mousemove', e => showTip(e,
+        `<b>${r.name}</b><br>실행 ${r.s.n}회<br>` +
+        `최저 <b>${fmt(r.s.min)}</b> · 중앙값 <b>${fmt(r.s.median)}</b> · 최고 <b>${fmt(r.s.max)}</b>`));
+      n.addEventListener('mouseleave', hideTip);
     });
-    legendBox.insertAdjacentHTML('beforeend',
-      `<span><span class="sw" style="background:${s.color}"></span>${s.name}</span>`);
   });
 }
 
@@ -338,12 +347,12 @@ function renderIndex() {
     <h2>벤치마크 리포트</h2>
     ${benches.length ? `<div class="cards">${cards}</div>`
       : '<div class="panel empty">아직 벤치마크가 없습니다. <code>make bench</code>로 실행하세요.</div>'}
-    <h2>점수 추이 (실행 순서별)</h2>
-    <div class="panel"><div id="trendChart"></div><div class="legend" id="trendLegend"></div></div>
+    <h2>모델별 점수 분포 <span class="sub" style="font-weight:400">(최저 / 중앙값 / 최고, 전체 실행 기준)</span></h2>
+    <div class="panel"><div id="statsChart"></div></div>
     <h2>모든 실행 기록</h2>
     <div class="panel tablewrap"><table id="runTable"></table></div>`;
 
-  trendChart(document.getElementById('trendChart'), document.getElementById('trendLegend'));
+  statsChart(document.getElementById('statsChart'));
   document.getElementById('runTable').innerHTML = runsTableHTML(
     exps.flatMap(e => (e.runs || []).slice().reverse().map(r => [e.name, r])));
 }
