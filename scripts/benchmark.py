@@ -1,14 +1,16 @@
-"""Run ALL experiment versions under identical conditions and record results.
+"""Run one or more experiment versions under identical conditions and record results.
 
 Each experiment runs in its own subprocess (isolated imports), sharing one
 benchmark tag (bench-<timestamp>) so runs are comparable as a group. After
-all runs finish, experiments/summary.json and experiments/dashboard.html
-are regenerated.
+all runs finish, experiments/summary.json and the site are regenerated.
+
+Versions must be named explicitly (LLM runs are expensive); `--all` opts in
+to re-running every version.
 
 Usage:
-    .venv/bin/python scripts/benchmark.py                     # all experiments, all games
-    .venv/bin/python scripts/benchmark.py --game ls20,vc33 --max-steps 400
-    .venv/bin/python scripts/benchmark.py --only v001,v003    # subset of versions
+    .venv/bin/python scripts/benchmark.py v006                        # one version
+    .venv/bin/python scripts/benchmark.py v005,v006 --game ls20,vc33 --max-steps 400
+    .venv/bin/python scripts/benchmark.py --all                       # every version
 """
 from __future__ import annotations
 
@@ -35,18 +37,25 @@ def experiment_dirs(only: str | None) -> list[Path]:
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("versions", nargs="?", default=None,
+                   help="comma-separated experiment name prefixes, e.g. v006 or v005,v006")
     p.add_argument("--game", default=None,
                    help="comma-separated short game ids (default: all games)")
     p.add_argument("--max-steps", type=int, default=400)
-    p.add_argument("--only", default=None,
-                   help="comma-separated experiment name prefixes")
+    p.add_argument("--only", default=None, help="alias of the positional versions argument")
+    p.add_argument("--all", action="store_true",
+                   help="run EVERY experiment version (expensive; off by default)")
     p.add_argument("--no-publish", action="store_true",
                    help="skip publishing the site to GitHub Pages")
     args = p.parse_args()
 
-    dirs = experiment_dirs(args.only)
+    only = args.versions or args.only
+    if not only and not args.all:
+        raise SystemExit("Name the version(s) to benchmark (e.g. `make bench NAME=v006`) "
+                         "or pass --all / ALL=1 to run every version.")
+    dirs = experiment_dirs(None if args.all else only)
     if not dirs:
-        raise SystemExit("No experiments found.")
+        raise SystemExit(f"No experiments match {only!r}.")
 
     bench_id = "bench-" + datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     print(f"=== {bench_id}: {len(dirs)} experiment(s), "

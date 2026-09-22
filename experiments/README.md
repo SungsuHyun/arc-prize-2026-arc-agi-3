@@ -25,7 +25,7 @@ make exp-new NAME=tweak FROM=v002      # 기존 실험 기반으로 파생
 make exp-run NAME=v002                 # 실행 + results/에 JSON 기록 (prefix 매칭)
 make exp-run NAME=v002 GAME=ls20 STEPS=100   # 일부 게임만 빠르게
 make exp-summary                       # 전체 실험 비교 테이블 + summary.json 갱신
-make bench GAME=ls20,vc33 STEPS=400    # 모든 버전 일괄 실행 + GitHub Pages 자동 배포
+make bench NAME=v006 GAME=ls20,vc33 STEPS=400  # 지정 버전만 실행 + GitHub Pages 자동 배포 (ALL=1: 전 버전)
 make site-publish                      # Pages 수동 배포 (gh-pages 브랜치)
 make site                              # 로컬 미리보기 (localhost:8080)
 make dashboard                         # experiments/site/ 정적 파일만 재생성

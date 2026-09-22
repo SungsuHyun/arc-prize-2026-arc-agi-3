@@ -10,7 +10,7 @@
 
 ## 방법
 
-- `make bench [GAME=..] [STEPS=..] [ONLY=v001,v002]` — 전 버전을 서브프로세스로
+- `make bench NAME=vNNN [GAME=..] [STEPS=..]` (2026-09-22부터 버전 지정 필수, `ALL=1`로 전 버전) — 지정 버전을 서브프로세스로
   순차 실행, 공통 태그(`bench-<시각>`)를 부여해 그룹으로 비교 가능하게 기록.
   종료 후 summary.json과 dashboard.html 자동 재생성
 - `make dashboard` — 임의 시점에 사이트만 재생성

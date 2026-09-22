@@ -30,7 +30,7 @@ make play-local [GAME=ls20] [STEPS=200]   # agent/my_agent.py 로컬 실행
 make exp-new NAME=title [FROM=vNNN]       # 새 실험 버전 스캐폴드
 make exp-run NAME=vNNN [GAME=..] [STEPS=..] # 실험 실행 + results/ JSON 기록
 make exp-summary                          # 실험 비교 + experiments/summary.json
-make bench [GAME=..] [STEPS=..] [ONLY=..]  # 전 버전 동일조건 일괄 실행 + Pages 자동 배포
+make bench NAME=vNNN [GAME=..] [STEPS=..]  # 지정 버전 벤치마크 + Pages 자동 배포 (ALL=1: 전 버전)
 make site-publish                         # 벤치마크 사이트를 GitHub Pages로 수동 배포
 make site                                 # 로컬 미리보기 (localhost:8080, 자동 재생성)
 make dashboard                            # experiments/site/ 정적 파일만 재생성

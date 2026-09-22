@@ -102,8 +102,8 @@ exp-summary: ## Compare all experiments (table + experiments/summary.json)
 	$(VENV_PY) scripts/exp_summary.py
 
 
-bench: ## Run ALL experiments under identical conditions: make bench [GAME=ls20,vc33] [STEPS=400] [ONLY=v001,v002]
-	$(VENV_PY) scripts/benchmark.py $(if $(GAME),--game $(GAME)) $(if $(STEPS),--max-steps $(STEPS)) $(if $(ONLY),--only $(ONLY))
+bench: ## Benchmark named version(s) + publish site: make bench NAME=v006 [GAME=ls20,vc33] [STEPS=400] (ALL=1 runs every version)
+	$(VENV_PY) scripts/benchmark.py $(or $(NAME),$(ONLY)) $(if $(ALL),--all) $(if $(GAME),--game $(GAME)) $(if $(STEPS),--max-steps $(STEPS))
 
 dashboard: ## Rebuild the benchmark site (experiments/site/: index + page per benchmark)
 	$(VENV_PY) scripts/exp_summary.py
