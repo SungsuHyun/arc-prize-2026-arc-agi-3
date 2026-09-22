@@ -1,18 +1,16 @@
-"""v006: navigation-aware encoder + level memory (ls20-type games).
+"""v009: LLM gating while the navigator works + click-sweep for click games.
 
-v005(백엔드 교체 가능 L2) 위에 인코더/프롬프트/기억을 확장:
+v006 25게임 전수에서 LLM 순효과가 −0.016이었던 두 원인을 겨냥:
 
-  [PLAYER]/[MOVES]  어떤 액션이 어떤 객체를 얼마나 옮기는지 추적 → 아바타 식별.
-                    이동 델타의 gcd로 게임의 셀 크기 추정
-  [MAP]             셀 크기 단위로 다운샘플한 코스 맵(다수색 hex, P=아바타) —
-                    LLM이 벽/통로/목표를 보고 경로를 계획할 수 있게
-  [GAUGE]           매 액션 단조 감소(증가)하는 막대 → 남은 액션 예산 힌트
-  [MEMORY]          레벨 완료/게임오버 시점의 액션 꼬리 + 당시 가설. 규칙은
-                    레벨 간 유지되므로 재사용 유도
-  L1 폴백           직전 이동을 즉시 되돌리는 액션에 낮은 가중치
-  트리거            레벨업 직후 즉시 재계획, 게임당 예산 16회, 계획 최대 12스텝
+  1. 내비 게이트  이동 게임에서 내비게이터가 아직 할 일(미방문·도달가능 타깃,
+                 프런티어)이 있으면 LLM을 부르지 않는다. m0r0에서 LLM 계획이
+                 끼어들어 레벨 점수를 깎던 것(−0.48) 방지. 내비게이터가 소진되거나
+                 stuck일 때만 L2.
+  2. 클릭 스위프  클릭 게임(이동 없음, ACTION6 가능)의 L1이 무작위 클릭이었음 →
+                 객체 중심을 작은 것부터 한 번씩 순회, 변화를 일으킨 객체·새로
+                 나타난 객체를 우선 재클릭. 레벨 바뀌면 초기화.
 
-백엔드/환경변수는 v005와 동일 (QWEN_BACKEND, QWEN_MODEL_PATH, QWEN_ENDPOINT, QWEN_MODEL).
+백엔드/인코더/내비게이터는 v006과 동일.
 """
 from __future__ import annotations
 
@@ -763,6 +761,99 @@ class Navigator:
         return unknown[0] if unknown else None
 
 
+# ─────────────────────────────── click sweep ────────────────────────────────
+
+class ClickSweeper:
+    """클릭 게임 L1. 단계: (A) 작은 객체부터 중심을 한 번씩 → (B) 실제 변화를 낸
+    버킷을 상한(MAX_RETRY)까지 재클릭 → (C) 아직 안 눌러본 4px 버킷 격자 스위프.
+    같은 버킷 연속 2회 이상 금지. 게이지/HUD 띠는 제외. 레벨 바뀌면 초기화."""
+
+    MAX_RETRY = 6
+    MAX_SWEEP = 24      # 라운드당 격자 스위프 상한, 소진되면 새 라운드(기록 초기화)
+
+    def __init__(self):
+        self.log: dict[tuple[int, int], list[int]] = {}   # bucket → [tried, changed]
+        self.last: Optional[tuple[int, int]] = None
+        self.last_n = 0
+        self.sweeps = 0
+        self.prev_sigs: set[tuple[int, int, int]] = set()
+
+    @staticmethod
+    def bucket(x: int, y: int) -> tuple[int, int]:
+        return (x // 4, y // 4)
+
+    def new_level(self) -> None:
+        self.log.clear()
+        self.last = None
+        self.last_n = 0
+        self.sweeps = 0
+        self.prev_sigs.clear()
+
+    def record(self, changed: bool) -> None:
+        if self.last is None:
+            return
+        t = self.log.setdefault(self.last, [0, 0])
+        t[0] += 1
+        t[1] += int(changed)
+
+    @staticmethod
+    def is_gauge_like(o: dict, gauge_colors: set[int]) -> bool:
+        """액션 게이지/HUD: 게이지 색이거나, 화면 가장자리에 붙은 길고 얇은 띠."""
+        x0, y0, x1, y1 = o["bbox"]
+        w, h = x1 - x0 + 1, y1 - y0 + 1
+        thin_edge = ((h <= 3 and w >= 24 and (y0 <= 1 or y1 >= 62)) or
+                     (w <= 3 and h >= 24 and (x0 <= 1 or x1 >= 62)))
+        return o["color"] in gauge_colors or thin_edge
+
+    def _pick(self, x: int, y: int) -> tuple[int, int]:
+        b = self.bucket(x, y)
+        self.last_n = self.last_n + 1 if b == self.last else 1
+        self.last = b
+        return (x, y)
+
+    def choose(self, objects: list[dict], background: int,
+               gauge_colors: set[int] = frozenset(), grid: Optional[list] = None) -> tuple[int, int]:
+        cands = [o for o in objects if o["color"] != background
+                 and not self.is_gauge_like(o, gauge_colors)]
+        sigs = {(o["color"], o["size"], self.bucket(*o["center"])) for o in cands}
+        appeared = sigs - self.prev_sigs if self.prev_sigs else set()
+        self.prev_sigs = sigs
+
+        def tries(o):
+            return self.log.get(self.bucket(*o["center"]), [0, 0])
+        def not_repeat(o):
+            return not (self.bucket(*o["center"]) == self.last and self.last_n >= 2)
+
+        # (A) 새로 나타난 객체, 그다음 안 눌러본 객체 (작은 것부터)
+        fresh = [o for o in cands if tries(o)[0] == 0 and not_repeat(o)]
+        if fresh:
+            best = min(fresh, key=lambda o: (0 if (o["color"], o["size"], self.bucket(*o["center"])) in appeared else 1,
+                                             o["size"], random.random()))
+            return self._pick(*best["center"])
+        # (B) 실제 변화를 낸 버킷 재클릭 (상한까지)
+        retry = [o for o in cands if 0 < tries(o)[1] and tries(o)[0] < self.MAX_RETRY and not_repeat(o)]
+        if retry:
+            best = max(retry, key=lambda o: (tries(o)[1] / tries(o)[0], -o["size"], random.random()))
+            return self._pick(*best["center"])
+        # (C) 안 눌러본 버킷 격자 스위프 (배경이 아닌 칸 우선, 라운드당 상한)
+        unvisited = [(bx, by) for bx in range(16) for by in range(16) if (bx, by) not in self.log]
+        if unvisited and self.sweeps < self.MAX_SWEEP:
+            if grid is not None:
+                nonbg = [b for b in unvisited if grid[b[1] * 4 + 2][b[0] * 4 + 2] != background]
+                unvisited = nonbg or unvisited
+            bx, by = random.choice(unvisited)
+            self.sweeps += 1
+            return self._pick(bx * 4 + 2, by * 4 + 2)
+        # (D) 라운드 소진 → 기록 초기화하고 새 라운드 (효과 있던 객체부터 다시)
+        self.log.clear()
+        self.sweeps = 0
+        pool = cands or objects
+        if pool:
+            best = min(pool, key=lambda o: (o["size"], random.random()))
+            return self._pick(*best["center"])
+        return self._pick(random.randint(0, 63), random.randint(0, 63))
+
+
 # ─────────────────────────────── the agent ──────────────────────────────────
 
 class MyAgent(Agent):
@@ -783,6 +874,8 @@ class MyAgent(Agent):
         self.encoder = ObservationEncoder()
         self.planner = QwenPlanner(self.MODEL)
         self.nav = Navigator()
+        self.clicker = ClickSweeper()
+        self.sweep_clicks = 0
         self.plan_queue: list[dict] = []
         self.goto_target: Optional[tuple[int, int]] = None
         self.plan_noop_streak = 0
@@ -817,6 +910,7 @@ class MyAgent(Agent):
             "planned_actions": self.planned_executed,
             "goto_expanded": self.goto_expanded,
             "frontier_moves": self.frontier_moves,
+            "sweep_clicks": self.sweep_clicks,
             "moves_known": {a: self.encoder.move_delta(a) for a in sorted(self.encoder.move_log)
                             if self.encoder.move_delta(a)},
             "floor_colors": sorted(self.nav.floor_colors),
@@ -837,6 +931,8 @@ class MyAgent(Agent):
         changed = (key != self.prev_key) or leveled
         self.last_changed = changed
         self.effects.setdefault(self.prev_key, {})[self.prev_action] = changed
+        if self.prev_action == "ACTION6":
+            self.clicker.record(self._effective_change(latest_frame))
         t = self.tally.setdefault(self.prev_action, [0, 0])
         t[0] += int(changed)
         t[1] += 1
@@ -857,6 +953,7 @@ class MyAgent(Agent):
             self.goto_target = None
             self.level_changed = True
             self.nav.new_level()
+            self.clicker.new_level()
             self.encoder.gauge_hist.clear()     # 새 레벨의 게이지를 '리필'로 오인하지 않게
             used = self.action_counter - self.level_start
             tail = ",".join(self.history[-15:])
@@ -872,6 +969,25 @@ class MyAgent(Agent):
             self.level_start = self.action_counter
         self.prev_level = latest_frame.levels_completed
 
+    def _gauge_colors(self) -> set[int]:
+        return set(self.encoder.gauge_hist)
+
+    def _effective_change(self, latest_frame: FrameData) -> bool:
+        """게이지(매 액션 변하는 HUD)를 뺀 실제 변화가 있었는가."""
+        prev, cur = self.encoder.prev_grid, latest_frame.frame[-1] if latest_frame.frame else None
+        if prev is None or cur is None:
+            return True
+        masks = [o["bbox"] for o in self.encoder.prev_objects
+                 if self.clicker.is_gauge_like(o, self._gauge_colors())]
+        for y in range(64):
+            pr, cr = prev[y], cur[y]
+            if pr == cr:
+                continue
+            for x in range(64):
+                if pr[x] != cr[x] and not any(x0 <= x <= x1 and y0 <= y <= y1 for x0, y0, x1, y1 in masks):
+                    return True
+        return False
+
     def _should_plan(self, latest_frame: FrameData) -> bool:
         llm_steps = [x for x in self.plan_queue if x.get("via") != "auto"]
         if llm_steps or not self.planner.enabled:
@@ -880,13 +996,26 @@ class MyAgent(Agent):
             return False
         if self.level_changed:
             self.level_changed = False
-            return True
+            md0 = self.encoder.last_map
+            if not (md0 and self.nav.moves(self.encoder, md0)):
+                return True                  # 클릭 게임: 새 레벨에 즉시 계획
         since = self.action_counter - self.last_plan_at
-        nav_mode = bool(self.encoder.last_map and self.nav.moves(self.encoder, self.encoder.last_map))
+        md = self.encoder.last_map
+        nav_mode = bool(md and self.nav.moves(self.encoder, md))
+        if nav_mode and self._nav_busy(md):
+            return False                     # 내비게이터가 할 일이 남아 있으면 LLM 보류
         if since < (4 if nav_mode else 8):
             return False
         every = self.PLAN_EVERY // 2 if nav_mode else self.PLAN_EVERY
         return self.stuck >= self.STUCK_N or since >= every
+
+    def _nav_busy(self, md: dict) -> bool:
+        """진행 중인 goto, 미방문·도달가능 타깃, 프런티어가 있으면 True."""
+        if self.goto_target is not None or any(x.get("via") == "auto" for x in self.plan_queue):
+            return True
+        if any(t["len"] and not t["visited"] for t in self.targets):
+            return True
+        return md["player"] is not None and self.nav.frontier(self.encoder, md) is not None
 
     # ── plan execution helpers ─────────────────────────────────────────────
     def _expand_goto(self, step: dict) -> bool:
@@ -1029,6 +1158,14 @@ class MyAgent(Agent):
         if action is None:
             tried = self.effects.get(key, {})
             untried = [a for a in candidates if a.name not in tried]
+            six = GameAction.ACTION6
+            if six in candidates and not known_dirs:
+                # 클릭 게임: 단순 액션이 모두 무효(≥3회 시도, 변화 0)면 클릭만 사용
+                dead = all(self.tally.get(a.name, [0, 0])[1] >= 3 and self.tally.get(a.name, [0, 0])[0] == 0
+                           for a in candidates if a is not six)
+                if dead:
+                    untried = []
+                    candidates = [six]
             if untried:
                 action = random.choice(untried)
             else:
@@ -1044,12 +1181,14 @@ class MyAgent(Agent):
                             weights[i] *= 0.2
                 action = random.choices(pool, weights=weights, k=1)[0]
             if action.is_complex():
-                targets = [o["center"] for o in self.encoder.prev_objects]
-                x, y = random.choice(targets) if targets \
-                    else (random.randint(0, 63), random.randint(0, 63))
+                grid = latest_frame.frame[-1]
+                background = Counter(c for row in grid for c in row).most_common(1)[0][0]
+                x, y = self.clicker.choose(self.encoder.prev_objects, background,
+                                           self._gauge_colors(), grid)
                 action.set_data({"x": x, "y": y})
+                self.sweep_clicks += 1
 
-        action.reasoning = (self.planner.last_hypothesis or "v006 explorer")[:120]
+        action.reasoning = (self.planner.last_hypothesis or "v009 explorer")[:120]
         self.history.append(str(action.value) if not action.is_complex()
                             else f"6@{action.action_data.x},{action.action_data.y}")
         self.prev_key = key

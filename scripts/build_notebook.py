@@ -51,7 +51,13 @@ DATASET_SOURCES: list[str] = []
 
 # Smoke test at commit time (not rerun): load the model and run one plan.
 # Set False to make commits fast/cheap once the stack is known-good.
-SMOKE_TEST = True
+SMOKE_TEST = False
+
+# Planner backend forced in the rerun: "" = auto (vllm if a model is attached),
+# "none" = L2 off (python layers only). Three 25-game sweeps (v006/v009/v010)
+# showed the LLM as a small net loss, so the leaderboard runs with it off;
+# the model stays attached so this is a one-line flip.
+PLANNER_BACKEND = "none"
 
 # `shape` is the kernel-metadata `machine_shape` the Kaggle API actually honours
 # (the notebook-level "accelerator" alone is ignored and you silently get T4x2).
@@ -128,6 +134,8 @@ def build() -> dict:
     install_cell = code_cell(dedent(f"""\
         import glob, os, subprocess, sys, time
         t0 = time.time()
+        if {PLANNER_BACKEND!r}:
+            os.environ['QWEN_BACKEND'] = {PLANNER_BACKEND!r}
         !pip install -q --no-index --find-links {COMP}/arc_agi_3_wheels arc-agi python-dotenv
 
         # v005: offline vLLM from the attached wheels-kernel output (optional).
@@ -167,7 +175,7 @@ def build() -> dict:
 
     write_agent_cell = code_cell("%%writefile /tmp/my_agent.py\n" + agent_body)
 
-    env_cell = code_cell(dedent("""\
+    env_cell = code_cell(dedent(f"""\
         import glob, os, subprocess
         # Locate the attached Kaggle Model checkpoint (HF format) and export it
         # for the agent. `!` shell commands below inherit os.environ.
@@ -175,7 +183,9 @@ def build() -> dict:
                        if glob.glob(os.path.join(os.path.dirname(c), '*.safetensors')))
         if cands:
             os.environ['QWEN_MODEL_PATH'] = cands[0]
-        print('QWEN_MODEL_PATH =', os.environ.get('QWEN_MODEL_PATH'))
+        if {PLANNER_BACKEND!r}:
+            os.environ['QWEN_BACKEND'] = {PLANNER_BACKEND!r}
+        print('QWEN_MODEL_PATH =', os.environ.get('QWEN_MODEL_PATH'), '| QWEN_BACKEND =', os.environ.get('QWEN_BACKEND', 'auto'))
         # JIT kernels (DeepGEMM/FlashInfer) need a recent nvcc; prefer the one
         # shipped by the nvidia-cuda-nvcc wheel from our cache over the image's.
         nvccs = sorted(glob.glob('/usr/local/lib/python3.12/dist-packages/nvidia/cu*/bin/nvcc'))
@@ -291,7 +301,8 @@ def main() -> None:
     NOTEBOOK_PATH.write_text(json.dumps(build(), indent=1))
     print(f"[build_notebook] Wrote {NOTEBOOK_PATH.relative_to(ROOT)}  "
           f"(accelerator: {ACCELERATOR}, models: {len(MODEL_SOURCES)}, "
-          f"kernels: {len(KERNEL_SOURCES)}, smoke_test: {SMOKE_TEST})")
+          f"kernels: {len(KERNEL_SOURCES)}, smoke_test: {SMOKE_TEST}, "
+          f"planner: {PLANNER_BACKEND or 'auto'})")
 
     # Keep notebooks/kernel-metadata.json in sync (GPU flag + attached sources).
     if METADATA_PATH.exists():
