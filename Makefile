@@ -22,7 +22,7 @@ SERVE_PORT      ?= 8001
 SITE_PORT       ?= 8080
 STEPS           ?= 200
 
-.PHONY: help setup play-local pull-sample notebook submit status verify-local serve exp-new exp-run exp-summary bench dashboard site site-publish clean _check-kaggle
+.PHONY: help setup play-local pull-sample notebook submit status kaggle-log wheels verify-local serve exp-new exp-run exp-summary bench dashboard site site-publish clean _check-kaggle
 
 _check-kaggle:
 	@if [ ! -s .kaggle/access_token ]; then \
@@ -81,6 +81,12 @@ submit: notebook _check-kaggle ## Build notebook and push to Kaggle (one-line su
 status: _check-kaggle ## Show the status of your most recent Kaggle kernel run
 	@KERNEL_ID=$$(python3 -c "import json; print(json.load(open('notebooks/kernel-metadata.json'))['id'])"); \
 	$(KAGGLE) kernels status $$KERNEL_ID
+
+kaggle-log: _check-kaggle ## Print the Kaggle kernel log (KERNEL=notebooks|notebooks/wheels|owner/slug, GREP=regex)
+	$(VENV_PY) scripts/kaggle_log.py $(or $(KERNEL),notebooks) $(if $(GREP),--grep "$(GREP)") --tail $(or $(TAIL),60)
+
+wheels: _check-kaggle ## Push the vLLM wheel-cache kernel (internet on; output attached to the submission)
+	$(KAGGLE) kernels push -p notebooks/wheels/
 
 serve: ## Host the ARC-AGI-3 API locally on http://localhost:8001 (framework default)
 	$(VENV_PY) scripts/serve_local.py --port $(SERVE_PORT)

@@ -12,7 +12,7 @@ ARC Prize 2026 — ARC-AGI-3 대회 참가를 위한 로컬 개발 환경을 구
 
 1. 공식 스타터 킷 [arcprize/ARC-AGI-3-Kaggle-Starter](https://github.com/arcprize/ARC-AGI-3-Kaggle-Starter)를
    프로젝트 디렉터리에 클론 (원격은 `upstream`으로 이름 변경)
-2. `notebooks/kernel-metadata.json`의 사용자명을 `monggree`로 설정
+2. `notebooks/kernel-metadata.json`의 사용자명을 `monggree`로 설정 (→ 2026-09-22 정정: 실제 계정은 `sungsuhyun`)
 3. `make setup PYTHON=/usr/bin/python3.12` — venv 생성, `arc-agi 0.9.9`,
    `kaggle 2.2.4` 설치, `vendor/ARC-AGI-3-Agents` 프레임워크 클론
 4. `make verify-local` — ls20, vc33 두 게임에 50스텝 스모크 테스트
