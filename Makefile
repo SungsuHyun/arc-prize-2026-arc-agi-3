@@ -21,7 +21,7 @@ GAME            ?=
 SERVE_PORT      ?= 8001
 STEPS           ?= 200
 
-.PHONY: help setup play-local pull-sample notebook submit status verify-local serve clean _check-kaggle
+.PHONY: help setup play-local pull-sample notebook submit status verify-local serve exp-new exp-run exp-summary clean _check-kaggle
 
 _check-kaggle:
 	@if [ ! -s .kaggle/access_token ]; then \
@@ -83,6 +83,16 @@ status: _check-kaggle ## Show the status of your most recent Kaggle kernel run
 
 serve: ## Host the ARC-AGI-3 API locally on http://localhost:8001 (framework default)
 	$(VENV_PY) scripts/serve_local.py --port $(SERVE_PORT)
+
+
+exp-new: ## Scaffold a new experiment: make exp-new NAME=greedy-search [FROM=v001]
+	$(VENV_PY) scripts/new_experiment.py $(NAME) $(if $(FROM),--from $(FROM))
+
+exp-run: ## Run an experiment and record results: make exp-run NAME=v001 [GAME=ls20] [STEPS=200]
+	$(VENV_PY) scripts/run_experiment.py $(NAME) $(if $(GAME),--game $(GAME)) $(if $(STEPS),--max-steps $(STEPS))
+
+exp-summary: ## Compare all experiments (table + experiments/summary.json)
+	$(VENV_PY) scripts/exp_summary.py
 
 
 clean: ## Remove generated artefacts (venv, downloaded games, vendored repos)
