@@ -36,8 +36,12 @@ ACCELERATOR = "rtx6000"
 
 # Kaggle Models to attach: "owner/model/framework/variation/version".
 # The agent auto-discovers the checkpoint under /kaggle/input/models/.
+# GPTQ-int4 mirror (22.8GB): the path verified locally on sm_120 Blackwell
+# (Marlin kernels, no JIT). The FP8 mirror
+# ("wukeneth/qwen3-5-35b-a3b-fp8/transformers/qwen3-5-35b-a3b-fp8/1", 37.5GB)
+# hit vLLM's DeepGEMM nvcc>=12.9 requirement on Kaggle (kernel v5).
 MODEL_SOURCES = [
-    "wukeneth/qwen3-5-35b-a3b-fp8/transformers/qwen3-5-35b-a3b-fp8/1",
+    "awooooo/qwen3-5-35b-a3b-gptq-int4/other/gptq-int4/1",
 ]
 # Notebook outputs to attach (our vLLM wheel cache, built by notebooks/wheels/).
 KERNEL_SOURCES = [
@@ -172,6 +176,14 @@ def build() -> dict:
         if cands:
             os.environ['QWEN_MODEL_PATH'] = cands[0]
         print('QWEN_MODEL_PATH =', os.environ.get('QWEN_MODEL_PATH'))
+        # JIT kernels (DeepGEMM/FlashInfer) need a recent nvcc; prefer the one
+        # shipped by the nvidia-cuda-nvcc wheel from our cache over the image's.
+        nvccs = sorted(glob.glob('/usr/local/lib/python3.12/dist-packages/nvidia/cu*/bin/nvcc'))
+        if nvccs:
+            os.environ['CUDA_HOME'] = os.path.dirname(os.path.dirname(nvccs[-1]))
+            os.environ['PATH'] = os.path.dirname(nvccs[-1]) + ':' + os.environ.get('PATH', '')
+        print('CUDA_HOME =', os.environ.get('CUDA_HOME'))
+        print(subprocess.run(['bash', '-lc', 'nvcc --version | tail -2'], capture_output=True, text=True).stdout)
         print(subprocess.run(['nvidia-smi', '--query-gpu=name,memory.total', '--format=csv'],
                              capture_output=True, text=True).stdout)
         """))

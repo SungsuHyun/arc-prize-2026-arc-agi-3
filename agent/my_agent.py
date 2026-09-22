@@ -512,6 +512,9 @@ class QwenPlanner:
                 # FlashInfer의 샘플러/GDN prefill은 첫 호출 때 nvcc JIT 빌드를 요구
                 # (툴킷 없는 환경에서 실패). Triton/PyTorch 경로로 고정.
                 os.environ.setdefault("VLLM_USE_FLASHINFER_SAMPLER", "0")
+                # FP8 MoE의 DeepGEMM 경로는 nvcc>=12.9 JIT를 요구 (Kaggle 시스템 nvcc가
+                # 더 낮아 엔진 초기화 실패) → Triton/CUTLASS FP8 커널로 고정
+                os.environ.setdefault("VLLM_USE_DEEP_GEMM", "0")
                 from vllm import LLM
                 _ENGINES[key] = LLM(
                     model=self.model_path, trust_remote_code=True,
