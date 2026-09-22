@@ -17,6 +17,7 @@ import argparse
 import importlib.util
 import json
 import logging
+import os
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -91,8 +92,16 @@ def main() -> None:
 
     logging.basicConfig(level=logging.WARNING, format="%(message)s")
 
-    arc = arc_agi.Arcade(operation_mode=OperationMode.NORMAL)
-    all_envs = arc.get_environments()
+    # NORMAL은 시작 시 three.arcprize.org에 접근(익명 키/게임 목록)하는데,
+    # 네트워크 불안정 시 예외가 전파됨. 게임이 캐시돼 있으면 OFFLINE로 폴백.
+    os.environ.setdefault("ARC_API_KEY", "local-dev")
+    try:
+        arc = arc_agi.Arcade(operation_mode=OperationMode.NORMAL)
+        all_envs = arc.get_environments()
+    except Exception as e:
+        print(f"NORMAL mode failed ({type(e).__name__}) — falling back to OFFLINE cache")
+        arc = arc_agi.Arcade(operation_mode=OperationMode.OFFLINE)
+        all_envs = arc.get_environments()
     if games_cfg:
         wanted = {g.strip().split("-")[0] for g in games_cfg.split(",")}
         game_ids = [e.game_id.split("-")[0] for e in all_envs
