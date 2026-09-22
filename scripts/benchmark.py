@@ -40,6 +40,8 @@ def main() -> None:
     p.add_argument("--max-steps", type=int, default=400)
     p.add_argument("--only", default=None,
                    help="comma-separated experiment name prefixes")
+    p.add_argument("--no-publish", action="store_true",
+                   help="skip publishing the site to GitHub Pages")
     args = p.parse_args()
 
     dirs = experiment_dirs(args.only)
@@ -70,13 +72,19 @@ def main() -> None:
 
     subprocess.run([str(PY), str(ROOT / "scripts" / "exp_summary.py")], check=True)
     subprocess.run([str(PY), str(ROOT / "scripts" / "build_dashboard.py")], check=True)
+    if not args.no_publish:
+        pub = subprocess.run(["bash", str(ROOT / "scripts" / "publish_site.sh")],
+                             capture_output=True, text=True)
+        if pub.returncode != 0:
+            print(f"WARNING: site publish failed:\n{pub.stderr[-500:]}")
 
     print(f"\nBenchmark tag: {bench_id}")
     if failed:
         print(f"FAILED experiments: {failed}")
         sys.exit(1)
-    print(f"Report: {EXPERIMENTS / 'site'}/{bench_id}.html")
-    print(f"Index:  {EXPERIMENTS / 'site' / 'index.html'}")
+    base = "https://sungsuhyun.github.io/arc-prize-2026-arc-agi-3"
+    print(f"Report: {base}/{bench_id}.html")
+    print(f"Index:  {base}/")
 
 
 if __name__ == "__main__":

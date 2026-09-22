@@ -19,9 +19,10 @@ FRAMEWORK_DIR   := vendor/ARC-AGI-3-Agents
 COMP_SLUG       := arc-prize-2026-arc-agi-3
 GAME            ?=
 SERVE_PORT      ?= 8001
+SITE_PORT       ?= 8080
 STEPS           ?= 200
 
-.PHONY: help setup play-local pull-sample notebook submit status verify-local serve exp-new exp-run exp-summary bench dashboard clean _check-kaggle
+.PHONY: help setup play-local pull-sample notebook submit status verify-local serve exp-new exp-run exp-summary bench dashboard site site-publish clean _check-kaggle
 
 _check-kaggle:
 	@if [ ! -s .kaggle/access_token ]; then \
@@ -102,6 +103,14 @@ dashboard: ## Rebuild the benchmark site (experiments/site/: index + page per be
 	$(VENV_PY) scripts/exp_summary.py
 	$(VENV_PY) scripts/build_dashboard.py
 	@echo "Open: file://$(PWD)/experiments/site/index.html"
+
+
+site: ## Serve the benchmark site at http://localhost:8080, auto-rebuilding on refresh (SITE_PORT=)
+	$(VENV_PY) scripts/serve_site.py --port $(SITE_PORT)
+
+
+site-publish: ## Publish the benchmark site to GitHub Pages (gh-pages branch)
+	bash scripts/publish_site.sh
 
 
 clean: ## Remove generated artefacts (venv, downloaded games, vendored repos)

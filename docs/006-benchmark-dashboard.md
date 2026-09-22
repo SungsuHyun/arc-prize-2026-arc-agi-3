@@ -14,8 +14,12 @@
   순차 실행, 공통 태그(`bench-<시각>`)를 부여해 그룹으로 비교 가능하게 기록.
   종료 후 summary.json과 dashboard.html 자동 재생성
 - `make dashboard` — 임의 시점에 사이트만 재생성
+- **GitHub Pages 배포**: `make bench`가 끝나면 자동으로 gh-pages 브랜치에
+  배포됨 (`scripts/publish_site.sh`, 수동은 `make site-publish`).
+  → **https://sungsuhyun.github.io/arc-prize-2026-arc-agi-3/**
+- 로컬 미리보기: `make site` (http://localhost:8080, 새로고침 시 자동 재생성)
 - `experiments/site/` — **벤치마크 결과마다 별도 웹페이지** (자체 완결형,
-  데이터 내장, file://로 바로 열림):
+  데이터 내장):
   - `index.html` — 요약 타일, 벤치마크 리포트 카드 목록(클릭 → 상세),
     점수 추이 라인 차트, 전체 실행 기록 표
   - `bench-<시각>.html` — 벤치마크 1회당 1페이지: 버전별 점수/레벨 바 차트,
@@ -33,8 +37,8 @@
 
 ## 결론 / 다음 단계
 
-- 앞으로 버전 추가 후 `make bench` 한 번이면 새 벤치마크 페이지가 생기고
-  index 카드 목록에 자동 등록됨
+- 앞으로 버전 추가 후 `make bench` 한 번이면 새 벤치마크 페이지가 생기고,
+  index 카드에 등록되고, GitHub Pages까지 자동 배포됨
 - 점수가 계속 0인 동안은 '게임별 상세'의 액션 수와 (추후 추가할) 탐색
   커버리지 지표가 더 유용 — v003에서 unique states visited 같은 진행
   지표를 결과 JSON에 추가하는 것 고려

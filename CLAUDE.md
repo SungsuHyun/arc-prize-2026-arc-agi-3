@@ -30,11 +30,16 @@ make play-local [GAME=ls20] [STEPS=200]   # agent/my_agent.py 로컬 실행
 make exp-new NAME=title [FROM=vNNN]       # 새 실험 버전 스캐폴드
 make exp-run NAME=vNNN [GAME=..] [STEPS=..] # 실험 실행 + results/ JSON 기록
 make exp-summary                          # 실험 비교 + experiments/summary.json
-make bench [GAME=..] [STEPS=..] [ONLY=..]  # 전 버전 동일조건 일괄 실행 + 대시보드 갱신
-make dashboard                            # experiments/site/ 재생성 (벤치마크별 페이지+index)
+make bench [GAME=..] [STEPS=..] [ONLY=..]  # 전 버전 동일조건 일괄 실행 + Pages 자동 배포
+make site-publish                         # 벤치마크 사이트를 GitHub Pages로 수동 배포
+make site                                 # 로컬 미리보기 (localhost:8080, 자동 재생성)
+make dashboard                            # experiments/site/ 정적 파일만 재생성
 make serve                                # 로컬 REST 서버 (:8001, 공식 API 동일)
 make submit && make status                # Kaggle 푸시 (리더보드 제출은 웹에서 수동)
 ```
+
+벤치마크 결과 웹사이트: **https://sungsuhyun.github.io/arc-prize-2026-arc-agi-3/**
+(gh-pages 브랜치, `make bench` 후 자동 갱신 — 공개 페이지이므로 비공개 정보 금지)
 
 ## 컨벤션
 
