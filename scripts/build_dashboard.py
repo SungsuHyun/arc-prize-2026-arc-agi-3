@@ -283,8 +283,9 @@ function renderBenchInto(idPrefix, rows) {
     rows.map(r => '<tr><td>' + r.name + '</td>' + games.map(gid => {
       const g = (r.run.games || []).find(x => x.game_id === gid);
       if (!g) return '<td class="num muted">–</td>';
+      const extra = g.unique_states != null ? ` · ${g.unique_states}상태` : '';
       return `<td class="num">${g.levels_completed ?? 0}/${g.win_levels ?? '?'}레벨 · ` +
-             `${g.actions ?? '–'}액션 · ${fmt(g.score)}</td>`;
+             `${g.actions ?? '–'}액션 · ${fmt(g.score)}${extra}</td>`;
     }).join('') + '</tr>').join('');
 }
 

@@ -127,12 +127,17 @@ def main() -> None:
         )
         agent.main()
         final = agent.frames[-1]
-        games.append({
+        record = {
             "game_id": game_id,
             "state": str(final.state),
             "levels_completed": final.levels_completed,
             "actions": agent.action_counter,
-        })
+        }
+        # agents may expose extra metrics (e.g. unique_states) via .metrics
+        extra = getattr(agent, "metrics", None)
+        if isinstance(extra, dict):
+            record.update({k: v for k, v in extra.items() if k not in record})
+        games.append(record)
         print(f"  -> state={final.state} levels={final.levels_completed} "
               f"actions={agent.action_counter}")
 
