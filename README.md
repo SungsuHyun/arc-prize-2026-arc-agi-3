@@ -247,3 +247,40 @@ non-zero. 🙂
   for community Q&A.
 
 Good luck. Looking forward to seeing what you build.
+
+---
+
+## Local test server (no Kaggle submits needed)
+
+The `arc-agi` package ships the same REST API that `three.arcprize.org`
+serves. Host it locally:
+
+```bash
+make serve            # http://localhost:8001 (SERVE_PORT=9000 to change)
+```
+
+Endpoints: `/api/games`, `/api/scorecard/open|close|<card_id>`,
+`/api/cmd/RESET|ACTION1..ACTION7`, `/api/healthcheck`.
+
+```bash
+curl -s localhost:8001/api/games | python3 -m json.tool | head
+# RESET accepts the short id; subsequent actions need the full versioned
+# game_id (e.g. ls20-9607627b) plus the guid returned by RESET.
+curl -X POST localhost:8001/api/cmd/RESET -H 'Content-Type: application/json' \
+     -d '{"game_id": "ls20", "card_id": "<from /api/scorecard/open>"}'
+```
+
+The vendored ARC-AGI-3-Agents framework can also play fully offline —
+`vendor/ARC-AGI-3-Agents/.env` (created by this kit) sets
+`OPERATION_MODE=normal` and points `ENVIRONMENTS_DIR` at this project's
+cached games:
+
+```bash
+cd vendor/ARC-AGI-3-Agents
+../../.venv/bin/python main.py --agent=random --game=ls20-9607627b
+```
+
+Note: `make clean` / re-clone wipes `vendor/`, so re-create that `.env`
+afterwards. `scripts/play_local.py` (= `make play-local`) remains the
+fastest inner loop; the server is for HTTP-level testing and driving the
+engine from other processes or languages.

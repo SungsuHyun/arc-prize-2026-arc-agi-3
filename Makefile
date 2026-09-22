@@ -18,9 +18,10 @@ FRAMEWORK_REPO  := https://github.com/arcprize/ARC-AGI-3-Agents.git
 FRAMEWORK_DIR   := vendor/ARC-AGI-3-Agents
 COMP_SLUG       := arc-prize-2026-arc-agi-3
 GAME            ?=
+SERVE_PORT      ?= 8001
 STEPS           ?= 200
 
-.PHONY: help setup play-local pull-sample notebook submit status verify-local clean _check-kaggle
+.PHONY: help setup play-local pull-sample notebook submit status verify-local serve clean _check-kaggle
 
 _check-kaggle:
 	@if [ ! -s .kaggle/access_token ]; then \
@@ -79,6 +80,10 @@ submit: notebook _check-kaggle ## Build notebook and push to Kaggle (one-line su
 status: _check-kaggle ## Show the status of your most recent Kaggle kernel run
 	@KERNEL_ID=$$(python3 -c "import json; print(json.load(open('notebooks/kernel-metadata.json'))['id'])"); \
 	$(KAGGLE) kernels status $$KERNEL_ID
+
+serve: ## Host the ARC-AGI-3 API locally on http://localhost:8001 (framework default)
+	$(VENV_PY) scripts/serve_local.py --port $(SERVE_PORT)
+
 
 clean: ## Remove generated artefacts (venv, downloaded games, vendored repos)
 	rm -rf $(VENV) vendor environment_files recordings notebooks/submission.ipynb \
