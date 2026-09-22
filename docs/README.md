@@ -21,3 +21,4 @@
 | 006 | [일괄 벤치마크 + 대시보드](006-benchmark-dashboard.md) | 2026-09-22 | make bench, 벤치마크별 웹페이지(site/) + index |
 | 007 | [v003 관측 인코더](007-observation-encoder.md) | 2026-09-22 | 객체+변화로그 텍스트 인코딩, 첫 비영점 점수 |
 | 008 | [v004 Qwen 플래너](008-qwen-planner.md) | 2026-09-22 | L2 가동, 35b로 vc33 레벨2 · 점수 0.321 최고 기록 |
+| 009 | [v007 자기 성찰 마크다운](009-self-reflect-md.md) | 2026-09-22 | 9b + 보상 평가자 루프, insights.md 누적·주입 실험 |
