@@ -98,10 +98,10 @@ exp-summary: ## Compare all experiments (table + experiments/summary.json)
 bench: ## Run ALL experiments under identical conditions: make bench [GAME=ls20,vc33] [STEPS=400] [ONLY=v001,v002]
 	$(VENV_PY) scripts/benchmark.py $(if $(GAME),--game $(GAME)) $(if $(STEPS),--max-steps $(STEPS)) $(if $(ONLY),--only $(ONLY))
 
-dashboard: ## Rebuild experiments/dashboard.html from latest results
+dashboard: ## Rebuild the benchmark site (experiments/site/: index + page per benchmark)
 	$(VENV_PY) scripts/exp_summary.py
 	$(VENV_PY) scripts/build_dashboard.py
-	@echo "Open: file://$(PWD)/experiments/dashboard.html"
+	@echo "Open: file://$(PWD)/experiments/site/index.html"
 
 
 clean: ## Remove generated artefacts (venv, downloaded games, vendored repos)

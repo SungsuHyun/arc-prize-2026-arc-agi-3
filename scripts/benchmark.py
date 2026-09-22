@@ -75,7 +75,8 @@ def main() -> None:
     if failed:
         print(f"FAILED experiments: {failed}")
         sys.exit(1)
-    print(f"Dashboard: {EXPERIMENTS / 'dashboard.html'}")
+    print(f"Report: {EXPERIMENTS / 'site'}/{bench_id}.html")
+    print(f"Index:  {EXPERIMENTS / 'site' / 'index.html'}")
 
 
 if __name__ == "__main__":

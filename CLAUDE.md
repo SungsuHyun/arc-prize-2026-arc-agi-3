@@ -31,7 +31,7 @@ make exp-new NAME=title [FROM=vNNN]       # 새 실험 버전 스캐폴드
 make exp-run NAME=vNNN [GAME=..] [STEPS=..] # 실험 실행 + results/ JSON 기록
 make exp-summary                          # 실험 비교 + experiments/summary.json
 make bench [GAME=..] [STEPS=..] [ONLY=..]  # 전 버전 동일조건 일괄 실행 + 대시보드 갱신
-make dashboard                            # experiments/dashboard.html 재생성
+make dashboard                            # experiments/site/ 재생성 (벤치마크별 페이지+index)
 make serve                                # 로컬 REST 서버 (:8001, 공식 API 동일)
 make submit && make status                # Kaggle 푸시 (리더보드 제출은 웹에서 수동)
 ```

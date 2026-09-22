@@ -1,0 +1,354 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ARC-AGI-3 실험 벤치마크</title>
+<style>
+  :root {
+    color-scheme: light;
+    --surface-1: #fcfcfb; --surface-2: #f1f0ee; --border: #dddcd8;
+    --text-primary: #0b0b0b; --text-secondary: #52514e; --text-muted: #74736e;
+    --accent: #2a78d6; --grid: #e6e5e1;
+    --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a; --s4:#eda100;
+    --s5:#e87ba4; --s6:#008300; --s7:#4a3aa7; --s8:#e34948;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --surface-1:#1a1a19; --surface-2:#242422; --border:#3a3936;
+      --text-primary:#ffffff; --text-secondary:#c3c2b7; --text-muted:#8d8c85;
+      --accent:#3987e5; --grid:#33322f;
+      --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#c98500;
+      --s5:#d55181; --s6:#008300; --s7:#9085e9; --s8:#e66767;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --surface-1:#1a1a19; --surface-2:#242422; --border:#3a3936;
+    --text-primary:#ffffff; --text-secondary:#c3c2b7; --text-muted:#8d8c85;
+    --accent:#3987e5; --grid:#33322f;
+    --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#c98500;
+    --s5:#d55181; --s6:#008300; --s7:#9085e9; --s8:#e66767;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--surface-1); color: var(--text-primary);
+         font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 24px 20px 60px; }
+  header { display: flex; justify-content: space-between; align-items: baseline;
+           gap: 12px; flex-wrap: wrap; margin-bottom: 20px; }
+  h1 { font-size: 20px; margin: 0; }
+  h2 { font-size: 15px; margin: 32px 0 12px; }
+  .sub { color: var(--text-secondary); font-size: 13px; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  button.theme { background: var(--surface-2); color: var(--text-secondary);
+    border: 1px solid var(--border); border-radius: 8px; padding: 4px 12px;
+    cursor: pointer; font-size: 13px; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+           gap: 10px; }
+  .tile { background: var(--surface-2); border: 1px solid var(--border);
+          border-radius: 10px; padding: 12px 14px; }
+  .tile .k { font-size: 12px; color: var(--text-secondary); }
+  .tile .v { font-size: 22px; font-weight: 650; margin-top: 2px;
+             font-variant-numeric: tabular-nums; }
+  .tile .d { font-size: 11px; color: var(--text-muted);
+             overflow: hidden; text-overflow: ellipsis; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+           gap: 12px; }
+  .card { display: block; background: var(--surface-2); border: 1px solid var(--border);
+          border-radius: 12px; padding: 14px 16px; color: inherit; }
+  .card:hover { border-color: var(--accent); text-decoration: none; }
+  .card .t { font-weight: 650; font-variant-numeric: tabular-nums; }
+  .card .m { font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
+  .card .w { font-size: 12px; margin-top: 8px; }
+  .card .w b { font-variant-numeric: tabular-nums; }
+  .panel { background: var(--surface-2); border: 1px solid var(--border);
+           border-radius: 12px; padding: 16px; }
+  .charts { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 760px) { .charts { grid-template-columns: 1fr; } }
+  .chart-title { font-size: 13px; color: var(--text-secondary); margin: 0 0 8px; }
+  svg text { fill: var(--text-secondary); font-size: 11px; }
+  svg .val { fill: var(--text-primary); font-weight: 600;
+             font-variant-numeric: tabular-nums; }
+  svg .gridline { stroke: var(--grid); stroke-width: 1; }
+  svg .axis { stroke: var(--border); stroke-width: 1; }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 8px;
+            font-size: 12px; color: var(--text-secondary); }
+  .legend .sw { display: inline-block; width: 10px; height: 10px;
+                border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+  .tablewrap { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px;
+          font-variant-numeric: tabular-nums; }
+  th, td { text-align: left; padding: 7px 10px;
+           border-bottom: 1px solid var(--border); white-space: nowrap; }
+  th { color: var(--text-secondary); font-weight: 600; font-size: 12px; }
+  td.num, th.num { text-align: right; }
+  .muted { color: var(--text-muted); }
+  .tooltip { position: fixed; pointer-events: none; background: var(--surface-1);
+    border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px;
+    font-size: 12px; box-shadow: 0 4px 14px rgba(0,0,0,.18); z-index: 10;
+    display: none; max-width: 280px; }
+  .tooltip b { font-variant-numeric: tabular-nums; }
+  .empty { color: var(--text-muted); padding: 20px; text-align: center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1 id="pageTitle"></h1>
+      <div class="sub" id="pageSub"></div>
+    </div>
+    <div style="display:flex;gap:10px;align-items:center">
+      <span id="backLink"></span>
+      <button class="theme" id="themeBtn">테마</button>
+    </div>
+  </header>
+  <div id="content"></div>
+</div>
+<div class="tooltip" id="tip"></div>
+
+<script id="data" type="application/json">{"schema": 1, "experiments": [{"name": "v001-random-baseline", "description": "random baseline", "config": {"description": "random baseline", "games": null, "max_steps": 200, "params": {}}, "n_runs": 4, "best_score": 0, "last_run": "20260922-061017", "last_score": 0.0, "runs": [{"schema": 1, "experiment": "v001-random-baseline", "run_id": "20260922-055228", "started_at": "2026-09-22T05:52:28.704983+00:00", "finished_at": "2026-09-22T05:52:31.101628+00:00", "git": {"commit": "2a1e65c", "dirty": true}, "tag": null, "config": {"description": "random baseline", "games": ["ls20", "vc33"], "max_steps": 50, "params": {}}, "aggregate": {"score": 0.0, "levels_completed": 0, "actions": 102, "games_played": 2}, "games": [{"game_id": "ls20", "state": "GameState.NOT_FINISHED", "levels_completed": 0, "actions": 51, "score": 0.0, "win_levels": 7}, {"game_id": "vc33", "state": "GameState.NOT_FINISHED", "levels_completed": 0, "actions": 51, "score": 0.0, "win_levels": 7}], "scorecard": {"source_url": null, "tags": null, "opaque": null, "card_id": "bb7ab3d0-c4e0-40f1-852b-946b509c2cb3", "api_key": null, "score": 0.0, "environments": [{"id": "ls20-9607627b", "runs": [{"id": null, "guid": "38c8895f-f198-4e59-81d4-5b90bf5a5ffe", "score": 0.0, "levels_completed": 0, "actions": 51, "resets": 0, "state": "NOT_FINISHED", "completed": false, "level_scores": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "level_actions": [51, 0, 0, 0, 0, 0, 0], "level_baseline_actions": [22, 123, 73, 84, 96, 192, 186], "number_of_levels": null, "number_of_environments": null, "message": null}], "score": 0.0, "actions": 51, "levels_completed": 0, "completed": false, "level_count": 7, "resets": 0}, {"id": "vc33-5430563c", "runs": [{"id": null, "guid": "17c03ffa-7647-4583-b16c-bd4cc38540b0", "score": 0.0, "levels_completed": 0, "actions": 51, "resets": 0, "state": "NOT_FINISHED", "completed": false, "level_scores": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "level_actions": [51, 0, 0, 0, 0, 0, 0], "level_baseline_actions": [7, 18, 44, 61, 131, 34, 152], "number_of_levels": null, "number_of_environments": null, "message": null}], "score": 0.0, "actions": 51, "levels_completed": 0, "completed": false, "level_count": 7, "resets": 0}], "tags_scores": [{"id": "keyboard", "guid": null, "score": 0.0, "levels_completed": 0, "actions": 51, "resets": null, "state": null, "completed": null, "level_scores": null, "level_actions": null, "level_baseline_actions": null, "number_of_levels": 7, "number_of_environments": 1, "message": null}, {"id": "click", "guid": null, "score": 0.0, "levels_completed": 0, "actions": 51, "resets": null, "state": null, "completed": null, "level_scores": null, "level_actions": null, "level_baseline_actions": null, "number_of_levels": 7, "number_of_environments": 1, "message": null}], "competition_mode": null, "total_environments_completed": 0, "total_environments": 2, "total_levels_completed": 0, "total_levels": 14, "total_actions": 102}}, {"schema": 1, "experiment": "v001-random-baseline", "run_id": "20260922-055449", "started_at": "2026-09-22T05:54:49.992600+00:00", "finished_at": "2026-09-22T05:54:53.454518+00:00", "git": {"commit": "2a1e65c", "dirty": true}, "tag": "steps-2000-check", "config": {"description": "random baseline", "games": ["ls20", "vc33"], "max_steps": 2000, "params": {}}, "aggregate": {"score": 0.0, "levels_completed": 0, "actions": 162, "games_played": 2}, "games": [{"game_id": "ls20", "state": "GameState.NOT_FINISHED", "levels_completed": 0, "actions": 81, "score": 0.0, "win_levels": 7}, {"game_id": "vc33", "state": "GameState.NOT_FINISHED", "levels_completed": 0, "actions": 81, "score": 0.0, "win_levels": 7}], "scorecard": {"source_url": null, "tags": null, "opaque": null, "card_id": "cc7ab149-4879-48f7-bde0-6e65eddfc968", "api_key": null, "score": 0.0, "environments": [{"id": "ls20-9607627b", "runs": [{"id": null, "guid": "6c0c0c8a-9fc8-4056-80f7-9ad212fc8b94", "score": 0.0, "levels_completed": 0, "actions": 81, "resets": 0, "state": "NOT_FINISHED", "completed": false, "level_scores": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "level_actions": [81, 0, 0, 0, 0, 0, 0], "level_baseline_actions": [22, 123, 73, 84, 96, 192, 186], "number_of_levels": null, "number_of_environments": null, "message": null}], "score": 0.0, "actions": 81, "levels_completed": 0, "completed": false, "level_count": 7, "resets": 0}, {"id": "vc33-5430563c", "runs": [{"id": null, "guid": "7e393007-b0a1-4825-a0fd-7ed5030321fa", "score": 0.0, "levels_completed": 0, "actions": 81, "resets": 0, "state": "NOT_FINISHED", "completed": false, "level_scores": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "level_actions": [81, 0, 0, 0, 0, 0, 0], "level_baseline_actions": [7, 18, 44, 61, 131, 34, 152], "number_of_levels": null, "number_of_environments": null, "message": null}], "score": 0.0, "actions": 81, "levels_completed": 0, "completed": false, "level_count": 7, "resets": 0}], "tags_scores": [{"id": "keyboard", "guid": null, "score": 0.0, "levels_completed": 0, "actions": 81, "resets": null, "state": null, "completed": null, "level_scores": null, "level_actions": null, "level_baseline_actions": null, "number_of_levels": 7, "number_of_environments": 1, "message": null}, {"id": "click", "guid": null, "score": 0.0, "levels_completed": 0, "actions": 81, "resets": null, "state": null, "completed": null, "level_scores": null, "level_actions": null, "level_baseline_actions": null, "number_of_levels": 7, "number_of_environments": 1, "message": null}], "competition_mode": null, "total_environments_completed": 0, "total_environments": 2, "total_levels_completed": 0, "total_levels": 14, "total_actions": 162}}, {"schema": 1, "experiment": "v001-random-baseline", "run_id": "20260922-055509", "started_at": "2026-09-22T05:55:09.397670+00:00", "finished_at": "2026-09-22T05:55:12.087027+00:00", "git": {"commit": "2a1e65c", "dirty": true}, "tag": "steps-2000-check", "config": {"description": "random baseline", "games": ["ls20", "vc33"], "max_steps": 2000, "params": {}}, "aggregate": {"score": 0.0, "levels_completed": 0, "actions": 4002, "games_played": 2}, "games": [{"game_id": "ls20", "state": "GameState.NOT_FINISHED", "levels_completed": 0, "actions": 2001, "score": 0.0, "win_levels": 7}, {"game_id": "vc33", "state": "GameState.NOT_FINISHED", "levels_completed": 0, "actions": 2001, "score": 0.0, "win_levels": 7}], "scorecard": {"source_url": null, "tags": null, "opaque": null, "card_id": "b0e582c4-5da0-49eb-a3c7-2298e527cc34", "api_key": null, "score": 0.0, "environments": [{"id": "ls20-9607627b", "runs": [{"id": null, "guid": "42b98da3-3b3c-40b0-9ee7-bd2d3d455c40", "score": 0.0, "levels_completed": 0, "actions": 2001, "resets": 9, "state": "GAME_OVER", "completed": false, "level_scores": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "level_actions": [2001, 0, 0, 0, 0, 0, 0], "level_baseline_actions": [22, 123, 73, 84, 96, 192, 186], "number_of_levels": null, "number_of_environments": null, "message": null}], "score": 0.0, "actions": 2001, "levels_completed": 0, "completed": false, "level_count": 7, "resets": 9}, {"id": "vc33-5430563c", "runs": [{"id": null, "guid": "6e2a2158-c652-4ad5-9c52-67aba311c2a8", "score": 0.0, "levels_completed": 0, "actions": 2001, "resets": 5, "state": "GAME_OVER", "completed": false, "level_scores": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "level_actions": [2001, 0, 0, 0, 0, 0, 0], "level_baseline_actions": [7, 18, 44, 61, 131, 34, 152], "number_of_levels": null, "number_of_environments": null, "message": null}], "score": 0.0, "actions": 2001, "levels_completed": 0, "completed": false, "level_count": 7, "resets": 5}], "tags_scores": [{"id": "keyboard", "guid": null, "score": 0.0, "levels_completed": 0, "actions": 2001, "resets": null, "state": null, "completed": null, "level_scores": null, "level_actions": null, "level_baseline_actions": null, "number_of_levels": 7, "number_of_environments": 1, "message": null}, {"id": "click", "guid": null, "score": 0.0, "levels_completed": 0, "actions": 2001, "resets": null, "state": null, "completed": null, "level_scores": null, "level_actions": null, "level_baseline_actions": null, "number_of_levels": 7, "number_of_environments": 1, "message": null}], "competition_mode": null, "total_environments_completed": 0, "total_environments": 2, "total_levels_completed": 0, "total_levels": 14, "total_actions": 4002}}, {"schema": 1, "experiment": "v001-random-baseline", "run_id": "20260922-061017", "started_at": "2026-09-22T06:10:17.952342+00:00", "finished_at": "2026-09-22T06:10:22.388101+00:00", "git": {"commit": "1907cdb", "dirty": true}, "tag": "bench-20260922-061016", "config": {"description": "random baseline", "games": ["ls20", "lf52", "sk48", "vc33"], "max_steps": 400, "params": {}}, "aggregate": {"score": 0.0, "levels_completed": 0, "actions": 1604, "games_played": 4}, "games": [{"game_id": "ls20", "state": "GameState.NOT_FINISHED", "levels_completed": 0, "actions": 401, "score": 0.0, "win_levels": 7}, {"game_id": "lf52", "state": "GameState.NOT_FINISHED", "levels_completed": 0, "actions": 401, "score": 0.0, "win_levels": 10}, {"game_id": "sk48", "state": "GameState.NOT_FINISHED", "levels_completed": 0, "actions": 401, "score": 0.0, "win_levels": 8}, {"game_id": "vc33", "state": "GameState.NOT_FINISHED", "levels_completed": 0, "actions": 401, "score": 0.0, "win_levels": 7}], "scorecard": {"source_url": null, "tags": null, "opaque": null, "card_id": "36a2c322-8424-4197-a765-71d002e38171", "api_key": null, "score": 0.0, "environments": [{"id": "ls20-9607627b", "runs": [{"id": null, "guid": "f1796ad7-76de-4f3f-bbad-4c8cc7126fc8", "score": 0.0, "levels_completed": 0, "actions": 401, "resets": 1, "state": "GAME_OVER", "completed": false, "level_scores": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "level_actions": [401, 0, 0, 0, 0, 0, 0], "level_baseline_actions": [22, 123, 73, 84, 96, 192, 186], "number_of_levels": null, "number_of_environments": null, "message": null}], "score": 0.0, "actions": 401, "levels_completed": 0, "completed": false, "level_count": 7, "resets": 1}, {"id": "lf52-271a04aa", "runs": [{"id": null, "guid": "dd2f017a-19c7-4d6e-989b-b94282e51245", "score": 0.0, "levels_completed": 0, "actions": 401, "resets": 1, "state": "GAME_OVER", "completed": false, "level_scores": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "level_actions": [401, 0, 0, 0, 0, 0, 0, 0, 0, 0], "level_baseline_actions": [32, 81, 60, 71, 205, 148, 244, 109, 164, 225], "number_of_levels": null, "number_of_environments": null, "message": null}], "score": 0.0, "actions": 401, "levels_completed": 0, "completed": false, "level_count": 10, "resets": 1}, {"id": "sk48-d8078629", "runs": [{"id": null, "guid": "94a2adc8-72c1-4ae3-b437-82828345e261", "score": 0.0, "levels_completed": 0, "actions": 401, "resets": 1, "state": "GAME_OVER", "completed": false, "level_scores": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "level_actions": [401, 0, 0, 0, 0, 0, 0, 0], "level_baseline_actions": [61, 177, 101, 103, 230, 181, 125, 92], "number_of_levels": null, "number_of_environments": null, "message": null}], "score": 0.0, "actions": 401, "levels_completed": 0, "completed": false, "level_count": 8, "resets": 1}, {"id": "vc33-5430563c", "runs": [{"id": null, "guid": "b1e9d724-bbb8-4bff-953f-ff3b766f63c6", "score": 0.0, "levels_completed": 0, "actions": 401, "resets": 1, "state": "GAME_OVER", "completed": false, "level_scores": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "level_actions": [401, 0, 0, 0, 0, 0, 0], "level_baseline_actions": [7, 18, 44, 61, 131, 34, 152], "number_of_levels": null, "number_of_environments": null, "message": null}], "score": 0.0, "actions": 401, "levels_completed": 0, "completed": false, "level_count": 7, "resets": 1}], "tags_scores": [{"id": "keyboard", "guid": null, "score": 0.0, "levels_completed": 0, "actions": 401, "resets": null, "state": null, "completed": null, "level_scores": null, "level_actions": null, "level_baseline_actions": null, "number_of_levels": 7, "number_of_environments": 1, "message": null}, {"id": "click", "guid": null, "score": 0.0, "levels_completed": 0, "actions": 802, "resets": null, "state": null, "completed": null, "level_scores": null, "level_actions": null, "level_baseline_actions": null, "number_of_levels": 17, "number_of_environments": 2, "message": null}, {"id": "keyboard_click", "guid": null, "score": 0.0, "levels_completed": 0, "actions": 401, "resets": null, "state": null, "completed": null, "level_scores": null, "level_actions": null, "level_baseline_actions": null, "number_of_levels": 8, "number_of_environments": 1, "message": null}], "competition_mode": null, "total_environments_completed": 0, "total_environments": 4, "total_levels_completed": 0, "total_levels": 32, "total_actions": 1604}}]}, {"name": "v002-effect-explorer", "description": "effect-aware explorer: no-op filtering + novelty-first, LLM planner stub", "config": {"description": "effect-aware explorer: no-op filtering + novelty-first, LLM planner stub", "games": null, "max_steps": 400, "params": {"seed": 1337, "planner": "stub"}}, "n_runs": 2, "best_score": 0, "last_run": "20260922-061023", "last_score": 0.0, "runs": [{"schema": 1, "experiment": "v002-effect-explorer", "run_id": "20260922-055922", "started_at": "2026-09-22T05:59:22.399512+00:00", "finished_at": "2026-09-22T05:59:24.240229+00:00", "git": {"commit": "2a1e65c", "dirty": true}, "tag": null, "config": {"description": "effect-aware explorer: no-op filtering + novelty-first, LLM planner stub", "games": ["ls20", "vc33"], "max_steps": 400, "params": {"seed": 1337, "planner": "stub"}}, "aggregate": {"score": 0.0, "levels_completed": 0, "actions": 802, "games_played": 2}, "games": [{"game_id": "ls20", "state": "GameState.NOT_FINISHED", "levels_completed": 0, "actions": 401, "score": 0.0, "win_levels": 7}, {"game_id": "vc33", "state": "GameState.NOT_FINISHED", "levels_completed": 0, "actions": 401, "score": 0.0, "win_levels": 7}], "scorecard": {"source_url": null, "tags": null, "opaque": null, "card_id": "363d75da-f73d-4f36-b9e4-53422b7db727", "api_key": null, "score": 0.0, "environments": [{"id": "ls20-9607627b", "runs": [{"id": null, "guid": "562e572d-b197-42f9-9eee-d24f47b476bb", "score": 0.0, "levels_completed": 0, "actions": 401, "resets": 3, "state": "GAME_OVER", "completed": false, "level_scores": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "level_actions": [401, 0, 0, 0, 0, 0, 0], "level_baseline_actions": [22, 123, 73, 84, 96, 192, 186], "number_of_levels": null, "number_of_environments": null, "message": null}], "score": 0.0, "actions": 401, "levels_completed": 0, "completed": false, "level_count": 7, "resets": 3}, {"id": "vc33-5430563c", "runs": [{"id": null, "guid": "14a02ed1-9a7d-48dc-906f-133a1b3467f4", "score": 0.0, "levels_completed": 0, "actions": 401, "resets": 7, "state": "GAME_OVER", "completed": false, "level_scores": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "level_actions": [401, 0, 0, 0, 0, 0, 0], "level_baseline_actions": [7, 18, 44, 61, 131, 34, 152], "number_of_levels": null, "number_of_environments": null, "message": null}], "score": 0.0, "actions": 401, "levels_completed": 0, "completed": false, "level_count": 7, "resets": 7}], "tags_scores": [{"id": "keyboard", "guid": null, "score": 0.0, "levels_completed": 0, "actions": 401, "resets": null, "state": null, "completed": null, "level_scores": null, "level_actions": null, "level_baseline_actions": null, "number_of_levels": 7, "number_of_environments": 1, "message": null}, {"id": "click", "guid": null, "score": 0.0, "levels_completed": 0, "actions": 401, "resets": null, "state": null, "completed": null, "level_scores": null, "level_actions": null, "level_baseline_actions": null, "number_of_levels": 7, "number_of_environments": 1, "message": null}], "competition_mode": null, "total_environments_completed": 0, "total_environments": 2, "total_levels_completed": 0, "total_levels": 14, "total_actions": 802}}, {"schema": 1, "experiment": "v002-effect-explorer", "run_id": "20260922-061023", "started_at": "2026-09-22T06:10:23.680263+00:00", "finished_at": "2026-09-22T06:10:27.132408+00:00", "git": {"commit": "1907cdb", "dirty": true}, "tag": "bench-20260922-061016", "config": {"description": "effect-aware explorer: no-op filtering + novelty-first, LLM planner stub", "games": ["ls20", "lf52", "sk48", "vc33"], "max_steps": 400, "params": {"seed": 1337, "planner": "stub"}}, "aggregate": {"score": 0.0, "levels_completed": 0, "actions": 1604, "games_played": 4}, "games": [{"game_id": "ls20", "state": "GameState.NOT_FINISHED", "levels_completed": 0, "actions": 401, "score": 0.0, "win_levels": 7}, {"game_id": "lf52", "state": "GameState.NOT_FINISHED", "levels_completed": 0, "actions": 401, "score": 0.0, "win_levels": 10}, {"game_id": "sk48", "state": "GameState.NOT_FINISHED", "levels_completed": 0, "actions": 401, "score": 0.0, "win_levels": 8}, {"game_id": "vc33", "state": "GameState.NOT_FINISHED", "levels_completed": 0, "actions": 401, "score": 0.0, "win_levels": 7}], "scorecard": {"source_url": null, "tags": null, "opaque": null, "card_id": "b948022c-4851-45d5-862e-02a62c1a9e21", "api_key": null, "score": 0.0, "environments": [{"id": "ls20-9607627b", "runs": [{"id": null, "guid": "28cb87e0-df9f-450d-a1b6-cef468d7d478", "score": 0.0, "levels_completed": 0, "actions": 401, "resets": 3, "state": "GAME_OVER", "completed": false, "level_scores": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "level_actions": [401, 0, 0, 0, 0, 0, 0], "level_baseline_actions": [22, 123, 73, 84, 96, 192, 186], "number_of_levels": null, "number_of_environments": null, "message": null}], "score": 0.0, "actions": 401, "levels_completed": 0, "completed": false, "level_count": 7, "resets": 3}, {"id": "lf52-271a04aa", "runs": [{"id": null, "guid": "6fdfb489-02bb-43cd-81fd-6e71c46b58eb", "score": 0.0, "levels_completed": 0, "actions": 401, "resets": 3, "state": "GAME_OVER", "completed": false, "level_scores": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "level_actions": [401, 0, 0, 0, 0, 0, 0, 0, 0, 0], "level_baseline_actions": [32, 81, 60, 71, 205, 148, 244, 109, 164, 225], "number_of_levels": null, "number_of_environments": null, "message": null}], "score": 0.0, "actions": 401, "levels_completed": 0, "completed": false, "level_count": 10, "resets": 3}, {"id": "sk48-d8078629", "runs": [{"id": null, "guid": "a7c3a13c-a1e8-47e8-adbb-f5805adce4f0", "score": 0.0, "levels_completed": 0, "actions": 401, "resets": 1, "state": "GAME_OVER", "completed": false, "level_scores": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "level_actions": [401, 0, 0, 0, 0, 0, 0, 0], "level_baseline_actions": [61, 177, 101, 103, 230, 181, 125, 92], "number_of_levels": null, "number_of_environments": null, "message": null}], "score": 0.0, "actions": 401, "levels_completed": 0, "completed": false, "level_count": 8, "resets": 1}, {"id": "vc33-5430563c", "runs": [{"id": null, "guid": "c4c5b725-05b9-4f93-af36-333a58a62de9", "score": 0.0, "levels_completed": 0, "actions": 401, "resets": 7, "state": "GAME_OVER", "completed": false, "level_scores": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "level_actions": [401, 0, 0, 0, 0, 0, 0], "level_baseline_actions": [7, 18, 44, 61, 131, 34, 152], "number_of_levels": null, "number_of_environments": null, "message": null}], "score": 0.0, "actions": 401, "levels_completed": 0, "completed": false, "level_count": 7, "resets": 7}], "tags_scores": [{"id": "keyboard", "guid": null, "score": 0.0, "levels_completed": 0, "actions": 401, "resets": null, "state": null, "completed": null, "level_scores": null, "level_actions": null, "level_baseline_actions": null, "number_of_levels": 7, "number_of_environments": 1, "message": null}, {"id": "click", "guid": null, "score": 0.0, "levels_completed": 0, "actions": 802, "resets": null, "state": null, "completed": null, "level_scores": null, "level_actions": null, "level_baseline_actions": null, "number_of_levels": 17, "number_of_environments": 2, "message": null}, {"id": "keyboard_click", "guid": null, "score": 0.0, "levels_completed": 0, "actions": 401, "resets": null, "state": null, "completed": null, "level_scores": null, "level_actions": null, "level_baseline_actions": null, "number_of_levels": 8, "number_of_environments": 1, "message": null}], "competition_mode": null, "total_environments_completed": 0, "total_environments": 4, "total_levels_completed": 0, "total_levels": 32, "total_actions": 1604}}]}], "generated_at": "2026-09-22 06:16 UTC"}</script>
+<script id="page" type="application/json">{"mode": "index"}</script>
+<script>
+const DATA = JSON.parse(document.getElementById('data').textContent);
+const PAGE = JSON.parse(document.getElementById('page').textContent);
+const PALETTE = ['--s1','--s2','--s3','--s4','--s5','--s6','--s7','--s8'];
+const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const exps = DATA.experiments;
+const colorOf = i => css(PALETTE[i % PALETTE.length]);
+const fmt = x => (x == null ? '–' : (typeof x === 'number' ? x.toFixed(3) : x));
+
+document.getElementById('themeBtn').onclick = () => {
+  const r = document.documentElement;
+  const dark = matchMedia('(prefers-color-scheme: dark)').matches;
+  const cur = r.dataset.theme || (dark ? 'dark' : 'light');
+  r.dataset.theme = cur === 'dark' ? 'light' : 'dark';
+  render();
+};
+
+const tip = document.getElementById('tip');
+function showTip(e, html) {
+  tip.innerHTML = html; tip.style.display = 'block';
+  const x = Math.min(e.clientX + 14, innerWidth - tip.offsetWidth - 8);
+  tip.style.left = x + 'px'; tip.style.top = (e.clientY + 14) + 'px';
+}
+function hideTip() { tip.style.display = 'none'; }
+
+// benchmark tag -> {expName: run}
+function benchGroups() {
+  const groups = {};
+  exps.forEach(e => (e.runs || []).forEach(r => {
+    if (r.tag && r.tag.startsWith('bench-')) {
+      (groups[r.tag] ??= {})[e.name] = r;
+    }
+  }));
+  return Object.entries(groups).sort((a, b) => b[0].localeCompare(a[0]));
+}
+function benchRows(group) {
+  return exps.filter(e => group[e.name]).map(e => {
+    const r = group[e.name];
+    return { name: e.name, run: r,
+      score: r.aggregate?.score ?? 0,
+      levels: r.aggregate?.levels_completed ?? 0,
+      actions: r.aggregate?.actions ?? 0 };
+  });
+}
+
+const NS = 'http://www.w3.org/2000/svg';
+function el(tag, attrs, parent) {
+  const n = document.createElementNS(NS, tag);
+  for (const k in attrs) n.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(n);
+  return n;
+}
+
+// Horizontal bars, single accent hue (identity is on the axis labels).
+function barChart(container, rows, valueKey, maxHint, tipHtml) {
+  container.innerHTML = '';
+  if (!rows.length) { container.innerHTML = '<div class="empty">데이터 없음</div>'; return; }
+  const W = 480, ROW = 30, LBL = 150, PAD = 8;
+  const H = rows.length * ROW + 24;
+  const svg = el('svg', { viewBox: `0 0 ${W} ${H}`, width: '100%' }, container);
+  const maxV = Math.max(maxHint, ...rows.map(r => r[valueKey] || 0));
+  const plotW = W - LBL - 60;
+  [0, .5, 1].forEach(t => {
+    const x = LBL + t * plotW;
+    el('line', { x1: x, y1: 4, x2: x, y2: H - 20, class: 'gridline' }, svg);
+    const lbl = el('text', { x, y: H - 6, 'text-anchor': 'middle' }, svg);
+    lbl.textContent = (maxV * t).toFixed(maxV >= 10 ? 0 : 1);
+  });
+  rows.forEach((r, i) => {
+    const y = i * ROW + 6;
+    const v = r[valueKey] || 0;
+    const w = Math.max(v / maxV * plotW, 1.5);
+    const name = el('text', { x: LBL - PAD, y: y + 15, 'text-anchor': 'end' }, svg);
+    name.textContent = r.name.length > 22 ? r.name.slice(0, 21) + '…' : r.name;
+    const bar = el('rect', { x: LBL, y, width: w, height: ROW - 12,
+      rx: 4, fill: css('--accent') }, svg);
+    const val = el('text', { x: LBL + w + 6, y: y + 15, class: 'val' }, svg);
+    val.textContent = fmt(v);
+    bar.addEventListener('mousemove', e => showTip(e, tipHtml(r)));
+    bar.addEventListener('mouseleave', hideTip);
+  });
+  el('line', { x1: LBL, y1: 4, x2: LBL, y2: H - 20, class: 'axis' }, svg);
+}
+
+function trendChart(container, legendBox) {
+  container.innerHTML = ''; legendBox.innerHTML = '';
+  const series = exps.map((e, i) => ({
+    name: e.name, color: colorOf(i),
+    pts: (e.runs || []).map((r, j) => ({ x: j + 1, y: r.aggregate?.score ?? 0, run: r })),
+  })).filter(s => s.pts.length);
+  if (!series.length) { container.innerHTML = '<div class="empty">데이터 없음</div>'; return; }
+  const W = 960, H = 240, L = 46, R = 16, T = 12, B = 30;
+  const maxX = Math.max(2, ...series.map(s => s.pts.length));
+  const maxY = Math.max(1, ...series.flatMap(s => s.pts.map(p => p.y)));
+  const sx = x => L + (x - 1) / (maxX - 1) * (W - L - R);
+  const sy = y => T + (1 - y / maxY) * (H - T - B);
+  const svg = el('svg', { viewBox: `0 0 ${W} ${H}`, width: '100%' }, container);
+  [0, .5, 1].forEach(t => {
+    const y = sy(maxY * t);
+    el('line', { x1: L, y1: y, x2: W - R, y2: y, class: 'gridline' }, svg);
+    const lbl = el('text', { x: L - 8, y: y + 4, 'text-anchor': 'end' }, svg);
+    lbl.textContent = (maxY * t).toFixed(maxY >= 10 ? 0 : 1);
+  });
+  for (let x = 1; x <= maxX; x++) {
+    const lbl = el('text', { x: sx(x), y: H - 10, 'text-anchor': 'middle' }, svg);
+    lbl.textContent = x;
+  }
+  series.forEach(s => {
+    if (s.pts.length > 1) {
+      const d = s.pts.map((p, i) => (i ? 'L' : 'M') + sx(p.x) + ' ' + sy(p.y)).join(' ');
+      el('path', { d, fill: 'none', stroke: s.color, 'stroke-width': 2,
+                   'stroke-linejoin': 'round' }, svg);
+    }
+    s.pts.forEach(p => {
+      const dot = el('circle', { cx: sx(p.x), cy: sy(p.y), r: 4.5, fill: s.color,
+        stroke: css('--surface-2'), 'stroke-width': 2 }, svg);
+      dot.addEventListener('mousemove', e => showTip(e,
+        `<b>${s.name}</b><br>실행 #${p.x} (${p.run.run_id})<br>` +
+        `점수 <b>${fmt(p.y)}</b> · 레벨 ${p.run.aggregate?.levels_completed ?? '–'} · ` +
+        `액션 ${p.run.aggregate?.actions ?? '–'}` +
+        (p.run.tag ? `<br><span class="muted">${p.run.tag}</span>` : '')));
+      dot.addEventListener('mouseleave', hideTip);
+    });
+    legendBox.insertAdjacentHTML('beforeend',
+      `<span><span class="sw" style="background:${s.color}"></span>${s.name}</span>`);
+  });
+}
+
+function benchSectionHTML(idPrefix) {
+  return `
+  <div class="panel">
+    <div class="charts">
+      <div><p class="chart-title">종합 점수 (스코어카드, 0–100)</p><div id="${idPrefix}Score"></div></div>
+      <div><p class="chart-title">완료 레벨 수 (전 게임 합)</p><div id="${idPrefix}Level"></div></div>
+    </div>
+    <h2 style="margin-top:20px">게임별 상세</h2>
+    <div class="tablewrap"><table id="${idPrefix}Games"></table></div>
+  </div>`;
+}
+
+function renderBenchInto(idPrefix, rows) {
+  const tipHtml = r => `<b>${r.name}</b><br>점수 <b>${fmt(r.score)}</b> · ` +
+    `레벨 ${r.levels} · 액션 ${r.actions}<br><span class="muted">${r.run.run_id}</span>`;
+  barChart(document.getElementById(idPrefix + 'Score'), rows, 'score', 1, tipHtml);
+  barChart(document.getElementById(idPrefix + 'Level'), rows, 'levels', 1, tipHtml);
+  const games = [...new Set(rows.flatMap(r => (r.run.games || []).map(g => g.game_id)))];
+  document.getElementById(idPrefix + 'Games').innerHTML =
+    '<tr><th>experiment</th>' + games.map(g => `<th class="num">${g}</th>`).join('') + '</tr>' +
+    rows.map(r => '<tr><td>' + r.name + '</td>' + games.map(gid => {
+      const g = (r.run.games || []).find(x => x.game_id === gid);
+      if (!g) return '<td class="num muted">–</td>';
+      return `<td class="num">${g.levels_completed ?? 0}/${g.win_levels ?? '?'}레벨 · ` +
+             `${g.actions ?? '–'}액션 · ${fmt(g.score)}</td>`;
+    }).join('') + '</tr>').join('');
+}
+
+function runsTableHTML(runsByExp) {
+  return '<tr><th>experiment</th><th>run</th><th>tag</th>' +
+    '<th class="num">score</th><th class="num">levels</th><th class="num">actions</th>' +
+    '<th>games</th><th>git</th></tr>' +
+    runsByExp.map(([name, r]) =>
+      `<tr><td>${name}</td><td>${r.run_id}</td>` +
+      `<td>${r.tag ?? '<span class="muted">–</span>'}</td>` +
+      `<td class="num">${fmt(r.aggregate?.score)}</td>` +
+      `<td class="num">${r.aggregate?.levels_completed ?? '–'}</td>` +
+      `<td class="num">${r.aggregate?.actions ?? '–'}</td>` +
+      `<td>${(r.games || []).length}</td>` +
+      `<td class="muted">${r.git?.commit ?? '–'}${r.git?.dirty ? '*' : ''}</td></tr>`
+    ).join('');
+}
+
+function renderIndex() {
+  document.getElementById('pageTitle').textContent = 'ARC-AGI-3 실험 벤치마크';
+  document.getElementById('pageSub').textContent =
+    `생성: ${DATA.generated_at} · 소스: experiments/summary.json`;
+
+  const allRuns = exps.flatMap(e => e.runs || []);
+  const best = allRuns.length ? Math.max(...allRuns.map(r => r.aggregate?.score ?? 0)) : null;
+  const bestLv = allRuns.length ? Math.max(...allRuns.map(r => r.aggregate?.levels_completed ?? 0)) : null;
+  const benches = benchGroups();
+
+  const cards = benches.map(([tag, group]) => {
+    const rows = benchRows(group);
+    const top = rows.slice().sort((a, b) => b.score - a.score || b.levels - a.levels)[0];
+    const anyRun = rows[0]?.run;
+    return `<a class="card" href="${tag}.html">
+      <div class="t">${tag}</div>
+      <div class="m">${rows.length}개 버전 · 게임 ${anyRun?.games?.length ?? '–'}개 · max_steps=${anyRun?.config?.max_steps ?? '–'}</div>
+      <div class="w">1위: <b>${top ? top.name : '–'}</b> (점수 ${top ? fmt(top.score) : '–'} · 레벨 ${top ? top.levels : '–'})</div>
+    </a>`;
+  }).join('');
+
+  document.getElementById('content').innerHTML = `
+    <div class="tiles">${[
+      ['실험 버전', exps.length, ''],
+      ['총 실행 수', allRuns.length, ''],
+      ['최고 점수', best == null ? '–' : best.toFixed(3), '전체 실행 기준'],
+      ['최다 완료 레벨', bestLv ?? '–', '전체 실행 기준'],
+      ['벤치마크 횟수', benches.length, benches[0]?.[0] ?? ''],
+    ].map(([k, v, d]) =>
+      `<div class="tile"><div class="k">${k}</div><div class="v">${v}</div><div class="d">${d}</div></div>`
+    ).join('')}</div>
+    <h2>벤치마크 리포트</h2>
+    ${benches.length ? `<div class="cards">${cards}</div>`
+      : '<div class="panel empty">아직 벤치마크가 없습니다. <code>make bench</code>로 실행하세요.</div>'}
+    <h2>점수 추이 (실행 순서별)</h2>
+    <div class="panel"><div id="trendChart"></div><div class="legend" id="trendLegend"></div></div>
+    <h2>모든 실행 기록</h2>
+    <div class="panel tablewrap"><table id="runTable"></table></div>`;
+
+  trendChart(document.getElementById('trendChart'), document.getElementById('trendLegend'));
+  document.getElementById('runTable').innerHTML = runsTableHTML(
+    exps.flatMap(e => (e.runs || []).slice().reverse().map(r => [e.name, r])));
+}
+
+function renderBenchPage() {
+  const tag = PAGE.tag;
+  const group = Object.fromEntries(benchGroups().filter(([t]) => t === tag)
+                                                .flatMap(([, g]) => Object.entries(g)));
+  const rows = benchRows(group);
+  document.getElementById('pageTitle').textContent = tag;
+  const anyRun = rows[0]?.run;
+  document.getElementById('pageSub').textContent = rows.length
+    ? `${rows.length}개 버전 · 게임 ${anyRun?.games?.length ?? '–'}개 · max_steps=${anyRun?.config?.max_steps ?? '–'} · ${anyRun?.started_at?.slice(0, 16).replace('T', ' ') ?? ''} UTC`
+    : '이 벤치마크의 실행 기록이 없습니다';
+  document.getElementById('backLink').innerHTML = '<a href="index.html">← 전체 벤치마크</a>';
+  document.getElementById('content').innerHTML =
+    benchSectionHTML('b') +
+    '<h2>이 벤치마크의 실행</h2><div class="panel tablewrap"><table id="benchRuns"></table></div>';
+  renderBenchInto('b', rows);
+  document.getElementById('benchRuns').innerHTML =
+    runsTableHTML(rows.map(r => [r.name, r.run]));
+}
+
+function render() {
+  if (PAGE.mode === 'bench') renderBenchPage(); else renderIndex();
+}
+render();
+</script>
+</body>
+</html>

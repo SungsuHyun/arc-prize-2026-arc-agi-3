@@ -20,7 +20,8 @@ EXPERIMENTS = ROOT / "experiments"
 def collect() -> dict:
     experiments = []
     for exp_dir in sorted(EXPERIMENTS.iterdir()):
-        if not exp_dir.is_dir() or exp_dir.name.startswith("_"):
+        if not exp_dir.is_dir() or exp_dir.name.startswith("_") \
+                or not (exp_dir / "agent.py").exists():
             continue
         runs = []
         for f in sorted((exp_dir / "results").glob("run-*.json")):
