@@ -45,6 +45,17 @@
 우리 프로그램형 v011(LLM 없음)은 ls20 3.57, m0r0 4.19, vc33 0.4±로, Duck이 약한
 이동 게임에서 강하고 Duck이 강한 클릭 게임(vc33 3.33)에서 약하다 — 상보적.
 
+### Kaggle 패키징 경로 (조사, 미실행)
+
+Duck의 `make kaggle-duck`는 (1) 소스 번들 데이터셋(우리 harness/duck 스냅샷)을 올리고,
+(2) 공개 데이터셋 `driessmit1/arc3-vllm-h100-wheelhouse-v3`(5.2GB, vllm 0.19 + torch 2.10 +
+flashinfer 0.6.6, RTX PRO 6000 검증)와 `driessmit1/vrfai-qwen3-6-27b-fp8-hf-snapshot`(36GB)를
+첨부한 커널을 푸시한다. 노트북 안에서 vLLM 서버를 띄우고(64k 컨텍스트) 재실행이면
+게이트웨이 Arcade를, 아니면 번들 오프라인 게임을 플레이. 인증은 KAGGLE_USERNAME +
+KAGGLE_API_TOKEN으로 우리 토큰과 호환. 주의: 커밋(비재실행) 런도 기본 540분 캡으로
+게임을 다 돌리므로 주간 GPU 쿼터(6h)를 넘긴다 → 노트북 커스터마이즈 훅에서
+비제출 모드일 때 게임 2개·15분으로 제한해야 한다.
+
 ## 결론 / 다음 단계
 
 - **nav 헬퍼는 Duck의 약점(이동 게임)을 메운다**: 같은 27B·같은 20분에서 ls20 0→3.57
