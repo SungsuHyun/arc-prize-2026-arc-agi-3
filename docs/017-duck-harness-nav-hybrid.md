@@ -77,7 +77,19 @@ m0r0 0.36, 25게임 0.52)는 **"Duck + nav 요약 텍스트"**의 결과이며 `
 nav가 실제로 살아 있는 하이브리드 재측정이 필요하다. 요약 텍스트만으로도 이동 게임이 0→레벨 1이
 된 점은 유효한 관찰이다.
 
-### Kaggle 패키징 경로 (조사, 미실행)
+### Kaggle 패키징 실행 (2026-09-23 밤) — 커널 `sungsuhyun/taaf-duck-nav-solver`
+
+- `make -C harness/duck/ARC3-Inference kaggle-duck …`로 소스 데이터셋
+  (`sungsuhyun/taaf-kaggle-source-nav-solver`, 1.8MB, 우리 nav/solver 포함)과 커널을 푸시.
+  공개 wheelhouse·FP8 모델 스냅샷 첨부, machine_shape NvidiaRtxPro6000
+- 노트북 템플릿의 커스터마이즈 훅에 쿼터 가드 추가: 비재실행(커밋)이면 경쟁 데이터셋의
+  `environment_files`로 2게임만 15분씩(v1은 `__auto__` env-dir 오류로 실패 → v2에서 수정)
+- **v2 커밋 런 성공**: RTX PRO 6000에서 wheelhouse 설치 → vLLM 서버(Qwen3.6-27B FP8) 기동·
+  스모크 응답 → 우리 하네스가 tn36·lf52를 15분 플레이(0레벨, 59 tok/s, 동시 2) → 정리.
+  재실행(제출)은 게이트웨이 Arcade·전체 설정(동시 28, 게임당 132분)을 그대로 사용 →
+  **제출 가능한 커널 버전 확보(v2 = v012d 코드)**
+
+### Kaggle 패키징 경로 (조사)
 
 Duck의 `make kaggle-duck`는 (1) 소스 번들 데이터셋(우리 harness/duck 스냅샷)을 올리고,
 (2) 공개 데이터셋 `driessmit1/arc3-vllm-h100-wheelhouse-v3`(5.2GB, vllm 0.19 + torch 2.10 +
