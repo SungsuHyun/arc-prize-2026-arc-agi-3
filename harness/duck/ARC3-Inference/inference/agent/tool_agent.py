@@ -14,6 +14,7 @@ from urllib.parse import urlparse, urlunparse
 import requests
 
 from inference.agent.action_names import to_engine_action, to_model_action
+from inference.agent import advisors as _advisors
 from inference.agent.prompts import (
     COMPACT_TOOL_SESSION_ADDENDUM,
     GAME_OVERVIEW_ADDENDUM,
@@ -23,6 +24,7 @@ from inference.agent.prompts import (
     TOOL_CALL_FORMAT_GUIDANCE,
     VISUAL_GAME_ADDENDUM,
     NAV_HELPER_ADDENDUM,
+    ADVISOR_ADDENDUM,
 )
 
 from inference.agent.vision_context import (
@@ -36,6 +38,8 @@ from inference.utils.openai_compat import build_chat_payload, build_headers
 
 log = logging.getLogger(__name__)
 
+# Ours: opt-in advisor ensemble (no-op unless ARC3_ADVISORS is set).
+_ADVISOR_CONFIG = _advisors.load_config_from_env()
 _LOCAL_ANALYZER_MODEL_ID = os.environ.get("LOCAL_ANALYZER_MODEL_ID", "")
 _LOCAL_ANALYZER_BASE_URL = os.environ.get("LOCAL_ANALYZER_BASE_URL", "http://127.0.0.1:1234/v1")
 _DEFAULT_ANALYZER_MODEL = os.environ.get(
@@ -385,6 +389,8 @@ def _build_system_prompt(*, tool_output_tokens: int) -> str:
         prompt += MULTIMODAL_CONTEXT_ADDENDUM
     prompt += VISUAL_GAME_ADDENDUM
     prompt += NAV_HELPER_ADDENDUM
+    if _ADVISOR_CONFIG.enabled:
+        prompt += ADVISOR_ADDENDUM
     prompt += PYTHON_ADDENDUM
     prompt += COMPACT_TOOL_SESSION_ADDENDUM.format(tool_output_tokens=tool_output_tokens)
     return prompt
@@ -1266,7 +1272,21 @@ class ToolAgent:
         )
         lines.extend(self._summarized_knowledge_lines())
         lines.append("end of world model. ")
-        lines.extend(_nav_summary_lines(history_entries, current_frame))
+        nav_lines = _nav_summary_lines(history_entries, current_frame)
+        lines.extend(nav_lines)
+        if _ADVISOR_CONFIG.enabled:
+            lines.extend(
+                self._advisor_lines(
+                    action_num,
+                    valid_actions=valid_actions,
+                    current_frame=current_frame,
+                    history_entries=history_entries,
+                    previous_step_summary=previous_step_summary,
+                    nav_lines=nav_lines,
+                    level=current_level,
+                    step=current_step,
+                )
+            )
         if action_num == 0:
             lines.append(
                 "Ground yourself in `current_frame` before acting, but start with a compact structural summary rather than restating the full frame."
@@ -1286,6 +1306,53 @@ class ToolAgent:
         if "MOUSE" in _normalize_valid_actions(valid_actions):
             lines.append("If you use MOUSE, include integer row and col arguments.")
         return "\n".join(lines)
+
+    def _advisor_lines(
+        self,
+        action_num: int,
+        *,
+        valid_actions: list[str] | None,
+        current_frame: Frame | None,
+        history_entries: list[HistoryEntry],
+        previous_step_summary: dict[str, Any] | None,
+        nav_lines: list[str],
+        level: int,
+        step: int,
+    ) -> list[str]:
+        """Ours: query the advisor ensemble (smaller models) and render their opinions
+        as a prompt block for the decision model. Never raises."""
+        if current_frame is None:
+            return []
+        started = time.monotonic()
+        try:
+            previous_frame = history_entries[-2].frame if len(history_entries) >= 2 else None
+            state_text = _advisors.render_state_text(
+                current_frame=current_frame,
+                previous_frame=previous_frame,
+                valid_actions=_normalize_valid_actions(valid_actions),
+                level=level,
+                step=step,
+                previous_step_summary=previous_step_summary,
+                world_model_lines=self._summarized_knowledge_lines(),
+                nav_lines=nav_lines,
+                cfg=_ADVISOR_CONFIG,
+            )
+            opinions = _advisors.query_advisors(state_text, _ADVISOR_CONFIG)
+        except Exception as exc:
+            log.warning("advisor ensemble failed: %s", exc)
+            return []
+        wall = time.monotonic() - started
+        _advisors.log_opinions(
+            self._session_runtime_dir,
+            action_num=action_num,
+            level=level,
+            step=step,
+            opinions=opinions,
+            state_chars=len(state_text),
+            wall_s=wall,
+            executed_since_last=[str(a) for a in ((previous_step_summary or {}).get("executed_actions") or [])],
+        )
+        return _advisors.format_opinion_lines(opinions)
 
     def _tools(self, state_path: Path) -> list[dict[str, Any]]:
         self._ensure_session(state_path)

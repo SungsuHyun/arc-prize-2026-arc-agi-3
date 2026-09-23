@@ -33,6 +33,16 @@ NAV_HELPER_ADDENDUM = (
     "instead of hand-written step sequences. Prefer visiting unvisited targets nearest-first; the level goal is usually one of them.\n"
 )
 
+ADVISOR_ADDENDUM = (
+    "\n\nAdvisor ensemble:\n"
+    "- Each user turn may include an `Advisor ensemble` block: short opinions from several smaller, independent models "
+    "that saw a compact rendering of the same state (hypothesis, evidence, recommended actions, confidence, warning).\n"
+    "- You are the decision model. Advisors are often wrong about details; treat their output as cheap hypotheses. "
+    "When advisors agree with each other and with your world model, act with less probing. When they disagree with you, "
+    "check the disputed fact in Python (`current_frame.segmentation`, `nav`) before spending actions.\n"
+    "- Never copy an advisor's action list blindly; validate it against `valid_actions` and your own search or `nav.path_to`.\n"
+)
+
 VISUAL_GAME_ADDENDUM = (
     "\n\nVisual-game guidance:\n"
     "- Treat each board as a scene with objects, blockers, targets, adjacency, containment, motion, and symmetry.\n"
