@@ -106,6 +106,8 @@ class NavHelper:
         self.floor_votes: Counter = Counter()
         self.walls: set[tuple[int, int]] = set()
         self.visited: set[tuple[int, int]] = set()
+        self.last_visit: dict[tuple[int, int], int] = {}   # block -> step index of last visit
+        self.blocked: dict[tuple[int, int], int] = {}      # non-floor block we tried to enter and failed -> step
         self._learn_terrain()
 
     # ── learning ───────────────────────────────────────────────────────────
@@ -222,7 +224,7 @@ class NavHelper:
             return
         prev_block = None
         sig = None
-        for name, b, a in self._steps:
+        for step_i, (name, b, a) in enumerate(self._steps):
             objs_a, _ = extract_objects(a)
             # locate avatar in the after-frame by main color/size votes
             av = None
@@ -235,10 +237,24 @@ class NavHelper:
             blk = ((av["bbox"][0] - md["ox"]) // md["cell"], (av["bbox"][1] - md["oy"]) // md["cell"]) if av else None
             if blk is not None:
                 self.visited.add(blk)
+                self.last_visit[blk] = step_i
             mv = bm.get(name)
             if prev_block is not None and blk is not None and mv is not None:
                 if blk == prev_block:
-                    self.walls.add((prev_block[0] + mv[0], prev_block[1] + mv[1]))
+                    tgt = (prev_block[0] + mv[0], prev_block[1] + mv[1])
+                    tc, tr = tgt
+                    colour = None
+                    if 0 <= tr < md["nrows"] and 0 <= tc < md["ncols"]:
+                        cell = md["cell"]
+                        x0, y0 = md["ox"] + tc * cell, md["oy"] + tr * cell
+                        block = [a[yy][xx] for yy in range(y0, min(64, y0 + cell)) for xx in range(x0, min(64, x0 + cell))]
+                        colour = Counter(block).most_common(1)[0][0]
+                    # a failed step into a non-floor block is a closed target (door/lock), not a wall
+                    if colour is not None and colour not in self.floor_colors and colour != self.background \
+                            and self.floor_votes:
+                        self.blocked[tgt] = step_i
+                    else:
+                        self.walls.add(tgt)
                 elif blk == (prev_block[0] + mv[0], prev_block[1] + mv[1]):
                     c, r = prev_block
                     if 0 <= r < md["nrows"] and 0 <= c < md["ncols"]:
@@ -250,6 +266,7 @@ class NavHelper:
             prev_block = blk
         if self.md["player"] is not None:
             self.visited.add(self.md["player"])
+            self.last_visit[self.md["player"]] = len(self._steps)
 
     @property
     def floor_colors(self) -> set[int]:
@@ -317,8 +334,14 @@ class NavHelper:
                 continue
             seen.add(b)
             p = self.path_to(o["center"][1], o["center"][0])
+            near = [(b[0] + dc, b[1] + dr) for dc in (-1, 0, 1) for dr in (-1, 0, 1)]
+            touched = [self.last_visit[q] for q in near if q in self.last_visit]
+            if b in self.blocked:
+                touched.append(self.blocked[b])
             out.append({"color": o["color"], "size": o["size"], "row": o["center"][1], "col": o["center"][0],
-                        "path_len": None if p is None else len(p), "visited": b in self.visited or b in self.walls})
+                        "path_len": None if p is None else len(p),
+                        "visited": bool(touched) or b in self.walls,
+                        "last_visit": max(touched) if touched else -1})
         out.sort(key=lambda t: (t["path_len"] is None, t["path_len"] or 0))
         return out[:max_n]
 

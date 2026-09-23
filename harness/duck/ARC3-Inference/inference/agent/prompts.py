@@ -66,10 +66,15 @@ SOLVER_ADDENDUM = (
     "      for t in nav.targets():\n"
     "          if not t['visited'] and t['path_len']:\n"
     "              return nav.path_to(t['row'], t['col']) or []\n"
+    "      reach = [t for t in nav.targets() if t['path_len']]   # all visited: revisit the least recently visited\n"
+    "      if reach:\n"
+    "          t = min(reach, key=lambda t: t['last_visit'])\n"
+    "          return nav.path_to(t['row'], t['col']) or []\n"
     "      fr = nav.frontier()\n"
     "      return (nav.path_to(fr[0], fr[1]) or []) if fr else []\n"
     "  ''')\n"
-    "  Adapt the target choice to the rules you inferred (e.g. key before door, order by colour); for click games return "
+    "  Never define your own `propose_solver` — it is a built-in tool; just call it with the code string. "
+    "Adapt the target choice to the rules you inferred (e.g. key before door, order by colour); for click games return "
     "[{'action':'MOUSE','row':r,'col':c}] computed from `current_frame.segmentation`.\n"
 )
 

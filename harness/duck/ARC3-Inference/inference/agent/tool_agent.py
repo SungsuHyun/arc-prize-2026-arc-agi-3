@@ -382,9 +382,9 @@ def _nav_summary_lines(history_entries, current_frame) -> list[str]:
             "then read `nav.summary()` and route with `nav.path_to(row, col)`."]
 
 
-SOLVER_MAX_ACTIONS_PER_TURN = 24
+SOLVER_MAX_ACTIONS_PER_TURN = 12
 SOLVER_NOOP_TURN_LIMIT = 2          # consecutive auto turns without board change
-SOLVER_NO_PROGRESS_ACTIONS = 200    # auto actions without a level advance
+SOLVER_NO_PROGRESS_ACTIONS = 80     # auto actions without a level advance
 SOLVER_RUN_SNIPPET = """
 __solver_actions = solve()
 __solver_actions = list(__solver_actions or [])
@@ -412,9 +412,12 @@ def _solver_status_lines(solver: dict | None, *, model_turns: int = 0, level_jus
         return [base + " When the rules are clear, call `propose_solver(code)` (see system prompt) so the harness can play on without you."]
     st = solver.get("status")
     if st == "failed":
-        return [f"Solver: your stored solver FAILED ({solver.get('reason')}). It ran {solver.get('actions_run', 0)} actions. "
-                "Inspect the newest frames, then either repair the code and call `propose_solver(code)` again, or act manually.",
-                f"Failed solver code (for reference):\n{solver.get('code', '')[:1500]}"]
+        shown = int(solver.get("failure_shown", 0)); solver["failure_shown"] = shown + 1
+        head = (f"Solver: your stored solver FAILED ({solver.get('reason')}) after {solver.get('actions_run', 0)} actions. "
+                "Act manually for a few turns to learn what was wrong; when you know, repair the code and call `propose_solver(code)` again.")
+        if shown == 0:
+            return [head, f"Failed solver code (for reference):\n{solver.get('code', '')[:1500]}"]
+        return [head]
     if st == "rejected":
         return [f"Solver: your last proposal was rejected: {solver.get('reason')}. Report: {json.dumps(solver.get('report', {}))[:600]}"]
     return []
@@ -1607,6 +1610,9 @@ class ToolAgent:
             compile(code, "<python_tool>", "exec")
         except SyntaxError as exc:
             return _ToolDispatchResult(json.dumps({"error": f"Python syntax error: {exc}"}, indent=2))
+        if re.search(r"^\s*def\s+propose_solver\s*\(", code, re.M):
+            return _ToolDispatchResult(json.dumps({"error": "`propose_solver` is a built-in tool of this sandbox. Do not define it; "
+                                                             "call `propose_solver(code_string)` with your solver code, then stop."}, indent=2))
 
         current_frame, history_entries = load_runtime_state(state_path)
         valid_actions = list(_normalize_valid_actions(self._current_valid_actions))
@@ -1874,6 +1880,7 @@ class ToolAgent:
         elif level is not None and level != solver["level_at_progress"]:
             solver["level_at_progress"] = level
             solver["actions_since_progress"] = 0
+        self._last_action_result = None       # so we only see this turn's action result
         result = self._run_python_tool(state_path, {"code": solver["code"] + "\n" + SOLVER_RUN_SNIPPET})
         try:
             payload = json.loads(result.content)
@@ -1883,7 +1890,16 @@ class ToolAgent:
         err = str(payload.get("error", "") or "")
         last = self._last_action_result if isinstance(self._last_action_result, dict) else {}
         executed = int(last.get("executed_count") or 0)
+        m = re.search(r"SOLVER_RAN (\d+) (\S+)", stdout)
+        if executed == 0 and m and m.group(2) == "None":
+            executed = min(int(m.group(1)), SOLVER_MAX_ACTIONS_PER_TURN)
         board_changed = bool(last.get("board_changed"))
+        grid_key = None
+        try:
+            fresh_frame, _ = load_runtime_state(state_path)
+            grid_key = hash(tuple(tuple(r) for r in fresh_frame.grid)) if fresh_frame is not None else None
+        except Exception:  # noqa: BLE001
+            grid_key = None
         _append_transcript_section(analyzer_log, f"SOLVER AUTO-RUN (action {action_num})",
                                    f"stdout={stdout.strip()[:200]!r} error={err[:200]!r} executed={executed} board_changed={board_changed}")
         failed_reason = None
@@ -1901,9 +1917,15 @@ class ToolAgent:
                 failed_reason = "actions stopped changing the board"
             if solver["actions_since_progress"] >= SOLVER_NO_PROGRESS_ACTIONS:
                 failed_reason = f"no level progress after {solver['actions_since_progress']} solver actions"
+            seen = solver.setdefault("seen_grids", {})
+            if grid_key is not None:
+                seen[grid_key] = seen.get(grid_key, 0) + 1
+                if seen[grid_key] >= 3:
+                    failed_reason = "the board keeps returning to the same state (solver is cycling)"
         if failed_reason:
             solver["status"] = "failed"
             solver["reason"] = failed_reason
+            self._model_turns_since_solver = 0
             self._last_step_summary = self._summarize_step_sequence(
                 [self._last_action_result] if isinstance(self._last_action_result, dict) and executed else [])
             return None                       # fall through to a model turn with the failure report
