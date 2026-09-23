@@ -104,8 +104,8 @@ serve: ## Host the ARC-AGI-3 API locally on http://localhost:8001 (framework def
 exp-new: ## Scaffold a new experiment: make exp-new NAME=greedy-search [FROM=v001]
 	$(VENV_PY) scripts/new_experiment.py $(NAME) $(if $(FROM),--from $(FROM))
 
-exp-run: ## Run an experiment and record results: make exp-run NAME=v001 [GAME=ls20] [STEPS=200]
-	$(VENV_PY) scripts/run_experiment.py $(NAME) $(if $(GAME),--game $(GAME)) $(if $(STEPS),--max-steps $(STEPS))
+exp-run: ## Run an experiment and record results: make exp-run NAME=v001 [GAME=ls20] [STEPS=200] [JOBS=8] [SEED=7] [TAG=x]
+	$(VENV_PY) scripts/run_experiment.py $(NAME) $(if $(GAME),--game $(GAME)) $(if $(STEPS),--max-steps $(STEPS)) $(if $(JOBS),--jobs $(JOBS)) $(if $(SEED),--seed $(SEED)) $(if $(TAG),--tag $(TAG))
 
 exp-summary: ## Compare all experiments (table + experiments/summary.json)
 	$(VENV_PY) scripts/exp_summary.py

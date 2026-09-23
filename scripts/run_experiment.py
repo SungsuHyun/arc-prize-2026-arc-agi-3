@@ -60,6 +60,43 @@ def load_agent_class(agent_file: Path):
     return module.MyAgent
 
 
+def play_one(args: tuple) -> dict:
+    """Play a single game in a fresh process (used by --jobs). Returns the
+    flat game record plus that game's scorecard entry."""
+    agent_file, game_id, max_steps, seed, exp_name = args
+    import random
+    logging.basicConfig(level=logging.WARNING, format="%(message)s")
+    os.environ.setdefault("ARC_API_KEY", "local-dev")
+    try:
+        arc = arc_agi.Arcade(operation_mode=OperationMode.NORMAL)
+        env = arc.make(game_id)
+    except Exception:
+        arc = arc_agi.Arcade(operation_mode=OperationMode.OFFLINE)
+        env = arc.make(game_id)
+    AgentCls = load_agent_class(Path(agent_file))
+    AgentCls.MAX_ACTIONS = max_steps
+    if seed is not None:
+        random.seed(seed)
+        random.seed = lambda *a, **k: None   # type: ignore[assignment]
+    agent = AgentCls(card_id="local-exp", game_id=game_id,
+                     agent_name=f"{exp_name}.{game_id}", ROOT_URL="http://localhost",
+                     record=False, arc_env=env, tags=["experiment", exp_name])
+    agent.main()
+    final = agent.frames[-1]
+    record = {"game_id": game_id, "state": str(final.state),
+              "levels_completed": final.levels_completed, "actions": agent.action_counter}
+    extra = getattr(agent, "metrics", None)
+    if isinstance(extra, dict):
+        record.update({k: v for k, v in extra.items() if k not in record})
+    sc = arc.get_scorecard()
+    env_score = sc.find_environment(game_id) if sc is not None else None
+    if env_score is not None:
+        record["score"] = env_score.score
+        record["win_levels"] = env_score.level_count
+        record["_env_scorecard"] = env_score.model_dump(mode="json")
+    return record
+
+
 def git_info() -> dict:
     def run(*args):
         try:
@@ -81,6 +118,9 @@ def main() -> None:
     p.add_argument("--max-steps", type=int, default=None,
                    help="overrides config.json max_steps")
     p.add_argument("--tag", default=None, help="optional label stored in the result")
+    p.add_argument("--jobs", type=int, default=1,
+                   help="play this many games in parallel processes (score is the mean "
+                        "of per-game scores, identical to the scorecard formula)")
     p.add_argument("--seed", type=int, default=None,
                    help="override the agent's own random seed (variance checks); "
                         "recorded in config.seed_override")
@@ -128,6 +168,45 @@ def main() -> None:
 
     started = datetime.now(timezone.utc)
     games = []
+    if args.jobs > 1:
+        import multiprocessing as mp
+        ctx = mp.get_context("spawn")
+        work = [(str(exp_dir / "agent.py"), g, max_steps, args.seed, exp_dir.name) for g in game_ids]
+        print(f"=== {len(game_ids)} games, {args.jobs} parallel workers ===", flush=True)
+        with ctx.Pool(args.jobs) as pool:
+            for rec in pool.imap_unordered(play_one, work):
+                games.append(rec)
+                print(f"  -> {rec['game_id']:6} state={rec['state']} levels={rec['levels_completed']} "
+                      f"actions={rec['actions']} score={rec.get('score')}", flush=True)
+        games.sort(key=lambda r: game_ids.index(r["game_id"]))
+        env_cards = [g.pop("_env_scorecard", None) for g in games]
+        scores = [g.get("score", 0.0) for g in games]
+        score = sum(scores) / len(scores) if scores else None
+        scorecard = {"parallel": True, "environments": [c for c in env_cards if c]}
+        run_id = started.strftime("%Y%m%d-%H%M%S") + (f"-s{args.seed}" if args.seed is not None else "") + f"-{os.getpid() % 1000:03d}"
+        result = {
+            "schema": 1, "experiment": exp_dir.name, "run_id": run_id,
+            "started_at": started.isoformat(),
+            "finished_at": datetime.now(timezone.utc).isoformat(),
+            "git": git_info(), "tag": args.tag,
+            "config": {**config, "games": game_ids, "max_steps": max_steps,
+                       "seed_override": args.seed, "jobs": args.jobs},
+            "aggregate": {"score": score,
+                          "levels_completed": sum(g.get("levels_completed", 0) for g in games),
+                          "actions": sum(g.get("actions", 0) for g in games),
+                          "games_played": len(games)},
+            "games": games, "scorecard": scorecard,
+        }
+        results_dir = exp_dir / "results"; results_dir.mkdir(exist_ok=True)
+        out = results_dir / f"run-{run_id}.json"
+        out.write_text(json.dumps(result, indent=2, default=str))
+        print(f"\n========= {exp_dir.name} =========")
+        for g in games:
+            print(f"  {g['game_id']:8} levels={g.get('levels_completed', '?'):>3} "
+                  f"actions={g.get('actions', '?'):>5}  score={g.get('score', '?')}")
+        print(f"\nAggregate score: {score}")
+        print(f"Result saved: {out.relative_to(ROOT)}")
+        return
     for i, game_id in enumerate(game_ids, 1):
         print(f"=== [{i}/{len(game_ids)}] {game_id} ===", flush=True)
         env = arc.make(game_id)
@@ -171,7 +250,7 @@ def main() -> None:
                 g["score"] = env_score.score
                 g["win_levels"] = env_score.level_count
 
-    run_id = started.strftime("%Y%m%d-%H%M%S")
+    run_id = started.strftime("%Y%m%d-%H%M%S") + (f"-s{args.seed}" if args.seed is not None else "") + f"-{os.getpid() % 1000:03d}"
     result = {
         "schema": 1,
         "experiment": exp_dir.name,
