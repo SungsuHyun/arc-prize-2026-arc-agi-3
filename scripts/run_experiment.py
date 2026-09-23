@@ -81,6 +81,9 @@ def main() -> None:
     p.add_argument("--max-steps", type=int, default=None,
                    help="overrides config.json max_steps")
     p.add_argument("--tag", default=None, help="optional label stored in the result")
+    p.add_argument("--seed", type=int, default=None,
+                   help="override the agent's own random seed (variance checks); "
+                        "recorded in config.seed_override")
     args = p.parse_args()
 
     exp_dir = resolve_experiment(args.experiment)
@@ -116,6 +119,12 @@ def main() -> None:
     # max_steps fully overrides the agent's own MAX_ACTIONS (raise or lower);
     # the agent's is_done() can still stop earlier.
     AgentCls.MAX_ACTIONS = max_steps
+    if args.seed is not None:
+        # Agents call random.seed(<fixed>) in __init__; neutralise that so the
+        # run follows our seed instead (same code, different trajectory).
+        import random
+        random.seed(args.seed)
+        random.seed = lambda *a, **k: None   # type: ignore[assignment]
 
     started = datetime.now(timezone.utc)
     games = []
@@ -171,7 +180,8 @@ def main() -> None:
         "finished_at": datetime.now(timezone.utc).isoformat(),
         "git": git_info(),
         "tag": args.tag,
-        "config": {**config, "games": game_ids, "max_steps": max_steps},
+        "config": {**config, "games": game_ids, "max_steps": max_steps,
+                   "seed_override": args.seed},
         "aggregate": {
             "score": score,
             "levels_completed": sum(g.get("levels_completed", 0) for g in games),
