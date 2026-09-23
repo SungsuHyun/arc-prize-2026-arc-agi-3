@@ -45,9 +45,14 @@ def main() -> None:
     p.add_argument("--only", default=None, help="alias of the positional versions argument")
     p.add_argument("--all", action="store_true",
                    help="run EVERY experiment version (expensive; off by default)")
+    p.add_argument("--seeds", default="1337,7,42",
+                   help="comma-separated seeds; each version runs once per seed under the same "
+                        "bench tag so the dashboard can show mean ± sd (default 3 seeds)")
+    p.add_argument("--jobs", type=int, default=8, help="parallel games per run (run_experiment --jobs)")
     p.add_argument("--no-publish", action="store_true",
                    help="skip publishing the site to GitHub Pages")
     args = p.parse_args()
+    seeds = [int(x) for x in args.seeds.split(",") if x.strip()]
 
     only = args.versions or args.only
     if not only and not args.all:
@@ -59,25 +64,29 @@ def main() -> None:
 
     bench_id = "bench-" + datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     print(f"=== {bench_id}: {len(dirs)} experiment(s), "
-          f"games={args.game or 'ALL'}, max_steps={args.max_steps} ===\n")
+          f"games={args.game or 'ALL'}, max_steps={args.max_steps}, seeds={seeds}, jobs={args.jobs} ===\n")
 
     failed = []
-    for i, d in enumerate(dirs, 1):
-        print(f"[{i}/{len(dirs)}] {d.name} ...", flush=True)
-        cmd = [str(PY), str(ROOT / "scripts" / "run_experiment.py"), d.name,
-               "--max-steps", str(args.max_steps), "--tag", bench_id]
-        if args.game:
-            cmd += ["--game", args.game]
-        r = subprocess.run(cmd, capture_output=True, text=True)
-        tail = [l for l in r.stdout.splitlines() if l.strip()][-4:]
-        for line in tail:
-            print(f"    {line}")
-        if r.returncode != 0:
-            failed.append(d.name)
-            print(f"    FAILED (exit {r.returncode}):")
-            for line in r.stderr.splitlines()[-5:]:
+    jobs_total = len(dirs) * len(seeds)
+    k = 0
+    for d in dirs:
+        for seed in seeds:
+            k += 1
+            print(f"[{k}/{jobs_total}] {d.name} seed={seed} ...", flush=True)
+            cmd = [str(PY), str(ROOT / "scripts" / "run_experiment.py"), d.name,
+                   "--max-steps", str(args.max_steps), "--tag", bench_id,
+                   "--seed", str(seed), "--jobs", str(args.jobs)]
+            if args.game:
+                cmd += ["--game", args.game]
+            r = subprocess.run(cmd, capture_output=True, text=True)
+            tail = [l for l in r.stdout.splitlines() if l.strip()][-2:]
+            for line in tail:
                 print(f"    {line}")
-        print()
+            if r.returncode != 0:
+                failed.append(f"{d.name}@{seed}")
+                print(f"    FAILED (exit {r.returncode}):")
+                for line in r.stderr.splitlines()[-5:]:
+                    print(f"    {line}")
 
     subprocess.run([str(PY), str(ROOT / "scripts" / "exp_summary.py")], check=True)
     subprocess.run([str(PY), str(ROOT / "scripts" / "build_dashboard.py")], check=True)

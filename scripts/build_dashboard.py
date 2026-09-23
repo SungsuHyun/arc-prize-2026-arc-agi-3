@@ -157,24 +157,37 @@ function showTip(e, html) {
 }
 function hideTip() { tip.style.display = 'none'; }
 
-// benchmark tag -> {expName: run}
+// benchmark tag -> {expName: [runs over seeds]}
 function benchGroups() {
   const groups = {};
   exps.forEach(e => (e.runs || []).forEach(r => {
     if (r.tag && r.tag.startsWith('bench-')) {
-      (groups[r.tag] ??= {})[e.name] = r;
+      ((groups[r.tag] ??= {})[e.name] ??= []).push(r);
     }
   }));
   return Object.entries(groups).sort((a, b) => b[0].localeCompare(a[0]));
 }
+function meanSd(xs) {
+  const n = xs.length; if (!n) return { mean: 0, sd: 0, n: 0 };
+  const mean = xs.reduce((a, b) => a + b, 0) / n;
+  const sd = Math.sqrt(xs.reduce((a, b) => a + (b - mean) ** 2, 0) / n);
+  return { mean, sd, n };
+}
+// one row per experiment: mean ± sd over seeds; `run` = the median-score run (per-game detail)
 function benchRows(group) {
   return exps.filter(e => group[e.name]).map(e => {
-    const r = group[e.name];
-    return { name: e.name, run: r,
-      score: r.aggregate?.score ?? 0,
-      levels: r.aggregate?.levels_completed ?? 0,
+    const runs = group[e.name].slice().sort((a, b) => (a.aggregate?.score ?? 0) - (b.aggregate?.score ?? 0));
+    const st = meanSd(runs.map(r => r.aggregate?.score ?? 0));
+    const lv = meanSd(runs.map(r => r.aggregate?.levels_completed ?? 0));
+    const r = runs[Math.floor(runs.length / 2)];
+    return { name: e.name, run: r, runs,
+      score: st.mean, sd: st.sd, n: st.n,
+      levels: lv.mean,
       actions: r.aggregate?.actions ?? 0 };
   });
+}
+function fmtStat(row) {
+  return row.n > 1 ? `${fmt(row.score)} ± ${fmt(row.sd)} (n=${row.n})` : fmt(row.score);
 }
 
 const NS = 'http://www.w3.org/2000/svg';
@@ -299,12 +312,13 @@ function renderBenchInto(idPrefix, rows) {
 }
 
 function runsTableHTML(runsByExp) {
-  return '<tr><th>experiment</th><th>run</th><th>tag</th>' +
+  return '<tr><th>experiment</th><th>run</th><th>tag</th><th class="num">seed</th>' +
     '<th class="num">score</th><th class="num">levels</th><th class="num">actions</th>' +
     '<th>games</th><th>git</th></tr>' +
     runsByExp.map(([name, r]) =>
       `<tr><td>${name}</td><td>${r.run_id}</td>` +
       `<td>${r.tag ?? '<span class="muted">–</span>'}</td>` +
+      `<td class="num">${r.config?.seed_override ?? '<span class="muted">–</span>'}</td>` +
       `<td class="num">${fmt(r.aggregate?.score)}</td>` +
       `<td class="num">${r.aggregate?.levels_completed ?? '–'}</td>` +
       `<td class="num">${r.aggregate?.actions ?? '–'}</td>` +
@@ -330,7 +344,7 @@ function renderIndex() {
     return `<a class="card" href="${tag}.html">
       <div class="t">${tag}</div>
       <div class="m">${rows.length}개 버전 · 게임 ${anyRun?.games?.length ?? '–'}개 · max_steps=${anyRun?.config?.max_steps ?? '–'}</div>
-      <div class="w">1위: <b>${top ? top.name : '–'}</b> (점수 ${top ? fmt(top.score) : '–'} · 레벨 ${top ? top.levels : '–'})</div>
+      <div class="w">1위: <b>${top ? top.name : '–'}</b> (점수 ${top ? fmtStat(top) : '–'} · 레벨 ${top ? top.levels.toFixed(1) : '–'})</div>
     </a>`;
   }).join('');
 
@@ -365,7 +379,7 @@ function renderBenchPage() {
   document.getElementById('pageTitle').textContent = tag;
   const anyRun = rows[0]?.run;
   document.getElementById('pageSub').textContent = rows.length
-    ? `${rows.length}개 버전 · 게임 ${anyRun?.games?.length ?? '–'}개 · max_steps=${anyRun?.config?.max_steps ?? '–'} · ${anyRun?.started_at?.slice(0, 16).replace('T', ' ') ?? ''} UTC`
+    ? `${rows.length}개 버전 · 시드 ${rows[0]?.n ?? 1}개(평균 ± sd) · 게임 ${anyRun?.games?.length ?? '–'}개 · max_steps=${anyRun?.config?.max_steps ?? '–'} · ${anyRun?.started_at?.slice(0, 16).replace('T', ' ') ?? ''} UTC`
     : '이 벤치마크의 실행 기록이 없습니다';
   document.getElementById('backLink').innerHTML = '<a href="index.html">← 전체 벤치마크</a>';
   document.getElementById('content').innerHTML =
@@ -373,7 +387,7 @@ function renderBenchPage() {
     '<h2>이 벤치마크의 실행</h2><div class="panel tablewrap"><table id="benchRuns"></table></div>';
   renderBenchInto('b', rows);
   document.getElementById('benchRuns').innerHTML =
-    runsTableHTML(rows.map(r => [r.name, r.run]));
+    runsTableHTML(rows.flatMap(r => r.runs.map(x => [r.name, x])));
 }
 
 function render() {
