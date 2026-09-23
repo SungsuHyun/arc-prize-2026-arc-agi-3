@@ -58,6 +58,19 @@ SOLVER_ADDENDUM = (
     "- Keep solve() deterministic and short; build it on `current_frame.segmentation` and `nav` (e.g. `nav.path_to(row, col)`), and prefer a "
     "search (BFS over candidate positions/orders) over hand-written action sequences. Propose as soon as the rules are clear — usually after a few probes "
     "or right after completing level 1 — because the solver also carries over to the next levels.\n"
+    "- Minimal template (navigation game: visit the nearest unvisited target, else explore):\n"
+    "  propose_solver('''\n"
+    "  def solve():\n"
+    "      if nav is None or not nav.moves:\n"
+    "          return [a for a in ['UP','DOWN','LEFT','RIGHT'] if a in valid_actions][:1]\n"
+    "      for t in nav.targets():\n"
+    "          if not t['visited'] and t['path_len']:\n"
+    "              return nav.path_to(t['row'], t['col']) or []\n"
+    "      fr = nav.frontier()\n"
+    "      return (nav.path_to(fr[0], fr[1]) or []) if fr else []\n"
+    "  ''')\n"
+    "  Adapt the target choice to the rules you inferred (e.g. key before door, order by colour); for click games return "
+    "[{'action':'MOUSE','row':r,'col':c}] computed from `current_frame.segmentation`.\n"
 )
 
 VISUAL_GAME_ADDENDUM = (

@@ -396,9 +396,20 @@ else:
 """ % SOLVER_MAX_ACTIONS_PER_TURN
 
 
-def _solver_status_lines(solver: dict | None) -> list[str]:
+SOLVER_DEMAND_EVERY_TURNS = 6   # model turns without a stored solver before we insist
+
+
+def _solver_status_lines(solver: dict | None, *, model_turns: int = 0, level_just_completed: bool = False) -> list[str]:
     if not solver:
-        return ["Solver: none stored yet. When the rules are clear, call `propose_solver(code)` (see system prompt) so the harness can play on without you."]
+        base = "Solver: none stored yet."
+        if level_just_completed:
+            return [base + " You just completed a level, so you know the rules: in THIS turn call `propose_solver(code)` with a `solve()` "
+                    "that reproduces what worked (use the template in the system prompt), then let the harness run it on the new level."]
+        if model_turns >= SOLVER_DEMAND_EVERY_TURNS:
+            return [base + f" You have taken {model_turns} thinking turns on this game. Stop acting one step at a time: in THIS turn call "
+                    "`propose_solver(code)` with your best `solve()` (template in the system prompt) even if it only encodes the current plan; "
+                    "the harness will tell you when it fails and you can repair it."]
+        return [base + " When the rules are clear, call `propose_solver(code)` (see system prompt) so the harness can play on without you."]
     st = solver.get("status")
     if st == "failed":
         return [f"Solver: your stored solver FAILED ({solver.get('reason')}). It ran {solver.get('actions_run', 0)} actions. "
@@ -1051,6 +1062,7 @@ class ToolAgent:
             self._last_action_result = None
             self._summarized_knowledge = _empty_world_model()
             self._solver = None            # ours (v012): {code, status, report, ...}
+            self._model_turns_since_solver = 0
 
     @property
     def total_tokens(self) -> int:
@@ -1306,7 +1318,11 @@ class ToolAgent:
         lines.append("end of world model. ")
         nav_lines = _nav_summary_lines(history_entries, current_frame)
         lines.extend(nav_lines)
-        lines.extend(_solver_status_lines(getattr(self, "_solver", None)))
+        lines.extend(_solver_status_lines(
+            getattr(self, "_solver", None),
+            model_turns=int(getattr(self, "_model_turns_since_solver", 0)),
+            level_just_completed=bool(previous_step_summary and previous_step_summary.get("level_transition")),
+        ))
         if _ADVISOR_CONFIG.enabled:
             lines.extend(
                 self._advisor_lines(
@@ -1679,6 +1695,7 @@ class ToolAgent:
         def _on_solver(payload: dict[str, Any]) -> None:
             report = payload.get("report") or {}
             if report.get("ok"):
+                self._model_turns_since_solver = 0
                 self._solver = {"code": payload.get("code", ""), "status": "active", "report": report,
                                 "noop_turns": 0, "actions_run": 0, "actions_since_progress": 0,
                                 "level_at_progress": None}
@@ -1917,6 +1934,8 @@ class ToolAgent:
         auto = self._maybe_run_solver(state_path, current_frame, analyzer_log, action_num)
         if auto is not None:
             return auto
+        sol = getattr(self, "_solver", None)
+        self._model_turns_since_solver = 0 if (sol and sol.get("status") == "active") else int(getattr(self, "_model_turns_since_solver", 0)) + 1
         user_prompt = self._build_user_prompt(
             action_num,
             valid_actions=valid_actions,
