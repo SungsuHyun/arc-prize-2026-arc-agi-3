@@ -41,7 +41,7 @@ from inference.utils.segmentation import segment_layer
 
 logger = logging.getLogger(__name__)
 
-ADVISOR_LOG_FILENAME = "advisors.jsonl"
+ADVISOR_LOG_SUFFIX = "_advisors.jsonl"  # written next to the per-game tool_runtime_state.json
 
 _ROLE_BRIEFS = {
     "mechanics": (
@@ -360,10 +360,10 @@ def format_opinion_lines(opinions: list[AdvisorOpinion]) -> list[str]:
     return lines
 
 
-def log_opinions(runtime_dir: Path | None, *, action_num: int, level: int, step: int,
+def log_opinions(log_path: Path | None, *, action_num: int, level: int, step: int,
                  opinions: list[AdvisorOpinion], state_chars: int, wall_s: float,
                  executed_since_last: list[str] | None = None) -> None:
-    if runtime_dir is None:
+    if log_path is None:
         return
     try:
         record = {
@@ -383,7 +383,7 @@ def log_opinions(runtime_dir: Path | None, *, action_num: int, level: int, step:
                 for o in opinions
             ],
         }
-        with open(runtime_dir / ADVISOR_LOG_FILENAME, "a", encoding="utf-8") as f:
+        with open(log_path, "a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
     except Exception as exc:  # pragma: no cover - logging must never break a turn
         logger.warning("failed to log advisor opinions: %s", exc)

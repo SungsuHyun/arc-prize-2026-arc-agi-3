@@ -985,6 +985,7 @@ class ToolAgent:
         )
         self._history_messages: list[dict[str, Any]] = []
         self._session_runtime_dir: Path | None = None
+        self._advisor_log_path: Path | None = None
         self._session_total_tokens = 0
         self._session_generated_tokens = 0
         self._step_env_callback: Callable[[dict[str, Any]], dict[str, Any]] | None = None
@@ -1013,6 +1014,7 @@ class ToolAgent:
         runtime_dir = state_path.parent
         if self._session_runtime_dir != runtime_dir:
             self._session_runtime_dir = runtime_dir
+            self._advisor_log_path = state_path.with_name(f"{state_path.stem}{_advisors.ADVISOR_LOG_SUFFIX}")
             self._history_messages = []
             self._session_total_tokens = 0
             self._session_generated_tokens = 0
@@ -1343,7 +1345,7 @@ class ToolAgent:
             return []
         wall = time.monotonic() - started
         _advisors.log_opinions(
-            self._session_runtime_dir,
+            self._advisor_log_path,
             action_num=action_num,
             level=level,
             step=step,
