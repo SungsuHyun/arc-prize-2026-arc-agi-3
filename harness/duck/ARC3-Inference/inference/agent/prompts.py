@@ -43,6 +43,23 @@ ADVISOR_ADDENDUM = (
     "- Never copy an advisor's action list blindly; validate it against `valid_actions` and your own search or `nav.path_to`.\n"
 )
 
+SOLVER_ADDENDUM = (
+    "\n\nSolver synthesis (`propose_solver(code)`, ours):\n"
+    "- Acting one turn at a time is expensive. Once you believe you understand the rules and the goal of the current game, "
+    "write a persistent solver instead: call `propose_solver(code)` from the python tool with a string of Python code that defines "
+    "`def solve():` — it reads the same runtime variables (`current_frame`, `history`, `transitions`, `nav`, `valid_actions`) "
+    "and returns the list of actions to execute next (e.g. `['UP','UP']` or `[{'action':'MOUSE','row':4,'col':7}]`); return `[]` when it cannot decide.\n"
+    "- Optionally define `def predict(before_frame, action_name):` returning the expected after-board as an ascii string (same format as "
+    "`current_frame.ascii`) or None. It is scored against the recorded transitions; the report tells you the accuracy and mismatching rows. "
+    "A solver whose predict() is below 0.5 accuracy is rejected — fix the world model first.\n"
+    "- After a successful proposal the harness runs solve() automatically on every following turn WITHOUT calling you, until solve() returns [], "
+    "raises, keeps producing actions that do not change the board, or the level does not advance for a long time. Then you receive the failure "
+    "report and can repair the code and propose again, or act manually.\n"
+    "- Keep solve() deterministic and short; build it on `current_frame.segmentation` and `nav` (e.g. `nav.path_to(row, col)`), and prefer a "
+    "search (BFS over candidate positions/orders) over hand-written action sequences. Propose as soon as the rules are clear — usually after a few probes "
+    "or right after completing level 1 — because the solver also carries over to the next levels.\n"
+)
+
 VISUAL_GAME_ADDENDUM = (
     "\n\nVisual-game guidance:\n"
     "- Treat each board as a scene with objects, blockers, targets, adjacency, containment, motion, and symmetry.\n"

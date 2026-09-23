@@ -24,6 +24,7 @@ from inference.agent.prompts import (
     TOOL_CALL_FORMAT_GUIDANCE,
     VISUAL_GAME_ADDENDUM,
     NAV_HELPER_ADDENDUM,
+    SOLVER_ADDENDUM,
     ADVISOR_ADDENDUM,
 )
 
@@ -381,6 +382,33 @@ def _nav_summary_lines(history_entries, current_frame) -> list[str]:
             "then read `nav.summary()` and route with `nav.path_to(row, col)`."]
 
 
+SOLVER_MAX_ACTIONS_PER_TURN = 24
+SOLVER_NOOP_TURN_LIMIT = 2          # consecutive auto turns without board change
+SOLVER_NO_PROGRESS_ACTIONS = 200    # auto actions without a level advance
+SOLVER_RUN_SNIPPET = """
+__solver_actions = solve()
+__solver_actions = list(__solver_actions or [])
+if not __solver_actions:
+    print("SOLVER_EMPTY")
+else:
+    __r = action(__solver_actions[:%d])
+    print("SOLVER_RAN", len(__solver_actions), __r.get("executed_count"), __r.get("board_changed"), __r.get("level_completed"), __r.get("game_over"))
+""" % SOLVER_MAX_ACTIONS_PER_TURN
+
+
+def _solver_status_lines(solver: dict | None) -> list[str]:
+    if not solver:
+        return ["Solver: none stored yet. When the rules are clear, call `propose_solver(code)` (see system prompt) so the harness can play on without you."]
+    st = solver.get("status")
+    if st == "failed":
+        return [f"Solver: your stored solver FAILED ({solver.get('reason')}). It ran {solver.get('actions_run', 0)} actions. "
+                "Inspect the newest frames, then either repair the code and call `propose_solver(code)` again, or act manually.",
+                f"Failed solver code (for reference):\n{solver.get('code', '')[:1500]}"]
+    if st == "rejected":
+        return [f"Solver: your last proposal was rejected: {solver.get('reason')}. Report: {json.dumps(solver.get('report', {}))[:600]}"]
+    return []
+
+
 def _build_system_prompt(*, tool_output_tokens: int) -> str:
     prompt = "You are a coding agent solving a grid-based puzzle game."
     prompt += GAME_OVERVIEW_ADDENDUM
@@ -389,6 +417,7 @@ def _build_system_prompt(*, tool_output_tokens: int) -> str:
         prompt += MULTIMODAL_CONTEXT_ADDENDUM
     prompt += VISUAL_GAME_ADDENDUM
     prompt += NAV_HELPER_ADDENDUM
+    prompt += SOLVER_ADDENDUM
     if _ADVISOR_CONFIG.enabled:
         prompt += ADVISOR_ADDENDUM
     prompt += PYTHON_ADDENDUM
@@ -1021,6 +1050,7 @@ class ToolAgent:
             self._last_step_summary = None
             self._last_action_result = None
             self._summarized_knowledge = _empty_world_model()
+            self._solver = None            # ours (v012): {code, status, report, ...}
 
     @property
     def total_tokens(self) -> int:
@@ -1276,6 +1306,7 @@ class ToolAgent:
         lines.append("end of world model. ")
         nav_lines = _nav_summary_lines(history_entries, current_frame)
         lines.extend(nav_lines)
+        lines.extend(_solver_status_lines(getattr(self, "_solver", None)))
         if _ADVISOR_CONFIG.enabled:
             lines.extend(
                 self._advisor_lines(
@@ -1645,11 +1676,22 @@ class ToolAgent:
                 ),
             }
 
+        def _on_solver(payload: dict[str, Any]) -> None:
+            report = payload.get("report") or {}
+            if report.get("ok"):
+                self._solver = {"code": payload.get("code", ""), "status": "active", "report": report,
+                                "noop_turns": 0, "actions_run": 0, "actions_since_progress": 0,
+                                "level_at_progress": None}
+            else:
+                self._solver = {"code": payload.get("code", ""), "status": "rejected", "report": report,
+                                "reason": report.get("reason") or report.get("dry_run_error") or "dry run failed"}
+
         sandbox_result = run_sandboxed_python(
             code=code,
             timeout_seconds=self._python_timeout,
             initial_state=_serialized_runtime_state(),
             action_handler=_handle_action,
+            solver_handler=_on_solver,
         )
 
         action_results = [
@@ -1804,6 +1846,53 @@ class ToolAgent:
             return list(messages)
         return [system_message, *history]
 
+    def _maybe_run_solver(self, state_path: Path, current_frame, analyzer_log: Path, action_num: int):
+        """ours (v012): if a verified solver is stored, run it instead of calling the model."""
+        solver = getattr(self, "_solver", None)
+        if not solver or solver.get("status") != "active":
+            return None
+        level = getattr(current_frame, "level", None)
+        if solver.get("level_at_progress") is None:
+            solver["level_at_progress"] = level
+        elif level is not None and level != solver["level_at_progress"]:
+            solver["level_at_progress"] = level
+            solver["actions_since_progress"] = 0
+        result = self._run_python_tool(state_path, {"code": solver["code"] + "\n" + SOLVER_RUN_SNIPPET})
+        try:
+            payload = json.loads(result.content)
+        except Exception:  # noqa: BLE001
+            payload = {"raw": result.content}
+        stdout = str(payload.get("stdout", "") or "")
+        err = str(payload.get("error", "") or "")
+        last = self._last_action_result if isinstance(self._last_action_result, dict) else {}
+        executed = int(last.get("executed_count") or 0)
+        board_changed = bool(last.get("board_changed"))
+        _append_transcript_section(analyzer_log, f"SOLVER AUTO-RUN (action {action_num})",
+                                   f"stdout={stdout.strip()[:200]!r} error={err[:200]!r} executed={executed} board_changed={board_changed}")
+        failed_reason = None
+        if err:
+            failed_reason = f"solve() raised: {err[:200]}"
+        elif "SOLVER_EMPTY" in stdout or executed == 0:
+            failed_reason = "solve() returned no actions"
+        else:
+            solver["actions_run"] += executed
+            solver["actions_since_progress"] += executed
+            if last.get("level_completed"):
+                solver["actions_since_progress"] = 0
+            solver["noop_turns"] = 0 if board_changed else solver["noop_turns"] + 1
+            if solver["noop_turns"] >= SOLVER_NOOP_TURN_LIMIT:
+                failed_reason = "actions stopped changing the board"
+            if solver["actions_since_progress"] >= SOLVER_NO_PROGRESS_ACTIONS:
+                failed_reason = f"no level progress after {solver['actions_since_progress']} solver actions"
+        if failed_reason:
+            solver["status"] = "failed"
+            solver["reason"] = failed_reason
+            self._last_step_summary = self._summarize_step_sequence(
+                [self._last_action_result] if isinstance(self._last_action_result, dict) and executed else [])
+            return None                       # fall through to a model turn with the failure report
+        self._last_step_summary = self._summarize_step_sequence([self._last_action_result])
+        return AnalyzerTurnResult(step_executed=True, reasoning="solver auto-run")
+
     def analyze(
         self,
         state_path: Path,
@@ -1825,6 +1914,9 @@ class ToolAgent:
         analyzer_log = transcript_path or (state_path.parent / f"{state_path.stem}_analyzer.txt")
         prompt_log = _resolve_prompt_log_path(state_path)
         current_frame, history_entries = load_runtime_state(state_path)
+        auto = self._maybe_run_solver(state_path, current_frame, analyzer_log, action_num)
+        if auto is not None:
+            return auto
         user_prompt = self._build_user_prompt(
             action_num,
             valid_actions=valid_actions,

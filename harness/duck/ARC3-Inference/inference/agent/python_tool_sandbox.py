@@ -11,6 +11,7 @@ import sys
 import tempfile
 import threading
 import textwrap
+from pathlib import Path
 import time
 from typing import Any, Callable
 
@@ -352,12 +353,19 @@ _SANDBOX_BOOTSTRAP = textwrap.dedent(
             runtime_globals["last_action"] = last_transition.action if last_transition is not None else None
             runtime_globals["valid_actions"] = [str(item) for item in state_payload.get("valid_actions", [])]
             runtime_globals["last_action_result"] = action_result
-            # ours: navigation helper rebuilt from the transition history (see nav_helpers.py)
+            # ours: navigation helper rebuilt from the transition history (see nav_helpers.py).
+            # The sandbox runs with `python -I`, so the module source is shipped in `initial`.
+            runtime_globals["nav_error"] = None
             try:
-                from inference.agent.nav_helpers import build_nav
-                runtime_globals["nav"] = build_nav(transitions, current_frame)
-            except Exception:
+                if "_nav_module" not in runtime_globals:
+                    import types as _types
+                    _m = _types.ModuleType("nav_helpers")
+                    exec(compile(str(initial.get("nav_source", "")), "<nav_helpers>", "exec"), _m.__dict__)
+                    runtime_globals["_nav_module"] = _m
+                runtime_globals["nav"] = runtime_globals["_nav_module"].build_nav(transitions, current_frame)
+            except Exception as _nav_exc:  # noqa: BLE001
                 runtime_globals["nav"] = None
+                runtime_globals["nav_error"] = f"{type(_nav_exc).__name__}: {_nav_exc}"
 
         def action(actions):
             normalized_actions = _normalize_actions(actions)
@@ -373,6 +381,64 @@ _SANDBOX_BOOTSTRAP = textwrap.dedent(
             return action_result
 
         runtime_globals["action"] = action
+
+        def propose_solver(code, verify_last=12):
+            # ours (v012): register a persistent solver. `code` must define
+            # `solve()` (returns the next actions using the runtime variables) and
+            # may define `predict(before_frame, action_name)` returning the expected
+            # after-board ascii for verification. Dry-runs solve() now, scores
+            # predict() on recent transitions, and hands the code to the host.
+            code = str(code)
+            ns = dict(runtime_globals)
+            exec(compile(code, "<solver>", "exec"), ns, ns)
+            solve_fn = ns.get("solve")
+            if not callable(solve_fn):
+                raise ValueError("solver code must define a callable `solve()`")
+            report = {"ok": False}
+            try:
+                acts = list(solve_fn() or [])
+                norm = _normalize_actions(acts) if acts else []
+                report.update({"dry_run_ok": True, "dry_run_actions": len(norm),
+                               "dry_run_head": [a.get("action") for a in norm[:8]]})
+                if not norm:
+                    report["warning"] = "solve() returned no actions for the current state"
+            except Exception as exc:  # noqa: BLE001
+                report.update({"dry_run_ok": False, "dry_run_error": f"{type(exc).__name__}: {exc}"[:300]})
+            predict_fn = ns.get("predict")
+            if callable(predict_fn):
+                trans = list(runtime_globals.get("transitions") or [])[-int(verify_last):]
+                hits, tried, examples = 0, 0, []
+                for t in trans:
+                    try:
+                        expected = predict_fn(t.before_frame, t.action)
+                    except Exception as exc:  # noqa: BLE001
+                        examples.append(f"{t.action}: predict raised {type(exc).__name__}")
+                        tried += 1
+                        continue
+                    if expected is None:
+                        continue
+                    tried += 1
+                    actual = t.after_frame.ascii
+                    if str(expected).strip() == actual.strip():
+                        hits += 1
+                    elif len(examples) < 3:
+                        exp_rows = str(expected).strip().splitlines(); act_rows = actual.strip().splitlines()
+                        bad = [i for i, (a, b) in enumerate(zip(exp_rows, act_rows)) if a != b][:4]
+                        examples.append(f"{t.action}: rows differ at {bad}")
+                report.update({"predict_checked": tried, "predict_correct": hits,
+                               "predict_accuracy": (hits / tried) if tried else None,
+                               "predict_examples": examples})
+            report["ok"] = bool(report.get("dry_run_ok"))
+            if report["ok"] and report.get("predict_checked") and (report.get("predict_accuracy") or 0) < 0.5:
+                report["ok"] = False
+                report["reason"] = "predict() accuracy below 0.5 on recorded transitions; fix the world model first"
+            _send({"type": "solver", "code": code, "report": report})
+            reply = _recv()
+            if reply.get("type") != "solver_ack":
+                raise RuntimeError("Invalid solver response from sandbox host.")
+            return report
+
+        runtime_globals["propose_solver"] = propose_solver
         _refresh_state(initial.get("state") or {})
 
         try:
@@ -408,6 +474,16 @@ def _sanitize_host_error_text(text: str) -> str:
     if not str(text or "").strip():
         return "Sandbox process exited unexpectedly."
     return "Sandbox process exited unexpectedly."
+
+
+def _load_nav_source() -> str:
+    try:
+        return (Path(__file__).with_name("nav_helpers.py")).read_text(encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+_NAV_SOURCE = _load_nav_source()
 
 
 def _sandbox_env() -> dict[str, str]:
@@ -457,6 +533,7 @@ def run_sandboxed_python(
     timeout_seconds: int,
     initial_state: dict[str, Any],
     action_handler: Callable[[list[dict[str, Any]]], dict[str, Any]],
+    solver_handler: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     with tempfile.TemporaryDirectory(prefix="rgb_python_tool_") as sandbox_dir:
         host_action_results: list[dict[str, Any]] = []
@@ -495,6 +572,7 @@ def run_sandboxed_python(
             process.stdin,
             {
                 "code": code,
+                "nav_source": _NAV_SOURCE,
                 "timeout_seconds": timeout_seconds,
                 "sandbox_cwd": sandbox_dir,
                 "state": initial_state,
@@ -563,6 +641,15 @@ def run_sandboxed_python(
                         "state": action_result_payload.get("state") or {},
                     },
                 )
+                continue
+
+            if msg_type == "solver":
+                try:
+                    if solver_handler is not None:
+                        solver_handler({"code": str(message.get("code", "")), "report": dict(message.get("report") or {})})
+                except Exception:  # noqa: BLE001
+                    pass
+                _send_json_line(process.stdin, {"type": "solver_ack"})
                 continue
 
             if msg_type in {"final", "error"}:
