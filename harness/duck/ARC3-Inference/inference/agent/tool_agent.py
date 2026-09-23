@@ -1912,7 +1912,16 @@ class ToolAgent:
             solver["actions_since_progress"] += executed
             if last.get("level_completed"):
                 solver["actions_since_progress"] = 0
+                solver["novel_states"] = 0
             solver["noop_turns"] = 0 if board_changed else solver["noop_turns"] + 1
+            # verification gate: the solver must keep producing NEW board states; a solver that
+            # only shuffles between seen states is handed back to the model quickly
+            seen0 = solver.setdefault("seen_grids", {})
+            if grid_key is not None and grid_key not in seen0:
+                solver["novel_states"] = solver.get("novel_states", 0) + 1
+            solver["gate_actions"] = solver.get("gate_actions", 0) + executed
+            if solver["gate_actions"] >= 3 * SOLVER_MAX_ACTIONS_PER_TURN and solver.get("novel_states", 0) < 2:
+                failed_reason = "verification gate: no new board states in the first solver turns"
             if solver["noop_turns"] >= SOLVER_NOOP_TURN_LIMIT:
                 failed_reason = "actions stopped changing the board"
             if solver["actions_since_progress"] >= SOLVER_NO_PROGRESS_ACTIONS:
