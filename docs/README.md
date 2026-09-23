@@ -30,3 +30,4 @@
 | 015 | [방법론 탐구](015-methodology-survey.md) | 2026-09-23 | 월드모델/튜닝/하네스 비교, 공개 결과 정리, REPL 툴 하네스(Duck) 주력 판단 |
 | 016 | [로드맵 v2](016-roadmap-v2.md) | 2026-09-23 | finding별 방향 D1~D11, 실행 순서 v011~v014 |
 | 017 | [Duck 하네스 재현 + nav 하이브리드](017-duck-harness-nav-hybrid.md) | 2026-09-23 | 로컬 5090에서 Duck 재현, nav 헬퍼 주입, 27B vs 35B-A3B 비교 |
+| 018 | [Duck 자문 앙상블](018-duck-advisor-ensemble.md) | 2026-09-23 | 작은 Qwen 자문 ×N → 27B 결정 모델, 017 하이브리드와 같은 조건 비교 |
