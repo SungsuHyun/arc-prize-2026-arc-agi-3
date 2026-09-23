@@ -54,6 +54,18 @@
 - 대조군(원본 Duck, 동일 설정)은 다른 세션의 GPU 실험 뒤에 실행 예정. 참고치:
   우리 v011(LLM 없음) 0.37, Duck 저자 실행(게임당 100~200액션, 20패스) 1.60
 
+### 정정: 샌드박스 안의 `nav`는 None이었다 (2026-09-23 15:20 발견)
+
+Duck의 파이썬 툴 샌드박스는 `python -I`(격리)로 뜨므로 `from inference.agent.nav_helpers import
+build_nav`가 조용히 실패해 **모든 실행에서 샌드박스의 `nav`가 None**이었다. 하이브리드 25게임
+트랜스크립트 25개 중 20개에 `'NoneType' object has no attribute 'path_to'` 오류가 있고, 모델은
+`nav.path_to`를 1,700회 넘게 시도했다. 실제로 동작한 것은 호스트가 매 턴 유저 프롬프트에 넣은
+"Navigation helper summary" 텍스트뿐이다. 따라서 위 표의 "Duck + nav" 결과(단일 게임 ls20 3.57,
+m0r0 0.36, 25게임 0.52)는 **"Duck + nav 요약 텍스트"**의 결과이며 `nav.path_to`를 도구로 쓴
+결과가 아니다. 수정(nav 소스를 초기 페이로드로 전달해 샌드박스에서 exec)은 v012 브랜치에 있고,
+nav가 실제로 살아 있는 하이브리드 재측정이 필요하다. 요약 텍스트만으로도 이동 게임이 0→레벨 1이
+된 점은 유효한 관찰이다.
+
 ### Kaggle 패키징 경로 (조사, 미실행)
 
 Duck의 `make kaggle-duck`는 (1) 소스 번들 데이터셋(우리 harness/duck 스냅샷)을 올리고,
