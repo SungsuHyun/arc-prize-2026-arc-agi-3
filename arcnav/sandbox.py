@@ -63,6 +63,8 @@ def _refresh(state):
     G["transitions"] = trans
     G["history"] = trans  # alias
     G["last_action_result"] = state.get("last_action_result")
+    if "notes" not in G or not G["notes"]:
+        G["notes"] = state.get("notes") or ""
     try:
         cur = [t for t in trans if t.before_frame.level == t.after_frame.level == G["level"]]
         G["level_transitions"] = cur
@@ -191,7 +193,7 @@ while True:
     finally:
         signal.alarm(0)
     sys.stdout = sys.stderr = open(os.devnull, "w")
-    _send({"type": "done", "stdout": _cap.getvalue(), "error": err})
+    _send({"type": "done", "stdout": _cap.getvalue(), "error": err, "notes": str(G.get("notes") or "")[:3000]})
 '''
 
 
@@ -262,7 +264,7 @@ class Sandbox:
                 out = msg.get("stdout", "")
                 if len(out) > self.max_output_chars:
                     out = out[: self.max_output_chars // 2] + "\n...[truncated]...\n" + out[-self.max_output_chars // 2:]
-                return {"stdout": out, "error": msg.get("error"), "actions_executed": executed, "proposals": proposals}
+                return {"stdout": out, "error": msg.get("error"), "actions_executed": executed, "proposals": proposals, "notes": msg.get("notes", "")}
             if time.time() > deadline:
                 self.close()
                 return {"stdout": "", "error": "TimeoutError: tool exceeded its time limit", "actions_executed": executed, "proposals": proposals}

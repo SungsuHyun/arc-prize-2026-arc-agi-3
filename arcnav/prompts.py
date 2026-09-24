@@ -31,6 +31,8 @@ You act only through the `python` tool. The sandbox is a persistent Python proce
   with (row, col) and BFS path length, and the nearest unexplored block. `nav.path_to(row, col)` returns the list of moves to reach the block
   containing that pixel (pass it straight to action), `nav.frontier()` the nearest unexplored walkable block, `nav.targets()` the target list,
   `nav.map()` a coarse map (P = avatar, # = wall). It learns only from real moves, so press each movement key once or twice first.
+- `notes`: a string you own. Keep the rules learned so far in it (what each key does, objects and their roles, the goal
+  hypothesis, the next plan). It persists and is shown to you at every turn, so update it instead of re-analysing the board.
 - `propose_solver(code)`: store a persistent solver. `code` is a string defining `def solve():` that reads the variables above and returns the
   next actions (a list, or [] when undecided). Optionally define `def predict(before_frame, action_name)` returning the expected next
   board as an ascii string; it is scored against the recorded transitions and proposals with accuracy below 0.5 are rejected.
@@ -50,7 +52,9 @@ How to work:
 5. Every tool call should either gain information or make progress. Do not repeat a probe whose result you already know. If the board
    stops changing, change strategy (different key, different object, the SPACE key, a different order).
 
-Keep your written reasoning brief. Each reply must contain exactly one `python` tool call.
+Keep your written reasoning brief (a few sentences; let the code do the counting). Each reply must contain exactly one
+`python` tool call, and most calls should execute several actions (a whole route or a probe batch), not a single step.
+Do not restate the game analysis every turn: read `notes`, update it with what changed, act.
 """
 
 NAV_TEMPLATE = '''def solve():

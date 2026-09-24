@@ -44,6 +44,7 @@ class GameSession:
         self.model_turns = self.solver_turns = 0
         self.level_just_completed = False
         self.last_outcome: list[str] = []
+        self.notes = ""
         self.messages: list[dict] = []
         self.t0 = time.time()
         self.transcript = open(self.log_dir / f"{game_id}.log", "a")
@@ -102,7 +103,7 @@ class GameSession:
     # ------------------------------------------------------------ sandbox hooks
     def _state(self) -> dict:
         return {"frame": self.frame.to_payload() if self.frame else None, "valid_actions": self.valid_actions, "level": self.level,
-                "levels_total": self.levels_total, "transitions": self.transitions[-400:]}
+                "levels_total": self.levels_total, "transitions": self.transitions[-400:], "notes": self.notes}
 
     def _on_action(self, actions: list[dict]) -> tuple[dict, dict]:
         res = self.execute(actions)
@@ -157,6 +158,8 @@ class GameSession:
         if self.last_outcome:
             parts += self.last_outcome
         parts += self._nav_lines()
+        parts.append("Your notes (the sandbox variable `notes`; keep it current instead of re-deriving the rules each turn):\n" +
+                     (self.notes or "(empty — write what each key does, the goal hypothesis and the next plan)"))
         parts += solver_policy.status_lines(self.solver, model_turns=self.model_turns, level_just_completed=self.level_just_completed)
         self.level_just_completed = False
         if self.solver and self.solver.get("status") in ("failed", "rejected"):
@@ -194,6 +197,8 @@ class GameSession:
 
     def _run_tool(self, code: str, *, who: str) -> str:
         res = self.sandbox.run(code, timeout=self.tool_timeout)
+        if res.get("notes"):
+            self.notes = res["notes"]
         out = res["stdout"]
         if res["error"]:
             out += ("\n" if out else "") + "Error: " + res["error"]
@@ -227,7 +232,11 @@ class GameSession:
         self._log(f"model turn {self.model_turns} ({r.latency:.0f}s, {r.usage.get('completion_tokens', '?')} tok): {(msg.get('content') or r.reasoning)[:200]!r}")
         calls = msg.get("tool_calls") or []
         if not calls:
-            self.last_outcome = ["Your last reply contained no python tool call; nothing happened. Reply with exactly one python tool call."]
+            if r.finish_reason == "length":
+                self.last_outcome = ["Your last reply was cut off by the output limit while you were still reasoning, so nothing happened. "
+                                     "Reason briefly (a few sentences) and act with one python tool call; let the code do the arithmetic."]
+            else:
+                self.last_outcome = ["Your last reply contained no python tool call; nothing happened. Reply with exactly one python tool call."]
             return False
         before_n = len(self.host_transitions)
         for call in calls[:1]:

@@ -92,6 +92,7 @@ class NavHelper:
         self.player_votes: Counter = Counter()
         self.player_parts: set[tuple[int, int]] = set()
         self.gauge_hist: dict[int, list[int]] = {}
+        self.last_avatar_center: Optional[tuple[int, int]] = None
         self._steps: list[tuple[str, list[list[int]], list[list[int]]]] = []
         for t in (transitions or [])[-_MAX_HISTORY:]:
             b, a = _grid_of(getattr(t, "before_frame", None)), _grid_of(getattr(t, "after_frame", None))
@@ -119,6 +120,7 @@ class NavHelper:
                 self.move_log.setdefault(name, []).append((dx, dy))
                 self.player_votes[(c["color"], c["size"])] += 1
                 self.player_parts = {(m[0]["color"], m[0]["size"]) for m in moved if (m[1], m[2]) == (dx, dy)}
+                self.last_avatar_center = c["center"]   # disambiguates look-alike objects (trails, copies)
             # gauge: same-color object whose size changed a little near the same spot
             for o in co:
                 for p in po:
@@ -157,11 +159,11 @@ class NavHelper:
 
     def avatar(self) -> Optional[dict]:
         main = None
+        last = getattr(self, "last_avatar_center", None)
         for (color, size), _ in self.player_votes.most_common(3):
-            for o in self.objects:
-                if o["color"] == color and o["size"] == size:
-                    main = o; break
-            if main:
+            cands = [o for o in self.objects if o["color"] == color and o["size"] == size]
+            if cands:
+                main = min(cands, key=lambda o: abs(o["center"][0] - last[0]) + abs(o["center"][1] - last[1])) if last else cands[0]
                 break
         if main is None:
             return None

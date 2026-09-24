@@ -15,7 +15,7 @@ from typing import Optional
 
 ROOT = Path(__file__).resolve().parents[1]
 
-DEFAULT_CONFIG = {"base_url": "http://127.0.0.1:1234/v1", "model": "local-qwen", "temperature": 0.6, "top_p": 0.95, "max_tokens": 4096,
+DEFAULT_CONFIG = {"base_url": "http://127.0.0.1:1234/v1", "model": "local-qwen", "temperature": 0.6, "top_p": 0.95, "max_tokens": 8192,
                   "max_minutes": 20, "max_actions": 3000, "max_model_turns": 400, "tool_timeout": 30, "context_tokens": 32768, "jobs": 2}
 
 
