@@ -95,6 +95,8 @@ class GameSession:
         for act in actions:
             if act["action"] not in self.valid_actions and self.valid_actions:
                 stopped = f"{act['action']} is not a valid action now ({self.valid_actions})"; break
+            if act["action"] == "MOUSE" and ("row" not in act or "col" not in act):
+                stopped = "MOUSE needs row and col"; break
             if self.actions_used >= self.max_actions:
                 stopped = "action budget exhausted"; break
             before = self.frame; prev_level = self.level

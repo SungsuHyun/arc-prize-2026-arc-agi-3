@@ -82,6 +82,8 @@ def _normalize(actions):
     out = []
     for a in actions:
         if isinstance(a, str):
+            if a.strip().upper() in ("MOUSE", "CLICK", "ACTION6"):
+                raise ValueError("MOUSE needs coordinates: use {'action': 'MOUSE', 'row': r, 'col': c}")
             out.append({"action": a.strip().upper()})
         elif isinstance(a, dict):
             d = {k: v for k, v in a.items()}; d["action"] = str(d.get("action", "")).strip().upper()
