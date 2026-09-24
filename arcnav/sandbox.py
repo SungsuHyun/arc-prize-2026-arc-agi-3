@@ -92,6 +92,8 @@ def _normalize(actions):
                 if "row" not in d or "col" not in d:
                     raise ValueError("MOUSE needs row and col (0-63)")
                 d["row"], d["col"] = int(d["row"]), int(d["col"])
+                if not (0 <= d["row"] <= 63 and 0 <= d["col"] <= 63):
+                    raise ValueError(f"MOUSE coordinates must be within 0..63 (got row={d['row']}, col={d['col']})")
             out.append(d)
         else:
             raise ValueError(f"unsupported action {a!r}")

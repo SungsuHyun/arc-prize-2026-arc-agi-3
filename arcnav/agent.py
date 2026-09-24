@@ -97,6 +97,8 @@ class GameSession:
                 stopped = f"{act['action']} is not a valid action now ({self.valid_actions})"; break
             if act["action"] == "MOUSE" and ("row" not in act or "col" not in act):
                 stopped = "MOUSE needs row and col"; break
+            if act["action"] == "MOUSE" and not (0 <= int(act["row"]) <= 63 and 0 <= int(act["col"]) <= 63):
+                stopped = f"MOUSE coordinates out of range (row={act['row']}, col={act['col']}; valid 0..63)"; break
             if self.actions_used >= self.max_actions:
                 stopped = "action budget exhausted"; break
             before = self.frame; prev_level = self.level
