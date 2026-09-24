@@ -396,10 +396,10 @@ else:
 """ % SOLVER_MAX_ACTIONS_PER_TURN
 
 
-SOLVER_DEMAND_EVERY_TURNS = 6   # model turns without a stored solver before we insist
+SOLVER_DEMAND_EVERY_TURNS = None  # v012f: no periodic nagging (hypothesis: demands hurt Duck's own click play); level-completion hint only
 
 
-SOLVER_AUTO_INSTALL_AFTER_TURNS = 8    # model turns without any stored solver -> harness installs a template
+SOLVER_AUTO_INSTALL_AFTER_TURNS = None  # v012e tried 8: template solvers burned 80+ actions blind (4-game 0.50 vs v012d 1.25); disabled
 
 
 def _solver_templates() -> dict[str, str]:
@@ -417,7 +417,7 @@ def _solver_status_lines(solver: dict | None, *, model_turns: int = 0, level_jus
         if level_just_completed:
             return [base + " You just completed a level, so you know the rules: in THIS turn call `propose_solver(code)` with a `solve()` "
                     "that reproduces what worked (use the template in the system prompt), then let the harness run it on the new level."]
-        if model_turns >= SOLVER_DEMAND_EVERY_TURNS:
+        if SOLVER_DEMAND_EVERY_TURNS is not None and model_turns >= SOLVER_DEMAND_EVERY_TURNS:
             return [base + f" You have taken {model_turns} thinking turns on this game. Stop acting one step at a time: in THIS turn call "
                     "`propose_solver(code)` with your best `solve()` (template in the system prompt) even if it only encodes the current plan; "
                     "the harness will tell you when it fails and you can repair it."]
@@ -1885,7 +1885,8 @@ class ToolAgent:
     def _maybe_run_solver(self, state_path: Path, current_frame, analyzer_log: Path, action_num: int):
         """ours (v012): if a verified solver is stored, run it instead of calling the model."""
         solver = getattr(self, "_solver", None)
-        if not solver and int(getattr(self, "_model_turns_since_solver", 0)) >= SOLVER_AUTO_INSTALL_AFTER_TURNS:
+        if not solver and SOLVER_AUTO_INSTALL_AFTER_TURNS is not None \
+                and int(getattr(self, "_model_turns_since_solver", 0)) >= SOLVER_AUTO_INSTALL_AFTER_TURNS:
             # ours (v012e): programmatic-first — after N model turns with no solver, install the
             # matching template ourselves (nav if movement was learned, else the click sweep).
             try:
