@@ -31,12 +31,14 @@ class _T:  # transition view for the host-side NavHelper
 class GameSession:
     def __init__(self, env, game_id: str, client: Optional[ChatClient], *, log_dir: Path, max_minutes: float = 20.0,
                  max_actions: int = 3000, max_model_turns: int = 400, keep_full_turns: int = 3, tool_timeout: int = 30,
-                 context_tokens: int = 32768, verbose: bool = True, deadline: Optional[float] = None):
+                 context_tokens: int = 32768, verbose: bool = True, deadline: Optional[float] = None, think_first_turns: int = 0):
         self.env, self.game_id, self.client = env, game_id, client
         self.log_dir = Path(log_dir); self.log_dir.mkdir(parents=True, exist_ok=True)
         self.max_minutes, self.max_actions, self.max_model_turns = max_minutes, max_actions, max_model_turns
         self.keep_full_turns, self.tool_timeout, self.context_tokens, self.verbose = keep_full_turns, tool_timeout, context_tokens, verbose
         self.deadline = deadline   # absolute epoch seconds (global run cap), optional
+        self.think_first_turns = think_first_turns   # iter3: chain-of-thought ON for the first N model turns of every level
+        self.level_turn_start = 0
         self.transitions: list[dict] = []          # payloads for the sandbox
         self.host_transitions: list[_T] = []       # Frame views for the host NavHelper
         self.frame: Optional[Frame] = None
@@ -105,6 +107,7 @@ class GameSession:
             results.append({"action": label, "changed": ch})
             if self.level > prev_level or self.state == "WIN":
                 level_completed = True; self.level_action_log.append(self.level_actions); self.level_actions = 0; self.game_overs_this_level = 0
+                self.level_turn_start = self.model_turns
                 try:
                     self.level_recaps.append(self._level_recap(prev_level))
                 except Exception as e:  # never break play on a recap error
@@ -381,10 +384,13 @@ class GameSession:
         tools = [PYTHON_TOOL, PROPOSE_TOOL]
         # after a level completion: one free inspection turn, then the proposal call is forced via tool_choice
         choice = {"type": "function", "function": {"name": "propose_solver"}} if 0 < self.proposal_required < PROPOSAL_ATTEMPTS else "auto"
+        override = None
+        if self.think_first_turns and (self.model_turns - self.level_turn_start) < self.think_first_turns:
+            override = {"chat_template_kwargs": {"enable_thinking": True}, "max_tokens": max(self.client.max_tokens, 8192), "temperature": 0.6, "top_p": 0.95}
         r = None
         for attempt in range(6):
             try:
-                r = self.client.chat(self.messages, tools=tools, tool_choice=choice); break
+                r = self.client.chat(self.messages, tools=tools, tool_choice=choice, override=override); break
             except ContextLengthError:
                 self._tok_per_char = min(1.2, getattr(self, "_tok_per_char", 0.45) * 1.3)   # we under-estimated: be more aggressive
                 n_before = len(self.messages)

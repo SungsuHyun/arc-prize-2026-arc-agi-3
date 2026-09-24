@@ -32,9 +32,10 @@ class ChatClient:
         self.extra_body = extra_body or {}
         self.prompt_tokens = self.completion_tokens = 0
 
-    def chat(self, messages: list[dict], tools: Optional[list[dict]] = None, *, tool_choice: Any = "auto", retries: int = 3) -> ChatResult:
+    def chat(self, messages: list[dict], tools: Optional[list[dict]] = None, *, tool_choice: Any = "auto", retries: int = 3,
+             override: Optional[dict] = None) -> ChatResult:
         body: dict[str, Any] = {"model": self.model, "messages": messages, "temperature": self.temperature, "top_p": self.top_p,
-                                "max_tokens": self.max_tokens, **self.extra_body}
+                                "max_tokens": self.max_tokens, **self.extra_body, **(override or {})}
         if tools:
             body["tools"] = tools; body["tool_choice"] = tool_choice
         data = json.dumps(body).encode()
