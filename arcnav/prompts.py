@@ -6,8 +6,12 @@ PYTHON_TOOL = {
     "function": {
         "name": "python",
         "description": "Run Python code in the persistent game sandbox. Use action(...) inside it to play. Print what you need to see.",
-        "parameters": {"type": "object", "properties": {"code": {"type": "string", "description": "Python source to execute"}},
-                       "required": ["code"]},
+        "parameters": {"type": "object",
+                       "properties": {"code": {"type": "string", "description": "Python source to execute"},
+                                      "goal": {"type": "string", "description": "Your current goal hypothesis for this game (repeat or update it every call)"},
+                                      "plan": {"type": "string", "description": "The concrete next step this call performs and what comes after"},
+                                      "roles": {"type": "string", "description": "Object roles learned so far, e.g. '5=door, 8=key, 11=gauge'"}},
+                       "required": ["code", "goal", "plan"]},
     },
 }
 
@@ -48,7 +52,8 @@ You act only through the `python` tool. The sandbox is a persistent Python proce
   gauge refills). Levels of one game share the rules, so reuse the strategy on the new layout.
 - `checklist`: a dict you share with the harness: `goal` (str), `roles` (dict colour -> role), `plan` (str), `tried` (list of
   'what + outcome'). The harness fills the facts (controls, avatar, limits, object counts) and shows the whole checklist at the top
-  of every turn with the first unresolved item. Update your fields in the same python call as your actions.
+  of every turn with the first unresolved item. `goal`, `plan` and `roles` are arguments of the python tool (fill them on every
+  call); `tried` is written by the harness from what each turn did and what happened.
 - `notes`: a string you own. Keep the rules learned so far in it (what each key does, objects and their roles, the goal
   hypothesis, the next plan). It persists and is shown to you at every turn, so update it instead of re-analysing the board.
 - `propose_solver(code)`: store a persistent solver. `code` is a string defining `def solve():` that reads the variables above and returns the

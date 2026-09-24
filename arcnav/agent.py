@@ -542,7 +542,16 @@ class GameSession:
                 args = json.loads(call["function"].get("arguments") or "{}")
                 code = args.get("code") or ""
             except Exception:
-                code = ""
+                args, code = {}, ""
+            for key in ("goal", "plan"):   # checklist fields carried by the tool call itself
+                if isinstance(args.get(key), str) and args[key].strip():
+                    self.checklist[key] = args[key].strip()[:300]
+            if isinstance(args.get("roles"), str) and args["roles"].strip():
+                for part in args["roles"].replace(";", ",").split(","):
+                    if "=" in part:
+                        k, v = part.split("=", 1)
+                        if k.strip().isdigit() and v.strip():
+                            self.checklist.setdefault("roles", {})[k.strip()] = v.strip()[:40]
             if call["function"].get("name") == "propose_solver" and code:
                 code = f"print(propose_solver({json.dumps(code)}))"   # routed through the sandbox's verifier
             norm = " ".join(code.split())
@@ -574,6 +583,22 @@ class GameSession:
         for call in calls[1:]:  # extra calls are acknowledged, not executed
             self.messages.append({"role": "tool", "tool_call_id": call.get("id", "call_x"), "content": "Skipped: only one python call per reply is executed."})
         self.last_outcome = self._outcome_lines(before_n)
+        # harness-written 'tried' entry: what this turn did and what happened
+        new = self.host_transitions[before_n:]
+        acts = [t.action if isinstance(t.action, str) else "MOUSE" for t in new]
+        if acts:
+            compact = []
+            for a in acts:
+                if compact and compact[-1][0] == a:
+                    compact[-1][1] += 1
+                else:
+                    compact.append([a, 1])
+            what = " ".join(f"{a}x{n}" if n > 1 else a for a, n in compact)[:80]
+            changed = sum(1 for t in new if masked_ascii(t.before_frame) != masked_ascii(t.after_frame))
+            outcome = ("LEVEL DONE" if any(t.before_frame.level != t.after_frame.level for t in new) else
+                       f"{changed}/{len(new)} moves changed the board")
+            self.checklist.setdefault("tried", []).append(f"T{self.model_turns}: {what} -> {outcome}")
+            self.checklist["tried"] = self.checklist["tried"][-8:]
         return True
 
     def solver_turn(self) -> None:
