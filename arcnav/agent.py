@@ -9,7 +9,7 @@ from typing import Any, Optional
 from arcengine import GameAction, GameState
 
 from . import solver as solver_policy
-from .frame import Frame, summarize_diff
+from .frame import Frame, masked_ascii, summarize_diff
 from .llm import ChatClient, ContextLengthError
 from .nav import NavHelper
 from .prompts import PROPOSE_TOOL, PYTHON_TOOL, system_prompt, turn_header
@@ -339,7 +339,8 @@ class GameSession:
         out = self._run_tool(solver_policy.run_snippet(s["code"]), who="solver")
         s["turns"] += 1; self.solver_turns += 1
         n = len(self.host_transitions) - before_n; s["actions_run"] += n
-        changed = any(t.before_frame.ascii != t.after_frame.ascii for t in self.host_transitions[before_n:])
+        # progress = change outside HUD strips (a ticking gauge alone is not progress)
+        changed = any(masked_ascii(t.before_frame) != masked_ascii(t.after_frame) for t in self.host_transitions[before_n:])
         self._log(f"solver turn {s['turns']}: {n} actions, changed={changed}: {out[:160]!r}")
         if "Error:" in out:
             s["status"], s["reason"] = "failed", "solve() raised: " + out.split("Error:", 1)[1].strip()[:300]
@@ -352,7 +353,7 @@ class GameSession:
             return
         s["noop_turns"] = 0 if changed else s["noop_turns"] + 1
         s["no_progress_actions"] += n
-        key = self.frame.ascii if self.frame else ""
+        key = masked_ascii(self.frame) if self.frame else ""
         s["board_seen"][key] = s["board_seen"].get(key, 0) + 1
         if s["status"] == "active":
             if s["noop_turns"] >= solver_policy.NOOP_TURN_LIMIT:

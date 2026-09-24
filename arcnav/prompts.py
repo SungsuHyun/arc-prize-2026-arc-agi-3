@@ -40,7 +40,8 @@ You act only through the `python` tool. The sandbox is a persistent Python proce
 - `nav`: navigation helper rebuilt from `transitions` on every call (None until the first frame). `nav.summary()` gives the avatar
   (the object your movement keys move), learned move deltas, floor/wall knowledge, an action gauge if the game has one, candidate targets
   with (row, col) and BFS path length, and the nearest unexplored block. `nav.path_to(row, col)` returns the list of moves to reach the block
-  containing that pixel (pass it straight to action), `nav.frontier()` the nearest unexplored walkable block, `nav.targets()` the target list,
+  containing that pixel (pass it straight to action), `nav.frontier()` the nearest unexplored walkable block (row, col) or None, `nav.targets()` a list of dicts with keys
+  row, col, color, size, path_len (None if unreachable), visited, last_visit,
   `nav.map()` a coarse map (P = avatar, # = wall). It learns only from real moves, so press each movement key once or twice first.
 - `notes`: a string you own. Keep the rules learned so far in it (what each key does, objects and their roles, the goal
   hypothesis, the next plan). It persists and is shown to you at every turn, so update it instead of re-analysing the board.

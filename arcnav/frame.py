@@ -138,3 +138,15 @@ def summarize_diff(before: Frame, after: Frame, max_items: int = 6) -> dict:
             gone.append({"color": b["color"], "pixels": b["pixels"], "center": b["center"]})
     out["moved"] = moved[:max_items]; out["appeared"] = appeared[:max_items]; out["disappeared"] = gone[:max_items]
     return out
+
+
+def masked_ascii(frame: "Frame") -> str:
+    """Board text with HUD strips (edge counters/gauges) blanked out, for change and cycle detection."""
+    rows = [list(r) for r in frame.ascii.splitlines()]
+    for n in frame.segmentation["nodes"]:
+        if n.get("hud"):
+            r0, c0, r1, c1 = n["bbox"]
+            for r in range(r0, r1 + 1):
+                for c in range(c0, c1 + 1):
+                    rows[r][c] = "."
+    return "\n".join("".join(r) for r in rows)

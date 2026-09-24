@@ -342,7 +342,7 @@ class NavHelper:
             touched = [self.last_visit[q] for q in near if q in self.last_visit]
             if b in self.blocked:
                 touched.append(self.blocked[b])
-            out.append({"color": o["color"], "size": o["size"], "row": o["center"][1], "col": o["center"][0],
+            out.append({"color": o["color"], "colour": o["color"], "size": o["size"], "row": o["center"][1], "col": o["center"][0],
                         "path_len": None if p is None else len(p),
                         "visited": bool(touched) or b in self.walls,
                         "last_visit": max(touched) if touched else -1})
