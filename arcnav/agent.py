@@ -352,7 +352,12 @@ class GameSession:
         parts += self._nav_lines()
         if (PROBE_SWEEP_AFTER_TURNS and self.level not in self.probe_sweeps and self.model_turns - self.level_turn_start >= PROBE_SWEEP_AFTER_TURNS
                 and not (self.solver and self.solver.get("status") == "active")):
-            self.probe_sweeps[self.level] = self._probe_sweep()
+            lvl = self.level
+            text = self._probe_sweep()
+            self.probe_sweeps[lvl] = text if self.level == lvl else ""   # the sweep itself completed the level: nothing to show on the new level
+            if self.level != lvl:
+                self.probe_sweeps.setdefault(self.level, "")
+                self.level_turn_start = self.model_turns
         if self.probe_sweeps.get(self.level):
             parts.append(self.probe_sweeps[self.level])
         if self.level_recaps:
