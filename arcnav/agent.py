@@ -18,6 +18,7 @@ from .sandbox import Sandbox
 MODEL_TO_ENGINE = {"UP": "ACTION1", "DOWN": "ACTION2", "LEFT": "ACTION3", "RIGHT": "ACTION4", "SPACE": "ACTION5", "MOUSE": "ACTION6"}
 ENGINE_TO_MODEL = {v: k for k, v in MODEL_TO_ENGINE.items()}
 MAX_ACTIONS_PER_CALL = 24   # blind 50-action batches walked straight into game over on s5i5
+PROBE_SWEEP_AFTER_TURNS = 8   # iter4: after this many model turns on a level without completing it, the harness probes every untried action once
 MAX_ACTIONS_PER_TOOL_RUN = 30   # also caps loops of single-action calls inside one python tool run
 PROPOSAL_ATTEMPTS = 0   # >0: after a level completion, action() is blocked and propose_solver is forced via tool_choice for this many turns.
                         # Set E (forced, 3 turns): 0.75, level>=2 0/4 — forced solvers burned 50–80 actions per level; disabled by default.
@@ -54,6 +55,7 @@ class GameSession:
         self._run_actions = 0
         self.game_overs_this_level = 0
         self.rejections_in_row = 0
+        self.probe_sweeps: dict[int, str] = {}   # iter4: level -> transition table from the harness probe sweep
         self.level_recaps: list[str] = []   # harness-written summaries of how each completed level was won
         self.recent_codes: list[str] = []   # repetition guard: identical tool code is not executed twice in a row
         self.proposal_required = 0   # >0: action() blocked until propose_solver is called (set after a level completion)
@@ -243,6 +245,51 @@ class GameSession:
         parts.append("The next level normally keeps the same rules with a new layout: find the analogous objects and repeat the strategy with nav.path_to.")
         return " ".join(parts)
 
+    def _probe_sweep(self) -> str:
+        """Try every untried action type once (each movement key, SPACE, clicks on up to 6 untried objects) and
+        tabulate what each did. Runs at most once per level and only with enough gauge left."""
+        cur = [t for t in self.host_transitions if t.after_frame.level == self.level]
+        used = {t.action if isinstance(t.action, str) else "MOUSE" for t in cur}
+        clicked = {(t.action["row"] // 4, t.action["col"] // 4) for t in cur if isinstance(t.action, dict)}
+        plan = [{"action": a} for a in ("UP", "DOWN", "LEFT", "RIGHT", "SPACE") if a in self.valid_actions and a not in used]
+        if "MOUSE" in self.valid_actions and self.frame is not None:
+            nodes = [n for n in self.frame.segmentation["nodes"] if not n["hud"] and (n["center"][0] // 4, n["center"][1] // 4) not in clicked]
+            nodes.sort(key=lambda n: n["pixels"])
+            seen_colors = set()
+            for n in nodes:  # one click per colour, smallest objects first
+                if n["color"] in seen_colors:
+                    continue
+                seen_colors.add(n["color"]); plan.append({"action": "MOUSE", "row": n["center"][0], "col": n["center"][1], "colour": n["color"]})
+                if len(plan) >= 10:
+                    break
+        try:
+            g = NavHelper([t for t in cur if t.before_frame.level == self.level], self.frame).gauge() if self.frame else None
+            if g and g.get("actions_left") is not None:
+                plan = plan[:max(0, int(g["actions_left"]) - 4)]
+        except Exception:
+            pass
+        if not plan:
+            return ""
+        rows = []
+        for act in plan:
+            before = self.frame
+            res = self.execute([{k: v for k, v in act.items() if k != "colour"}])
+            if not res["executed_count"]:
+                break
+            after = self.frame
+            diff = summarize_diff(before, after)
+            label = act["action"] if act["action"] != "MOUSE" else f"MOUSE({act['row']},{act['col']}) on colour {act.get('colour')}"
+            what = "no change" if diff["changed_cells"] == 0 else (f"{diff['changed_cells']} cells changed" +
+                    (f"; moved: {[(m['color'], m['from'], m['to']) for m in diff.get('moved', [])][:3]}" if diff.get("moved") else "") +
+                    (f"; appeared: {[(m['color'], m['center']) for m in diff.get('appeared', [])][:3]}" if diff.get("appeared") else "") +
+                    (f"; disappeared: {[(m['color'], m['center']) for m in diff.get('disappeared', [])][:3]}" if diff.get("disappeared") else ""))
+            rows.append(f"  {label}: {what}")
+            if res["level_completed"] or res["game_over"]:
+                rows.append(f"  -> {'LEVEL COMPLETED' if res['level_completed'] else 'GAME OVER (level restarted)'}")
+                break
+        self._log(f"probe sweep on level {self.level}: {len(rows)} probes")
+        return "Harness probe sweep (each untried action once, so you can see what every action does):\n" + "\n".join(rows)
+
     def _host_probe(self) -> str:
         """After repeated identical calls: execute ONE untried action so the model gets new information."""
         cur = [t for t in self.host_transitions if t.after_frame.level == self.level]
@@ -297,6 +344,11 @@ class GameSession:
         if self.last_outcome:
             parts += self.last_outcome
         parts += self._nav_lines()
+        if (PROBE_SWEEP_AFTER_TURNS and self.level not in self.probe_sweeps and self.model_turns - self.level_turn_start >= PROBE_SWEEP_AFTER_TURNS
+                and not (self.solver and self.solver.get("status") == "active")):
+            self.probe_sweeps[self.level] = self._probe_sweep()
+        if self.probe_sweeps.get(self.level):
+            parts.append(self.probe_sweeps[self.level])
         if self.level_recaps:
             parts.append("Recap of previous levels (written by the harness):\n" + "\n".join(f"- {r}" for r in self.level_recaps[-2:]))
         parts.append("Your notes (the sandbox variable `notes`; keep it current instead of re-deriving the rules each turn):\n" +
