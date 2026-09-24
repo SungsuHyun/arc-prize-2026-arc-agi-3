@@ -197,6 +197,7 @@ class GameSession:
                 if ready:
                     lines.append("Ready-made routes (pass one straight to action(...)):\n" + "\n".join(ready))
                 lines += self._gauge_lines(nav, cur)
+                lines += self._budget_lines(nav, cur)
                 return lines
             g = nav.gauge()
             if g:
@@ -366,6 +367,71 @@ class GameSession:
         head = f"CHECKLIST (level {self.level}) — {done}/{len(items)} settled. " + (f"Resolve first: {first_gap.upper()}." if first_gap else "All settled: execute the plan.")
         return [head] + [f"[{'x' if ok else ' '}] {name}: {text}" for ok, name, text in items]
 
+    def _new_kinds_lines(self) -> list[str]:
+        """Object kinds (colour, size class) present on this level that never appeared on earlier levels: probe these first."""
+        if self.level <= 1 or self.frame is None:
+            return []
+        def kinds(frame):
+            out = set()
+            for n in frame.segmentation["nodes"]:
+                if n["hud"]:
+                    continue
+                size = "tiny" if n["pixels"] <= 4 else "small" if n["pixels"] <= 30 else "medium" if n["pixels"] <= 200 else "large"
+                out.add((n["color"], size))
+            return out
+        seen = set()
+        for t in self.host_transitions:
+            if t.before_frame.level < self.level:
+                seen |= kinds(t.before_frame)
+        now = kinds(self.frame)
+        new = sorted(now - seen)
+        if not new:
+            return []
+        ex = {}
+        for n in self.frame.segmentation["nodes"]:
+            size = "tiny" if n["pixels"] <= 4 else "small" if n["pixels"] <= 30 else "medium" if n["pixels"] <= 200 else "large"
+            if (n["color"], size) in new and (n["color"], size) not in ex:
+                ex[(n["color"], size)] = n["center"]
+        items = ", ".join(f"colour {c} ({sz}, e.g. at {ex.get((c, sz))})" for c, sz in new[:6])
+        return [f"NEW ON THIS LEVEL (not seen on earlier levels): {items}. A new kind usually carries the new rule of this level: "
+                "touch/click each one once early and record what it did."]
+
+    def _budget_lines(self, nav, cur) -> list[str]:
+        """Arithmetic the model tends to skip: moves left on the gauge vs. route lengths, and whether refills are known."""
+        g = nav.gauge() if nav else None
+        if not g or g.get("actions_left") is None:
+            return []
+        per = abs(float(g.get("per_action") or 1)) or 1
+        full = int(round(g["size"] / per)) if g.get("size") else None
+        lines = [f"BUDGET CHECK: ~{g['actions_left']} moves left on this gauge" + (f" (a full gauge is ~{full} moves at {per:g} per move)" if full else "") + "."]
+        try:
+            reach = [t for t in nav.targets() if t.get("path_len")]
+            if reach:
+                far = max(t["path_len"] for t in reach); near = min(t["path_len"] for t in reach)
+                lines.append(f"Known targets are {near}-{far} moves away. Anything beyond {g['actions_left']} moves is unreachable before the gauge runs out "
+                             "unless you pass a refill item on the way (objects that increased the gauge when touched, see gauge lines).")
+        except Exception:
+            pass
+        return lines
+
+    def _micro_diff_lines(self, before_n: int) -> list[str]:
+        """When the last actions changed only a few cells (a sprite rotated/recoloured), zoom into that region."""
+        new = self.host_transitions[before_n:]
+        if not new:
+            return []
+        b, a = new[0].before_frame, new[-1].after_frame
+        mb, ma = masked_ascii(b).splitlines(), masked_ascii(a).splitlines()
+        cells = [(r, c) for r in range(len(mb)) for c in range(len(mb[r])) if mb[r][c] != ma[r][c]]
+        if not cells or len(cells) > 40:
+            return []
+        rs = [r for r, _ in cells]; cs = [c for _, c in cells]
+        r0, r1 = max(0, min(rs) - 2), min(63, max(rs) + 2); c0, c1 = max(0, min(cs) - 2), min(63, max(cs) + 2)
+        if (r1 - r0) > 14 or (c1 - c0) > 14:
+            return []
+        crop = lambda rows: "\n".join("    " + rows[r][c0:c1 + 1] for r in range(r0, r1 + 1))
+        return [f"SMALL CHANGE ZOOM (rows {r0}-{r1}, cols {c0}-{c1}; {len(cells)} cells changed, HUD excluded) — before / after:",
+                crop(b.ascii.splitlines()), "    ->", crop(a.ascii.splitlines())]
+
     def _gauge_lines(self, nav, cur) -> list[str]:
         g = nav.gauge()
         if not g:
@@ -395,6 +461,7 @@ class GameSession:
                              valid_actions=self.valid_actions, budget_line=self._budget_line())]
         try:
             parts += self._checklist_lines()
+            parts += self._new_kinds_lines()
         except Exception as e:
             parts.append(f"(checklist unavailable: {type(e).__name__})")
         if self.last_outcome:
@@ -583,6 +650,10 @@ class GameSession:
         for call in calls[1:]:  # extra calls are acknowledged, not executed
             self.messages.append({"role": "tool", "tool_call_id": call.get("id", "call_x"), "content": "Skipped: only one python call per reply is executed."})
         self.last_outcome = self._outcome_lines(before_n)
+        try:
+            self.last_outcome += self._micro_diff_lines(before_n)
+        except Exception:
+            pass
         # harness-written 'tried' entry: what this turn did and what happened
         new = self.host_transitions[before_n:]
         acts = [t.action if isinstance(t.action, str) else "MOUSE" for t in new]
