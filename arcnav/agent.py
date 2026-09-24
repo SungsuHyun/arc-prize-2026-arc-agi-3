@@ -119,7 +119,9 @@ class GameSession:
                 self._log(f"*** level {prev_level} completed after {self.level_action_log[-1]} actions (total {self.actions_used})")
                 stopped = "level completed" if self.state != "WIN" else "game won"; break
             if self.state == "GAME_OVER":
-                game_over = True; self.game_overs_this_level += 1; self._log("*** game over -> reset"); self.reset(); stopped = "game over (reset done, level restarted)"; break
+                game_over = True; self.game_overs_this_level += 1; self._log("*** game over -> reset"); self.reset(); stopped = "game over (reset done, level restarted)"
+                self.level_turn_start = self.model_turns   # re-open the thinking window: the level restarts, re-plan with reasoning
+                break
         return {"executed_count": executed, "board_changed": changed_any, "level_completed": level_completed, "game_over": game_over,
                 "stopped_reason": stopped, "results": results[-12:]}
 
