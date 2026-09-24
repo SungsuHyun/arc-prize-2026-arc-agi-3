@@ -89,6 +89,17 @@ nav가 실제로 살아 있는 하이브리드 재측정이 필요하다. 요약
   재실행(제출)은 게이트웨이 Arcade·전체 설정(동시 28, 게임당 132분)을 그대로 사용 →
   **제출 가능한 커널 버전 확보(v2 = v012d 코드)**
 
+### 라이선스·표기 검토 (2026-09-24)
+
+- 번들 코드에 "duck"(9파일)·"Tufa"(16파일) 표기, 노트북 첫 셀은 TAAF 생성 문구, 커널 슬러그도
+  `taaf-duck-…`였다. 채점·제출에는 무관(커널 비공개)하나 표기·기여 구분이 약했다
+- 라이선스: GitHub 원본에 LICENSE 파일 없음(이슈 #6), pyproject에 MIT 분류자만. 같은 팀의
+  Kaggle 소스 번들 `jeroencottaar/taaf-kaggle-source-share`는 **MIT** 명시 + 공개 오픈소스 선언
+  → MIT 조건(고지 유지)으로 사용. ARC Prize 약관은 제3자 코드 조항 없이 "권리 침해 금지"만
+- 조치: `harness/duck/NOTICE.md`(출처·MIT 근거·우리 기여 목록) 추가, 노트북 첫 셀을 우리
+  솔루션 설명 + TAAF 출처로 교체, 커널/데이터셋 슬러그를 `arc3-nav-solver` /
+  `arc3-nav-solver-source`로 변경(새 커널 → 커밋 런 1회), 우리 파일의 "duck" 표현 정리
+
 ### Kaggle 패키징 경로 (조사)
 
 Duck의 `make kaggle-duck`는 (1) 소스 번들 데이터셋(우리 harness/duck 스냅샷)을 올리고,

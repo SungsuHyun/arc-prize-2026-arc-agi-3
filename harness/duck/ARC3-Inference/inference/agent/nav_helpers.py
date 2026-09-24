@@ -1,4 +1,4 @@
-"""Navigation helper exposed to the duck's python tool as ``nav``.
+"""Navigation helper exposed to the harness's python tool as ``nav``.
 
 Stateless: rebuilt on every refresh from ``transitions`` (action, before/after
 frames) so it survives the ephemeral sandbox. Ported from our v006–v011 agents
