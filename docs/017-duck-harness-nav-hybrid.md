@@ -98,7 +98,8 @@ nav가 실제로 살아 있는 하이브리드 재측정이 필요하다. 요약
   → MIT 조건(고지 유지)으로 사용. ARC Prize 약관은 제3자 코드 조항 없이 "권리 침해 금지"만
 - 조치: `harness/duck/NOTICE.md`(출처·MIT 근거·우리 기여 목록) 추가, 노트북 첫 셀을 우리
   솔루션 설명 + TAAF 출처로 교체, 커널/데이터셋 슬러그를 `arc3-nav-solver` /
-  `arc3-nav-solver-source`로 변경(새 커널 → 커밋 런 1회), 우리 파일의 "duck" 표현 정리
+  `arc3-nav-solver-source`로 변경, 우리 파일의 "duck" 표현 정리. **새 커널 `sungsuhyun/arc3-nav-solver`
+  v1 커밋 런 성공**(11:30–12:15, 2게임 스모크) → 다음 제출은 이 커널로
 
 ### Kaggle 패키징 경로 (조사)
 
