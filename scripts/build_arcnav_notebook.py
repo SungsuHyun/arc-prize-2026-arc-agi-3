@@ -80,14 +80,17 @@ def build() -> dict:
         WHEELHOUSE = _find('{WHEELHOUSE_REF}'); MODEL_PATH = _find('{MODEL_REF}')
         cfgs = glob.glob(MODEL_PATH + '/**/config.json', recursive=True)
         MODEL_PATH = os.path.dirname(cfgs[0]) if cfgs else MODEL_PATH
-        SITE = f'{{WORK}}/vllm-site-packages'
+        SITE = '/tmp/vllm-site-packages'   # outside /kaggle/working so the kernel output stays small
         print('wheelhouse:', WHEELHOUSE, '| model:', MODEL_PATH)
         print(subprocess.run(['nvidia-smi', '--query-gpu=name,memory.total', '--format=csv,noheader'], capture_output=True, text=True).stdout.strip())
         if not os.path.exists(SITE + '/vllm'):
             subprocess.run([sys.executable, '-m', 'pip', 'install', '--no-index', '--find-links', WHEELHOUSE, '--requirement', WHEELHOUSE + '/requirements.lock',
                             '--target', SITE, '--upgrade', '--ignore-installed', '--only-binary', ':all:', '--no-compile', '--disable-pip-version-check',
                             '--no-warn-conflicts', '-q'], check=True)
-        env = dict(os.environ, PYTHONPATH=SITE, USE_TF='0', TRANSFORMERS_NO_TF='1', TRANSFORMERS_NO_TORCHVISION='1', VLLM_NO_USAGE_STATS='1')
+        # FlashInfer JIT-compiles sm120 kernels and links -lcuda: the driver stub lives in /usr/local/nvidia/lib64 on Kaggle
+        env = dict(os.environ, PYTHONPATH=SITE, USE_TF='0', TRANSFORMERS_NO_TF='1', TRANSFORMERS_NO_TORCHVISION='1', VLLM_NO_USAGE_STATS='1',
+                   LIBRARY_PATH='/usr/local/nvidia/lib64:' + os.environ.get('LIBRARY_PATH', ''),
+                   LD_LIBRARY_PATH='/usr/local/nvidia/lib64:' + os.environ.get('LD_LIBRARY_PATH', ''))
         cmd = [sys.executable, '-m', 'vllm.entrypoints.openai.api_server', '--model', MODEL_PATH, '--served-model-name', '{SERVED_MODEL}',
                '--host', '127.0.0.1', '--port', '1234', '--max-model-len', '65536', '--gpu-memory-utilization', '0.92',
                '--enable-auto-tool-choice', '--tool-call-parser', 'qwen3_coder', '--reasoning-parser', 'qwen3', '--enable-prefix-caching',
@@ -97,7 +100,9 @@ def build() -> dict:
         t0 = time.time()
         while True:
             if VLLM.poll() is not None:
-                raise RuntimeError('vLLM exited:\\n' + open(f'{{WORK}}/vllm-server.log').read()[-4000:])
+                _log = open(f'{{WORK}}/vllm-server.log').read()
+                _err = [l for l in _log.splitlines() if any(k in l for k in ('FAILED', 'error:', 'Error', 'cannot find', 'RuntimeError', 'assert'))]
+                raise RuntimeError('vLLM exited. Error lines:\\n' + '\\n'.join(_err[:40]) + '\\n--- tail ---\\n' + _log[-3000:])
             try:
                 urllib.request.urlopen('http://127.0.0.1:1234/v1/models', timeout=5).read(); break
             except Exception:
