@@ -399,6 +399,18 @@ else:
 SOLVER_DEMAND_EVERY_TURNS = 6   # model turns without a stored solver before we insist
 
 
+SOLVER_AUTO_INSTALL_AFTER_TURNS = 8    # model turns without any stored solver -> harness installs a template
+
+
+def _solver_templates() -> dict[str, str]:
+    """Extract the nav/click solve() templates shipped in SOLVER_ADDENDUM."""
+    out = {}
+    pattern = r"propose_solver\('''\n(.*?)'''\)"
+    for name, block in zip(("nav", "click"), re.findall(pattern, SOLVER_ADDENDUM, re.S)):
+        out[name] = "\n".join(l[2:] if l.startswith("  ") else l for l in block.splitlines())
+    return out
+
+
 def _solver_status_lines(solver: dict | None, *, model_turns: int = 0, level_just_completed: bool = False) -> list[str]:
     if not solver:
         base = "Solver: none stored yet."
@@ -413,7 +425,8 @@ def _solver_status_lines(solver: dict | None, *, model_turns: int = 0, level_jus
     st = solver.get("status")
     if st == "failed":
         shown = int(solver.get("failure_shown", 0)); solver["failure_shown"] = shown + 1
-        head = (f"Solver: your stored solver FAILED ({solver.get('reason')}) after {solver.get('actions_run', 0)} actions. "
+        who = "the harness's default template solver" if solver.get("auto_installed") else "your stored solver"
+        head = (f"Solver: {who} FAILED ({solver.get('reason')}) after {solver.get('actions_run', 0)} actions. "
                 "Act manually for a few turns to learn what was wrong; when you know, repair the code and call `propose_solver(code)` again.")
         if shown == 0:
             return [head, f"Failed solver code (for reference):\n{solver.get('code', '')[:1500]}"]
@@ -1872,6 +1885,25 @@ class ToolAgent:
     def _maybe_run_solver(self, state_path: Path, current_frame, analyzer_log: Path, action_num: int):
         """ours (v012): if a verified solver is stored, run it instead of calling the model."""
         solver = getattr(self, "_solver", None)
+        if not solver and int(getattr(self, "_model_turns_since_solver", 0)) >= SOLVER_AUTO_INSTALL_AFTER_TURNS:
+            # ours (v012e): programmatic-first — after N model turns with no solver, install the
+            # matching template ourselves (nav if movement was learned, else the click sweep).
+            try:
+                _, hist = load_runtime_state(state_path)
+                from inference.agent.nav_helpers import build_nav
+                trans = [_HostTransition(str(e.action), hist[i - 1].frame, e.frame)
+                         for i, e in enumerate(hist) if i > 0 and e.frame is not None and hist[i - 1].frame is not None]
+                nav = build_nav(trans, current_frame)
+                kind = "nav" if (nav is not None and nav.moves) else "click"
+                code = _solver_templates()[kind]
+                self._solver = solver = {"code": code, "status": "active", "report": {"ok": True, "auto": kind},
+                                         "noop_turns": 0, "actions_run": 0, "actions_since_progress": 0,
+                                         "level_at_progress": None, "auto_installed": True}
+                self._model_turns_since_solver = 0
+                _append_transcript_section(analyzer_log, f"SOLVER AUTO-INSTALL (action {action_num})", f"template={kind}")
+            except Exception as exc:  # noqa: BLE001
+                _append_transcript_section(analyzer_log, "SOLVER AUTO-INSTALL FAILED", repr(exc)[:200])
+                return None
         if not solver or solver.get("status") != "active":
             return None
         level = getattr(current_frame, "level", None)
