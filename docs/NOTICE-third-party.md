@@ -36,3 +36,8 @@ Everything below is our own work on top of the harness (see git history of this 
 Third-party datasets attached at deployment (public on Kaggle, each under its own
 terms): `driessmit1/arc3-vllm-h100-wheelhouse-v3` (vLLM wheelhouse) and
 `driessmit1/vrfai-qwen3-6-27b-fp8-hf-snapshot` (Qwen3.6-27B-FP8 weights, Qwen license).
+
+---
+2026-09-24: the vendored harness copy was removed from the tracked tree (kept locally under `vendor/duck-harness-archive/`,
+gitignored) after the solver was rebuilt as our own package `arcnav/` (see docs/020). Experiments v012a–f (docs/017–019)
+and Kaggle kernels `taaf-duck-nav-solver` / `arc3-nav-solver` were built on that copy; this notice preserves the attribution.

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run the Duck harness (harness/duck/ARC3-Inference) against the local vLLM server via its Makefile,
+# Run the Duck harness (vendor/duck-harness-archive/ARC3-Inference) against the local vLLM server via its Makefile,
 # so every analyzer env var (LOCAL_ANALYZER_*, MULTIMODAL_*) comes from configs/local5090.json.
 # Usage: scripts/duck_local_run.sh RUN_NAME [GAME_ID]      (no GAME_ID = the official 25 games)
 #   MINUTES=20 CONCURRENT=1 PASSES=1 CONFIG=configs/local5090.json LOG=vendor/duck-runs/<RUN_NAME>.log
@@ -13,7 +13,7 @@ MINUTES="${MINUTES:-20}"; CONCURRENT="${CONCURRENT:-1}"; PASSES="${PASSES:-1}"
 CONFIG="${CONFIG:-configs/local5090.json}"
 LOG="${LOG:-$ROOT/vendor/duck-runs/${RUN_NAME}.log}"
 mkdir -p "$ROOT/vendor/duck-runs"
-cd "$ROOT/harness/duck/ARC3-Inference"
+cd "$ROOT/vendor/duck-harness-archive/ARC3-Inference"
 if [ -n "$GAME_ID" ]; then SEL=(GAME="$GAME_ID" GAME_TAGS=); else SEL=(GAME= GAME_TAGS=official); fi
 echo "run=$RUN_NAME games=${GAME_ID:-official25} minutes=$MINUTES concurrent=$CONCURRENT advisors=${ARC3_ADVISORS:-off} log=$LOG"
 exec make run CONFIG_PATH="$CONFIG" "${SEL[@]}" RUN_NAME="$RUN_NAME" \
