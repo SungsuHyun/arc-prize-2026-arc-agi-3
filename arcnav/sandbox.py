@@ -63,6 +63,7 @@ def _refresh(state):
     G["transitions"] = trans
     G["history"] = trans  # alias
     G["last_action_result"] = state.get("last_action_result")
+    G["level_recaps"] = list(state.get("level_recaps") or [])
     if "notes" not in G or not G["notes"]:
         G["notes"] = state.get("notes") or ""
     try:

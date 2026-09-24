@@ -43,6 +43,8 @@ You act only through the `python` tool. The sandbox is a persistent Python proce
   containing that pixel (pass it straight to action), `nav.frontier()` the nearest unexplored walkable block (row, col) or None, `nav.targets()` a list of dicts with keys
   row, col, color, size, path_len (None if unreachable), visited, last_visit,
   `nav.map()` a coarse map (P = avatar, # = wall). It learns only from real moves, so press each movement key once or twice first.
+- `level_recaps`: harness-written summaries of how each earlier level was won (winning action sequence, collected objects,
+  gauge refills). Levels of one game share the rules, so reuse the strategy on the new layout.
 - `notes`: a string you own. Keep the rules learned so far in it (what each key does, objects and their roles, the goal
   hypothesis, the next plan). It persists and is shown to you at every turn, so update it instead of re-analysing the board.
 - `propose_solver(code)`: store a persistent solver. `code` is a string defining `def solve():` that reads the variables above and returns the

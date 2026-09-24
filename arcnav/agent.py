@@ -52,6 +52,7 @@ class GameSession:
         self._run_actions = 0
         self.game_overs_this_level = 0
         self.rejections_in_row = 0
+        self.level_recaps: list[str] = []   # harness-written summaries of how each completed level was won
         self.recent_codes: list[str] = []   # repetition guard: identical tool code is not executed twice in a row
         self.proposal_required = 0   # >0: action() blocked until propose_solver is called (set after a level completion)
         self.messages: list[dict] = []
@@ -104,6 +105,10 @@ class GameSession:
             results.append({"action": label, "changed": ch})
             if self.level > prev_level or self.state == "WIN":
                 level_completed = True; self.level_action_log.append(self.level_actions); self.level_actions = 0; self.game_overs_this_level = 0
+                try:
+                    self.level_recaps.append(self._level_recap(prev_level))
+                except Exception as e:  # never break play on a recap error
+                    self._log(f"recap failed: {e!r}")
                 self._log(f"*** level {prev_level} completed after {self.level_action_log[-1]} actions (total {self.actions_used})")
                 stopped = "level completed" if self.state != "WIN" else "game won"; break
             if self.state == "GAME_OVER":
@@ -114,7 +119,7 @@ class GameSession:
     # ------------------------------------------------------------ sandbox hooks
     def _state(self) -> dict:
         return {"frame": self.frame.to_payload() if self.frame else None, "valid_actions": self.valid_actions, "level": self.level,
-                "levels_total": self.levels_total, "transitions": self.transitions[-400:], "notes": self.notes}
+                "levels_total": self.levels_total, "transitions": self.transitions[-400:], "notes": self.notes, "level_recaps": self.level_recaps}
 
     def _on_action(self, actions: list[dict]) -> tuple[dict, dict]:
         if self.proposal_required > 0:
@@ -189,6 +194,46 @@ class GameSession:
             left = min(left, self.deadline - time.time())
         return left
 
+    def _level_recap(self, level: int) -> str:
+        """What won the level: the last attempt's action sequence, objects that vanished (collected), gauge refills."""
+        cur = [t for t in self.host_transitions if t.before_frame.level == level]
+        # last attempt = transitions after the last reset on this level (a reset restores the initial board)
+        first = cur[0].before_frame.ascii if cur else None
+        start = 0
+        for i, t in enumerate(cur):
+            if i > 0 and t.before_frame.ascii == first:
+                start = i
+        att = cur[start:]
+        acts = [t.action if isinstance(t.action, str) else f"MOUSE({t.action['row']},{t.action['col']})" for t in att]
+        seq, run = [], None
+        for a in acts:  # compress runs: UP x3
+            if run and run[0] == a:
+                run[1] += 1
+            else:
+                run = [a, 1]; seq.append(run)
+        seq_txt = ", ".join(f"{a} x{n}" if n > 1 else a for a, n in seq)[:400]
+        before_objs = {n["hash"]: n for n in att[0].before_frame.segmentation["nodes"]} if att else {}
+        after_objs = {n["hash"]: n for n in att[-1].before_frame.segmentation["nodes"]} if att else {}
+        gone = [f"colour {n['color']} ({n['pixels']}px at {n['center']})" for h, n in before_objs.items()
+                if h not in after_objs and not n["hud"] and n["pixels"] <= 300][:6]
+        refills = []
+        nav = NavHelper(att, att[-1].after_frame) if att else None
+        g = nav.gauge() if nav else None
+        if g:
+            color = g["color"]
+            for t in att[:-1]:   # the last transition enters the next level (its full gauge is not a refill)
+                b = sum(v == color for row in t.before_frame.grid for v in row); a = sum(v == color for row in t.after_frame.grid for v in row)
+                if a > b:
+                    refills.append(f"after {t.action if isinstance(t.action, str) else 'MOUSE'} (+{a - b})")
+        parts = [f"Level {level} was completed in {len(att)} actions (attempt {sum(1 for i, t in enumerate(cur) if i > 0 and t.before_frame.ascii == first) + 1}).",
+                 f"Winning sequence: {seq_txt}."]
+        if gone:
+            parts.append("Objects that disappeared during the win (probably collected/used): " + "; ".join(gone) + ".")
+        if refills:
+            parts.append("Gauge refilled " + ", ".join(refills[:4]) + ".")
+        parts.append("The next level normally keeps the same rules with a new layout: find the analogous objects and repeat the strategy with nav.path_to.")
+        return " ".join(parts)
+
     def _host_probe(self) -> str:
         """After repeated identical calls: execute ONE untried action so the model gets new information."""
         cur = [t for t in self.host_transitions if t.after_frame.level == self.level]
@@ -243,6 +288,8 @@ class GameSession:
         if self.last_outcome:
             parts += self.last_outcome
         parts += self._nav_lines()
+        if self.level_recaps:
+            parts.append("Recap of previous levels (written by the harness):\n" + "\n".join(f"- {r}" for r in self.level_recaps[-2:]))
         parts.append("Your notes (the sandbox variable `notes`; keep it current instead of re-deriving the rules each turn):\n" +
                      (self.notes or "(empty — write what each key does, the goal hypothesis and the next plan)"))
         if self.proposal_required > 0:
