@@ -11,6 +11,17 @@ PYTHON_TOOL = {
     },
 }
 
+PROPOSE_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "propose_solver",
+        "description": "Store a persistent solver. `code` is Python source defining `def solve():` (and optionally `def predict(before_frame, action_name)`) "
+                       "that reads current_frame, transitions, level_transitions, nav, valid_actions and returns the next actions (a list) or [].",
+        "parameters": {"type": "object", "properties": {"code": {"type": "string", "description": "Python source defining def solve(): ..."}},
+                       "required": ["code"]},
+    },
+}
+
 SYSTEM_PROMPT = """You are an autonomous agent playing an unknown grid puzzle game (ARC-AGI-3). The board is a 64x64 grid of colour
 indices 0-15, shown as ascii rows using the hex digits 0-9a-f (one character per cell, row 0 at the top). Nobody tells you the rules:
 discover them by acting, then complete as many levels as possible using as FEW actions as possible (the score per level is
@@ -55,7 +66,7 @@ How to work:
    stops changing, change strategy (different key, different object, the SPACE key, a different order).
 
 Keep your written reasoning brief (a few sentences; let the code do the counting). Each reply must contain exactly one
-`python` tool call, and most calls should execute several actions (a whole route or a probe batch), not a single step.
+tool call (`python`, or `propose_solver` when you are ready to store a solver), and most calls should execute several actions (a whole route or a probe batch), not a single step.
 Do not restate the game analysis every turn: read `notes`, update it with what changed, act.
 """
 

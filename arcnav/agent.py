@@ -12,13 +12,14 @@ from . import solver as solver_policy
 from .frame import Frame, summarize_diff
 from .llm import ChatClient, ContextLengthError
 from .nav import NavHelper
-from .prompts import PYTHON_TOOL, system_prompt, turn_header
+from .prompts import PROPOSE_TOOL, PYTHON_TOOL, system_prompt, turn_header
 from .sandbox import Sandbox
 
 MODEL_TO_ENGINE = {"UP": "ACTION1", "DOWN": "ACTION2", "LEFT": "ACTION3", "RIGHT": "ACTION4", "SPACE": "ACTION5", "MOUSE": "ACTION6"}
 ENGINE_TO_MODEL = {v: k for k, v in MODEL_TO_ENGINE.items()}
 MAX_ACTIONS_PER_CALL = 24   # blind 50-action batches walked straight into game over on s5i5
 MAX_ACTIONS_PER_TOOL_RUN = 30   # also caps loops of single-action calls inside one python tool run
+PROPOSAL_ATTEMPTS = 3   # after a level completion, action() is blocked until propose_solver is called (or this many turns pass)
 
 
 class _T:  # transition view for the host-side NavHelper
@@ -49,6 +50,7 @@ class GameSession:
         self.notes = ""
         self._run_actions = 0
         self.game_overs_this_level = 0
+        self.proposal_required = 0   # >0: action() blocked until propose_solver is called (set after a level completion)
         self.messages: list[dict] = []
         self.t0 = time.time()
         self.transcript = open(self.log_dir / f"{game_id}.log", "a")
@@ -112,6 +114,10 @@ class GameSession:
                 "levels_total": self.levels_total, "transitions": self.transitions[-400:], "notes": self.notes}
 
     def _on_action(self, actions: list[dict]) -> tuple[dict, dict]:
+        if self.proposal_required > 0:
+            return {"executed_count": 0, "board_changed": False, "level_completed": False, "game_over": False,
+                    "stopped_reason": "blocked: a level was just completed, so call propose_solver(code) first (inspection is fine, actions are not)",
+                    "results": []}, self._state()
         left = MAX_ACTIONS_PER_TOOL_RUN - self._run_actions
         if left <= 0:
             return {"executed_count": 0, "board_changed": False, "level_completed": False, "game_over": False,
@@ -123,6 +129,8 @@ class GameSession:
             self.level_just_completed = True
             if self.solver and self.solver["status"] == "active":
                 self.solver["no_progress_actions"] = 0
+            elif self.state != "WIN":
+                self.proposal_required = PROPOSAL_ATTEMPTS
         return res, self._state()
 
     def _on_solver(self, code: str, report: dict) -> dict:
@@ -160,6 +168,7 @@ class GameSession:
                     ready.append(f"  nav.path_to({fr[0]}, {fr[1]}) -> {path}  # nearest unexplored block")
                 if ready:
                     lines.append("Ready-made routes (pass one straight to action(...)):\n" + "\n".join(ready))
+                lines += self._gauge_lines(nav, cur)
                 return lines
             g = nav.gauge()
             if g:
@@ -177,6 +186,26 @@ class GameSession:
             left = min(left, self.deadline - time.time())
         return left
 
+    def _gauge_lines(self, nav, cur) -> list[str]:
+        g = nav.gauge()
+        if not g:
+            return []
+        out = [f"Gauge budget: ~{g.get('actions_left')} actions left before the level restarts (colour {g.get('color')}, {g.get('per_action')} per action). "
+               "Any route longer than that fails: pick a target reachable within the budget or find what refills the gauge first."]
+        # refill clues: transitions of this level where the gauge object grew
+        color = g.get("color"); grew = []
+        for t in cur[-60:]:
+            try:
+                b = sum(1 for row in t.before_frame.grid for v in row if v == color)
+                a = sum(1 for row in t.after_frame.grid for v in row if v == color)
+            except Exception:
+                continue
+            if a > b:
+                grew.append(f"{t.action} (+{a - b})")
+        if grew:
+            out.append("Gauge REFILLED after: " + ", ".join(grew[-4:]) + " — whatever the avatar touched then refills it; plan to collect such objects on the way.")
+        return out
+
     def _budget_line(self) -> str:
         left = self._seconds_left()
         return f"Time left: {max(0, left) / 60:.1f} min. Action budget left: {self.max_actions - self.actions_used}."
@@ -189,6 +218,11 @@ class GameSession:
         parts += self._nav_lines()
         parts.append("Your notes (the sandbox variable `notes`; keep it current instead of re-deriving the rules each turn):\n" +
                      (self.notes or "(empty — write what each key does, the goal hypothesis and the next plan)"))
+        if self.proposal_required > 0:
+            parts.append(f"REQUIRED: you just completed a level, so you know the rules. Call propose_solver(code) with a solve() that reproduces "
+                         f"the winning strategy from `transitions` of the previous level (use nav.path_to / segmentation, not fixed coordinates). "
+                         f"action() stays blocked until you do ({self.proposal_required} turn(s) left before the requirement is waived); "
+                         "inspecting the board is allowed.")
         parts += solver_policy.status_lines(self.solver, model_turns=self.model_turns, level_just_completed=self.level_just_completed)
         self.level_just_completed = False
         if self.solver and self.solver.get("status") in ("failed", "rejected"):
@@ -252,12 +286,15 @@ class GameSession:
         """One model call + tool execution. Returns False when the model produced nothing usable."""
         self.messages.append({"role": "user", "content": self._user_message()})
         self._trim_context()
+        tools = [PYTHON_TOOL, PROPOSE_TOOL]
+        # after a level completion: one free inspection turn, then the proposal call is forced via tool_choice
+        choice = {"type": "function", "function": {"name": "propose_solver"}} if 0 < self.proposal_required < PROPOSAL_ATTEMPTS else "auto"
         try:
-            r = self.client.chat(self.messages, tools=[PYTHON_TOOL], tool_choice="auto")
+            r = self.client.chat(self.messages, tools=tools, tool_choice=choice)
         except ContextLengthError:
             for _ in range(3):
                 self._drop_oldest_turn()
-            r = self.client.chat(self.messages, tools=[PYTHON_TOOL], tool_choice="auto")
+            r = self.client.chat(self.messages, tools=tools, tool_choice=choice)
         self.model_turns += 1
         msg = r.message
         self._event(kind="model", turn=self.model_turns, content=msg.get("content", "")[:2000], reasoning=r.reasoning[:1500],
@@ -279,7 +316,16 @@ class GameSession:
                 code = args.get("code") or ""
             except Exception:
                 code = ""
+            if call["function"].get("name") == "propose_solver" and code:
+                code = f"print(propose_solver({json.dumps(code)}))"   # routed through the sandbox's verifier
             out = self._run_tool(code, who="model") if code else "Error: tool call had no `code` argument"
+            if self.proposal_required > 0:
+                if "propose_solver(" in code:
+                    self.proposal_required = 0
+                else:
+                    self.proposal_required -= 1
+                    if self.proposal_required == 0:
+                        out += "\n(The solver requirement is now waived; you may act directly.)"
             self._log(f"tool ({len(self.host_transitions) - before_n} actions): {out[:300]!r}")
             self.messages.append({"role": "tool", "tool_call_id": call.get("id", "call_0"), "content": out[:6000]})
         for call in calls[1:]:  # extra calls are acknowledged, not executed

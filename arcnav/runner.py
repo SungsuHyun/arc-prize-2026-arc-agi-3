@@ -84,6 +84,7 @@ def run(game_ids: list[str], cfg: dict, *, out_dir: Path, tag: str = "", environ
               "finished_at": dt.datetime.now(dt.timezone.utc).isoformat(), "git": _git_info(), "tag": tag,
               "config": {"description": "arcnav: tool-using LLM harness with nav helper and solver synthesis", "games": game_ids, "params": cfg},
               "aggregate": {"score": sum(scores) / max(1, len(scores)), "levels_completed": sum(g.get("levels_completed", 0) for g in games),
+                            "games_level2plus": sum(1 for g in games if g.get("levels_completed", 0) >= 2),
                             "actions": sum(g.get("actions", 0) for g in games), "games_played": len(games)},
               "games": games, "scorecard": scd}
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -93,7 +94,7 @@ def run(game_ids: list[str], cfg: dict, *, out_dir: Path, tag: str = "", environ
     for g in games:
         print(f"  {g['game_id']:8} levels={g.get('levels_completed', '?'):>3}/{g.get('levels_total', '?')} actions={g.get('actions', '?'):>5} "
               f"score={g.get('score', 0) or 0:.3f} turns={g.get('model_turns', '?')} solver={g.get('solver_stored', '?')} stop={g.get('stop_reason', g.get('error'))}")
-    print(f"Aggregate score: {result['aggregate']['score']:.4f}\nResult saved: {out}")
+    print(f"Aggregate score: {result['aggregate']['score']:.4f} | games with level>=2: {result['aggregate']['games_level2plus']}/{len(games)}\nResult saved: {out}")
     return result
 
 
