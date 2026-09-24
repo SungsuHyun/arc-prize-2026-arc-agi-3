@@ -15,7 +15,7 @@ from .nav import NavHelper
 from .prompts import PROPOSE_TOOL, PYTHON_TOOL, system_prompt, turn_header
 from .sandbox import Sandbox
 
-MODEL_TO_ENGINE = {"UP": "ACTION1", "DOWN": "ACTION2", "LEFT": "ACTION3", "RIGHT": "ACTION4", "SPACE": "ACTION5", "MOUSE": "ACTION6"}
+MODEL_TO_ENGINE = {"UP": "ACTION1", "DOWN": "ACTION2", "LEFT": "ACTION3", "RIGHT": "ACTION4", "SPACE": "ACTION5", "MOUSE": "ACTION6", "ACTION7": "ACTION7"}
 ENGINE_TO_MODEL = {v: k for k, v in MODEL_TO_ENGINE.items()}
 MAX_ACTIONS_PER_CALL = 24   # blind 50-action batches walked straight into game over on s5i5
 PROBE_SWEEP_AFTER_TURNS = 8   # iter4: after this many model turns on a level without completing it, the harness probes every untried action once
@@ -251,7 +251,7 @@ class GameSession:
         cur = [t for t in self.host_transitions if t.after_frame.level == self.level]
         used = {t.action if isinstance(t.action, str) else "MOUSE" for t in cur}
         clicked = {(t.action["row"] // 4, t.action["col"] // 4) for t in cur if isinstance(t.action, dict)}
-        plan = [{"action": a} for a in ("UP", "DOWN", "LEFT", "RIGHT", "SPACE") if a in self.valid_actions and a not in used]
+        plan = [{"action": a} for a in ("UP", "DOWN", "LEFT", "RIGHT", "SPACE", "ACTION7") if a in self.valid_actions and a not in used]
         if "MOUSE" in self.valid_actions and self.frame is not None:
             nodes = [n for n in self.frame.segmentation["nodes"] if not n["hud"] and (n["center"][0] // 4, n["center"][1] // 4) not in clicked]
             nodes.sort(key=lambda n: n["pixels"])
@@ -296,7 +296,7 @@ class GameSession:
         used = {t.action if isinstance(t.action, str) else "MOUSE" for t in cur}
         clicked = {(t.action["row"] // 4, t.action["col"] // 4) for t in cur if isinstance(t.action, dict)}
         probe = None
-        for a in ("SPACE", "UP", "DOWN", "LEFT", "RIGHT"):
+        for a in ("SPACE", "ACTION7", "UP", "DOWN", "LEFT", "RIGHT"):
             if a in self.valid_actions and a not in used:
                 probe = {"action": a}; break
         if probe is None and "MOUSE" in self.valid_actions and self.frame is not None:

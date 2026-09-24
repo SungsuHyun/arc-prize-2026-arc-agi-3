@@ -33,7 +33,8 @@ You act only through the `python` tool. The sandbox is a persistent Python proce
   `hud` marks thin strips along an edge (usually a status bar / action counter, not a clickable object).
 - `transitions`: list of Transition(action, before_frame, after_frame, changed) for every action taken so far (newest last);
   `level_transitions` is the part that belongs to the current level.
-- `valid_actions`: names allowed now, among UP, DOWN, LEFT, RIGHT, SPACE and MOUSE (a click: {'action':'MOUSE','row':r,'col':c}).
+- `valid_actions`: names allowed now, among UP, DOWN, LEFT, RIGHT, SPACE, ACTION7 (a game-specific extra key: probe it once) and
+  MOUSE (a click: {'action':'MOUSE','row':r,'col':c}).
 - `action(x)`: execute one action or a list of actions, e.g. action('UP') or action(['LEFT','LEFT']) or action({'action':'MOUSE','row':10,'col':20}).
   It returns {'executed_count','board_changed','level_completed','game_over','stopped_reason'} and refreshes every variable above.
   Execution stops early when a level completes or the game ends, and at most 24 actions run per call. After a game over the harness resets the game for you; the level restarts.
