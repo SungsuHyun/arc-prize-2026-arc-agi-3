@@ -30,6 +30,8 @@ PRESETS = {
     "gptoss120b": {"kernel": "sungsuhyun/arc3-arcnav-gptoss", "title": "arc3-arcnav-gptoss", "out": "arcnav-gptoss",
                    "dataset_model": None, "model_source": "danielhanchen/gpt-oss-120b/transformers/default/1",   # 65 GB MXFP4, Apache 2.0
                    "vllm_flags": ["--tool-call-parser", "openai", "--reasoning-parser", "openai_gptoss"],
+                   "extra_datasets": ["sungsuhyun/tiktoken-o200k-cache"],   # o200k_base vocab under its sha1 name: harmony loads it offline
+                   "env": {"TIKTOKEN_RS_CACHE_DIR": "/kaggle/input/datasets/sungsuhyun/tiktoken-o200k-cache"},
                    "extra_body": {"reasoning_effort": "low"}, "max_tokens": 6144},
 }
 PRESET = PRESETS[_ARGS.preset]
@@ -105,12 +107,16 @@ def build() -> dict:
                             '--target', SITE, '--upgrade', '--ignore-installed', '--only-binary', ':all:', '--no-compile', '--disable-pip-version-check',
                             '--no-warn-conflicts', '-q'], check=True)
         # FlashInfer JIT-compiles sm120 kernels and links -lcuda: the driver stub lives in /usr/local/nvidia/lib64 on Kaggle
-        env = dict(os.environ, PYTHONPATH=SITE, USE_TF='0', TRANSFORMERS_NO_TF='1', TRANSFORMERS_NO_TORCHVISION='1', VLLM_NO_USAGE_STATS='1',
+        env = dict(os.environ, PYTHONPATH=SITE, USE_TF='0', TRANSFORMERS_NO_TF='1', TRANSFORMERS_NO_TORCHVISION='1', VLLM_NO_USAGE_STATS='1', **{PRESET.get("env", {})!r},
                    LIBRARY_PATH='/usr/local/nvidia/lib64:' + os.environ.get('LIBRARY_PATH', ''),
                    LD_LIBRARY_PATH='/usr/local/nvidia/lib64:' + os.environ.get('LD_LIBRARY_PATH', ''))
         cmd = [sys.executable, '-m', 'vllm.entrypoints.openai.api_server', '--model', MODEL_PATH, '--served-model-name', '{SERVED_MODEL}',
                '--host', '127.0.0.1', '--port', '1234', '--max-model-len', '65536', '--gpu-memory-utilization', '0.92',
                '--enable-auto-tool-choice', '--enable-prefix-caching', '--generation-config', 'vllm'] + {PRESET["vllm_flags"]!r}
+        if env.get('TIKTOKEN_RS_CACHE_DIR') and not os.path.isdir(env['TIKTOKEN_RS_CACHE_DIR']):
+            _alt = '/kaggle/input/' + env['TIKTOKEN_RS_CACHE_DIR'].rstrip('/').split('/')[-1]
+            env['TIKTOKEN_RS_CACHE_DIR'] = _alt if os.path.isdir(_alt) else env['TIKTOKEN_RS_CACHE_DIR']
+            print('tiktoken cache dir:', env['TIKTOKEN_RS_CACHE_DIR'], os.listdir(env['TIKTOKEN_RS_CACHE_DIR']) if os.path.isdir(env['TIKTOKEN_RS_CACHE_DIR']) else 'MISSING')
         log = open(f'{{WORK}}/vllm-server.log', 'w')
         VLLM = subprocess.Popen(cmd, env=env, stdout=log, stderr=subprocess.STDOUT)
         t0 = time.time()
@@ -192,7 +198,7 @@ def main() -> None:
     METADATA_PATH.write_text(json.dumps({
         "id": KERNEL_ID, "title": KERNEL_TITLE, "code_file": NOTEBOOK_PATH.name, "language": "python", "kernel_type": "notebook",
         "is_private": True, "enable_gpu": True, "enable_tpu": False, "enable_internet": False, "keywords": [],
-        "dataset_sources": [WHEELHOUSE_REF] + ([PRESET["dataset_model"]] if PRESET["dataset_model"] else []), "kernel_sources": [],
+        "dataset_sources": [WHEELHOUSE_REF] + ([PRESET["dataset_model"]] if PRESET["dataset_model"] else []) + PRESET.get("extra_datasets", []), "kernel_sources": [],
         "competition_sources": ["arc-prize-2026-arc-agi-3"],
         "model_sources": [PRESET["model_source"]] if PRESET["model_source"] else [], "machine_shape": MACHINE_SHAPE}, indent=2) + "\n")
     print(f"wrote {NOTEBOOK_PATH.relative_to(ROOT)} ({NOTEBOOK_PATH.stat().st_size // 1024} KB) and {METADATA_PATH.relative_to(ROOT)}")
