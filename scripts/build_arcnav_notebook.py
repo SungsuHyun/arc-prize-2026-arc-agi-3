@@ -17,16 +17,31 @@ from textwrap import dedent
 
 ROOT = Path(__file__).resolve().parents[1]
 PKG = ROOT / "arcnav"
-OUT_DIR = ROOT / "notebooks" / "arcnav"
+OUT_DIR = ROOT / "notebooks" / (_ARGS.out or "arcnav")
 NOTEBOOK_PATH = OUT_DIR / "arcnav_submission.ipynb"
 METADATA_PATH = OUT_DIR / "kernel-metadata.json"
 
-KERNEL_ID = "sungsuhyun/arc3-arcnav"
-KERNEL_TITLE = "arc3-arcnav"
+import argparse, sys
+_ap = argparse.ArgumentParser(); _ap.add_argument("--preset", default="qwen27b"); _ap.add_argument("--out", default=None)
+_ARGS, _ = _ap.parse_known_args(sys.argv[1:])
+PRESETS = {
+    # model source (dataset_sources / model_sources), vLLM flags, client extra_body
+    "qwen27b": {"kernel": "sungsuhyun/arc3-arcnav", "title": "arc3-arcnav", "out": "arcnav",
+                "dataset_model": "driessmit1/vrfai-qwen3-6-27b-fp8-hf-snapshot", "model_source": None,
+                "vllm_flags": ["--tool-call-parser", "qwen3_coder", "--reasoning-parser", "qwen3", "--default-chat-template-kwargs", '{"preserve_thinking": true}'],
+                "extra_body": {"chat_template_kwargs": {"enable_thinking": False}}, "max_tokens": 4096},
+    "gptoss120b": {"kernel": "sungsuhyun/arc3-arcnav-gptoss", "title": "arc3-arcnav-gptoss", "out": "arcnav-gptoss",
+                   "dataset_model": None, "model_source": "danielhanchen/gpt-oss-120b/transformers/default/1",   # 65 GB MXFP4, Apache 2.0
+                   "vllm_flags": ["--tool-call-parser", "openai", "--reasoning-parser", "openai_gptoss"],
+                   "extra_body": {"reasoning_effort": "low"}, "max_tokens": 6144},
+}
+PRESET = PRESETS[_ARGS.preset]
+KERNEL_ID = PRESET["kernel"]
+KERNEL_TITLE = PRESET["title"]
 COMP = "/kaggle/input/competitions/arc-prize-2026-arc-agi-3"
 WHEELHOUSE_REF = "driessmit1/arc3-vllm-h100-wheelhouse-v3"       # vllm 0.19 / torch 2.10 / flashinfer 0.6.6, requirements.lock
-MODEL_REF = "driessmit1/vrfai-qwen3-6-27b-fp8-hf-snapshot"        # Qwen3.6-27B FP8 (validated on the RTX PRO 6000)
-SERVED_MODEL = "local-qwen"
+MODEL_REF = PRESET["dataset_model"] or PRESET["model_source"]
+SERVED_MODEL = "local-model"
 MACHINE_SHAPE = "NvidiaRtxPro6000"
 
 SMOKE_GAMES = ["ls20", "vc33"]
@@ -77,7 +92,9 @@ def build() -> dict:
                 if os.path.exists(p):
                     return p
             raise FileNotFoundError(ref)
-        WHEELHOUSE = _find('{WHEELHOUSE_REF}'); MODEL_PATH = _find('{MODEL_REF}')
+        WHEELHOUSE = _find('{WHEELHOUSE_REF}')
+        _mp = glob.glob('/kaggle/input/models/**/config.json', recursive=True)
+        MODEL_PATH = os.path.dirname(_mp[0]) if ({PRESET["model_source"] is not None!r} and _mp) else _find('{MODEL_REF}')
         cfgs = glob.glob(MODEL_PATH + '/**/config.json', recursive=True)
         MODEL_PATH = os.path.dirname(cfgs[0]) if cfgs else MODEL_PATH
         SITE = '/tmp/vllm-site-packages'   # outside /kaggle/working so the kernel output stays small
@@ -93,8 +110,7 @@ def build() -> dict:
                    LD_LIBRARY_PATH='/usr/local/nvidia/lib64:' + os.environ.get('LD_LIBRARY_PATH', ''))
         cmd = [sys.executable, '-m', 'vllm.entrypoints.openai.api_server', '--model', MODEL_PATH, '--served-model-name', '{SERVED_MODEL}',
                '--host', '127.0.0.1', '--port', '1234', '--max-model-len', '65536', '--gpu-memory-utilization', '0.92',
-               '--enable-auto-tool-choice', '--tool-call-parser', 'qwen3_coder', '--reasoning-parser', 'qwen3', '--enable-prefix-caching',
-               '--generation-config', 'vllm', '--default-chat-template-kwargs', '{{"preserve_thinking": true}}']
+               '--enable-auto-tool-choice', '--enable-prefix-caching', '--generation-config', 'vllm'] + {PRESET["vllm_flags"]!r}
         log = open(f'{{WORK}}/vllm-server.log', 'w')
         VLLM = subprocess.Popen(cmd, env=env, stdout=log, stderr=subprocess.STDOUT)
         t0 = time.time()
@@ -111,7 +127,7 @@ def build() -> dict:
                 time.sleep(5)
         print(f'vLLM ready after {{time.time()-t0:.0f}}s')
         req = urllib.request.Request('http://127.0.0.1:1234/v1/chat/completions', data=json.dumps({{'model': '{SERVED_MODEL}', 'max_tokens': 64,
-              'messages': [{{'role': 'user', 'content': 'Say hello in five words.'}}], 'chat_template_kwargs': {{'enable_thinking': False}}}}).encode(),
+              'messages': [{{'role': 'user', 'content': 'Say hello in five words.'}}]}}).encode(),
               headers={{'Content-Type': 'application/json'}})
         print('smoke:', json.loads(urllib.request.urlopen(req, timeout=300).read())['choices'][0]['message']['content'][:200])
         """))
@@ -122,7 +138,8 @@ def build() -> dict:
         sys.path.insert(0, '/kaggle/working')
         logging.basicConfig(level=logging.WARNING)
         from arcnav.runner import run, make_arcade, DEFAULT_CONFIG
-        cfg = dict(DEFAULT_CONFIG, model='{SERVED_MODEL}', base_url='http://127.0.0.1:1234/v1', verbose=True)
+        cfg = dict(DEFAULT_CONFIG, model='{SERVED_MODEL}', base_url='http://127.0.0.1:1234/v1', verbose=True,
+                   extra_body={PRESET["extra_body"]!r}, max_tokens={PRESET["max_tokens"]})
         out_dir = Path('/kaggle/working/arcnav-results')
         if RERUN:
             os.environ['ARC_API_KEY'] = 'test-key-123'
@@ -175,8 +192,9 @@ def main() -> None:
     METADATA_PATH.write_text(json.dumps({
         "id": KERNEL_ID, "title": KERNEL_TITLE, "code_file": NOTEBOOK_PATH.name, "language": "python", "kernel_type": "notebook",
         "is_private": True, "enable_gpu": True, "enable_tpu": False, "enable_internet": False, "keywords": [],
-        "dataset_sources": [WHEELHOUSE_REF, MODEL_REF], "kernel_sources": [], "competition_sources": ["arc-prize-2026-arc-agi-3"],
-        "model_sources": [], "machine_shape": MACHINE_SHAPE}, indent=2) + "\n")
+        "dataset_sources": [WHEELHOUSE_REF] + ([PRESET["dataset_model"]] if PRESET["dataset_model"] else []), "kernel_sources": [],
+        "competition_sources": ["arc-prize-2026-arc-agi-3"],
+        "model_sources": [PRESET["model_source"]] if PRESET["model_source"] else [], "machine_shape": MACHINE_SHAPE}, indent=2) + "\n")
     print(f"wrote {NOTEBOOK_PATH.relative_to(ROOT)} ({NOTEBOOK_PATH.stat().st_size // 1024} KB) and {METADATA_PATH.relative_to(ROOT)}")
 
 
