@@ -51,6 +51,7 @@ class GameSession:
         self.notes = ""
         self._run_actions = 0
         self.game_overs_this_level = 0
+        self.rejections_in_row = 0
         self.recent_codes: list[str] = []   # repetition guard: identical tool code is not executed twice in a row
         self.proposal_required = 0   # >0: action() blocked until propose_solver is called (set after a level completion)
         self.messages: list[dict] = []
@@ -187,6 +188,30 @@ class GameSession:
         if self.deadline is not None:
             left = min(left, self.deadline - time.time())
         return left
+
+    def _host_probe(self) -> str:
+        """After repeated identical calls: execute ONE untried action so the model gets new information."""
+        cur = [t for t in self.host_transitions if t.after_frame.level == self.level]
+        used = {t.action if isinstance(t.action, str) else "MOUSE" for t in cur}
+        clicked = {(t.action["row"] // 4, t.action["col"] // 4) for t in cur if isinstance(t.action, dict)}
+        probe = None
+        for a in ("SPACE", "UP", "DOWN", "LEFT", "RIGHT"):
+            if a in self.valid_actions and a not in used:
+                probe = {"action": a}; break
+        if probe is None and "MOUSE" in self.valid_actions and self.frame is not None:
+            nodes = [n for n in self.frame.segmentation["nodes"] if not n["hud"] and (n["center"][0] // 4, n["center"][1] // 4) not in clicked]
+            nodes.sort(key=lambda n: n["pixels"])
+            if nodes:
+                r, c = nodes[0]["center"]; probe = {"action": "MOUSE", "row": r, "col": c}
+        if probe is None:
+            return "Harness probe: nothing untried is left on this level; change the ORDER or the target of your actions."
+        before = self.frame
+        res = self.execute([probe])
+        diff = summarize_diff(before, self.frame) if self.frame else {}
+        label = probe["action"] if probe["action"] != "MOUSE" else f"MOUSE(row={probe['row']}, col={probe['col']})"
+        self._log(f"host probe: {label} -> changed={res['board_changed']}")
+        return (f"Harness probe (because you repeated yourself): executed {label} -> board_changed={res['board_changed']}, "
+                f"level_completed={res['level_completed']}, game_over={res['game_over']}; change: {json.dumps(diff, default=str)[:400]}. Build on this.")
 
     def _gauge_lines(self, nav, cur) -> list[str]:
         g = nav.gauge()
@@ -346,7 +371,12 @@ class GameSession:
                        "Do something different: " + (f"actions not yet tried on this level: {unused}. " if unused else "") +
                        "Try a different key, a different object, SPACE/MOUSE on things you have not touched, or update `notes` with a new hypothesis first.")
                 self._log("repetition guard: identical tool code rejected")
+                self.rejections_in_row += 1
+                if self.rejections_in_row >= 2:
+                    out += "\n" + self._host_probe()
+                    self.rejections_in_row = 0
             else:
+                self.rejections_in_row = 0
                 out = self._run_tool(code, who="model") if code else "Error: tool call had no `code` argument"
             if code:
                 self.recent_codes = (self.recent_codes + [norm])[-4:]
