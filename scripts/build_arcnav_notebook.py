@@ -17,9 +17,6 @@ from textwrap import dedent
 
 ROOT = Path(__file__).resolve().parents[1]
 PKG = ROOT / "arcnav"
-OUT_DIR = ROOT / "notebooks" / (_ARGS.out or "arcnav")
-NOTEBOOK_PATH = OUT_DIR / "arcnav_submission.ipynb"
-METADATA_PATH = OUT_DIR / "kernel-metadata.json"
 
 import argparse, sys
 _ap = argparse.ArgumentParser(); _ap.add_argument("--preset", default="qwen27b"); _ap.add_argument("--out", default=None)
@@ -42,6 +39,9 @@ COMP = "/kaggle/input/competitions/arc-prize-2026-arc-agi-3"
 WHEELHOUSE_REF = "driessmit1/arc3-vllm-h100-wheelhouse-v3"       # vllm 0.19 / torch 2.10 / flashinfer 0.6.6, requirements.lock
 MODEL_REF = PRESET["dataset_model"] or PRESET["model_source"]
 SERVED_MODEL = "local-model"
+OUT_DIR = ROOT / "notebooks" / (_ARGS.out or PRESET["out"])
+NOTEBOOK_PATH = OUT_DIR / "arcnav_submission.ipynb"
+METADATA_PATH = OUT_DIR / "kernel-metadata.json"
 MACHINE_SHAPE = "NvidiaRtxPro6000"
 
 SMOKE_GAMES = ["ls20", "vc33"]
