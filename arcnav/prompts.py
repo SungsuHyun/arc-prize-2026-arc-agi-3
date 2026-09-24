@@ -46,6 +46,9 @@ You act only through the `python` tool. The sandbox is a persistent Python proce
   `nav.map()` a coarse map (P = avatar, # = wall). It learns only from real moves, so press each movement key once or twice first.
 - `level_recaps`: harness-written summaries of how each earlier level was won (winning action sequence, collected objects,
   gauge refills). Levels of one game share the rules, so reuse the strategy on the new layout.
+- `checklist`: a dict you share with the harness: `goal` (str), `roles` (dict colour -> role), `plan` (str), `tried` (list of
+  'what + outcome'). The harness fills the facts (controls, avatar, limits, object counts) and shows the whole checklist at the top
+  of every turn with the first unresolved item. Update your fields in the same python call as your actions.
 - `notes`: a string you own. Keep the rules learned so far in it (what each key does, objects and their roles, the goal
   hypothesis, the next plan). It persists and is shown to you at every turn, so update it instead of re-analysing the board.
 - `propose_solver(code)`: store a persistent solver. `code` is a string defining `def solve():` that reads the variables above and returns the
@@ -56,7 +59,10 @@ You act only through the `python` tool. The sandbox is a persistent Python proce
   without predict() (or below 0.8) is kept as a DRAFT: its suggestion is shown to you each turn, but you decide what to execute. Never define your own
   `propose_solver` or `action`.
 
-How to work:
+How to work — START FROM THE CHECKLIST, NOT FROM ZERO:
+0. Every turn begins with the CHECKLIST. Do not re-derive settled items; go straight to the first unresolved one (the header names it)
+   and spend the turn resolving it: untried key -> press it; role unknown -> touch/click that object once; goal missing -> state a
+   hypothesis and test it; plan present -> execute it. Record outcomes in `checklist['tried']` so they are never repeated.
 1. Look first: print `current_frame.ascii` (or parts of it) and `current_frame.segmentation` summaries. Identify the avatar, walls,
    collectables, doors, counters, and the HUD.
 2. Probe cheaply: one action per movement key, one click per distinct object type, and compare `transitions[-1].before_frame.ascii`

@@ -52,6 +52,8 @@ class GameSession:
         self.level_just_completed = False
         self.last_outcome: list[str] = []
         self.notes = ""
+        self.checklist: dict = {"goal": "", "roles": {}, "plan": "", "tried": []}   # model-owned fields; harness adds facts
+        self.checklist_level = 1
         self._run_actions = 0
         self.game_overs_this_level = 0
         self.rejections_in_row = 0
@@ -130,7 +132,8 @@ class GameSession:
     # ------------------------------------------------------------ sandbox hooks
     def _state(self) -> dict:
         return {"frame": self.frame.to_payload() if self.frame else None, "valid_actions": self.valid_actions, "level": self.level,
-                "levels_total": self.levels_total, "transitions": self.transitions[-400:], "notes": self.notes, "level_recaps": self.level_recaps}
+                "levels_total": self.levels_total, "transitions": self.transitions[-400:], "notes": self.notes, "level_recaps": self.level_recaps,
+                "checklist": self.checklist}
 
     def _on_action(self, actions: list[dict]) -> tuple[dict, dict]:
         if self.proposal_required > 0:
@@ -320,6 +323,49 @@ class GameSession:
         return (f"Harness probe (because you repeated yourself): executed {label} -> board_changed={res['board_changed']}, "
                 f"level_completed={res['level_completed']}, game_over={res['game_over']}; change: {json.dumps(diff, default=str)[:400]}. Build on this.")
 
+    def _checklist_lines(self) -> list[str]:
+        """The turn starts from this state instead of from zero: harness facts + the model's own fields, with the next gap named."""
+        if self.checklist_level != self.level:   # new level: plan and tried restart; goal/roles carry over (same rules)
+            self.checklist["plan"] = ""; self.checklist["tried"] = []; self.checklist_level = self.level
+        cur = [t for t in self.host_transitions if t.before_frame.level == t.after_frame.level == self.level]
+        used = {t.action if isinstance(t.action, str) else "MOUSE" for t in cur}
+        nav = None
+        try:
+            nav = NavHelper(cur, self.frame) if self.frame else None
+        except Exception:
+            pass
+        items = []
+        keys = [a for a in self.valid_actions if a != "MOUSE"]
+        untried = [a for a in keys if a not in used]
+        moves = nav.moves if nav else {}
+        ctrl = ", ".join(f"{k}={moves[k]}" for k in moves) if moves else "no movement learned"
+        items.append((not untried and (moves or not keys), "controls", ctrl + (f"; untried keys: {untried}" if untried else "") +
+                      ("; MOUSE available" if "MOUSE" in self.valid_actions else "")))
+        av = nav.avatar() if nav else None
+        if keys:
+            items.append((bool(av), "avatar", f"colours {av['colors']} at ({av['row']},{av['col']})" if av else "not identified (press each movement key once)"))
+        g = nav.gauge() if nav else None
+        lim = (f"gauge colour {g['color']}, ~{g.get('actions_left')} actions left" if g else "no gauge detected yet") + f"; game overs on this level: {self.game_overs_this_level}"
+        items.append((True, "limits", lim))
+        if self.frame is not None:
+            seg = [n for n in self.frame.segmentation["nodes"] if not n["hud"]]
+            counts: dict[int, int] = {}
+            for n in seg:
+                counts[n["color"]] = counts.get(n["color"], 0) + 1
+            roles = self.checklist.get("roles") or {}
+            desc = ", ".join(f"colour {c} x{k}" + (f" = {roles.get(str(c)) or roles.get(c)}" if (roles.get(str(c)) or roles.get(c)) else " (role ?)") for c, k in sorted(counts.items(), key=lambda x: -x[1])[:8])
+            known = sum(1 for c in counts if roles.get(str(c)) or roles.get(c))
+            items.append((known >= min(2, len(counts)), "objects/roles", desc + "   <- fill checklist['roles'][colour] = 'role'"))
+        goal = self.checklist.get("goal") or ""
+        items.append((bool(goal), "goal", goal or "(none)   <- fill checklist['goal'] = 'hypothesis' after a probe"))
+        tried = self.checklist.get("tried") or []
+        items.append((True, "tried", "; ".join(tried[-5:]) if tried else "(nothing recorded)   <- checklist['tried'].append('what + outcome')"))
+        plan = self.checklist.get("plan") or ""
+        items.append((bool(plan), "plan", plan or "(none)   <- fill checklist['plan'] = 'next concrete step'"))
+        done = sum(1 for ok, _, _ in items if ok); first_gap = next((name for ok, name, _ in items if not ok), None)
+        head = f"CHECKLIST (level {self.level}) — {done}/{len(items)} settled. " + (f"Resolve first: {first_gap.upper()}." if first_gap else "All settled: execute the plan.")
+        return [head] + [f"[{'x' if ok else ' '}] {name}: {text}" for ok, name, text in items]
+
     def _gauge_lines(self, nav, cur) -> list[str]:
         g = nav.gauge()
         if not g:
@@ -347,6 +393,10 @@ class GameSession:
     def _user_message(self) -> str:
         parts = [turn_header(level=self.level, levels_total=self.levels_total, actions_used=self.actions_used, level_actions=self.level_actions,
                              valid_actions=self.valid_actions, budget_line=self._budget_line())]
+        try:
+            parts += self._checklist_lines()
+        except Exception as e:
+            parts.append(f"(checklist unavailable: {type(e).__name__})")
         if self.last_outcome:
             parts += self.last_outcome
         parts += self._nav_lines()
@@ -421,6 +471,10 @@ class GameSession:
         res = self.sandbox.run(code, timeout=self.tool_timeout)
         if res.get("notes"):
             self.notes = res["notes"]
+        if isinstance(res.get("checklist"), dict) and res["checklist"]:
+            ck = res["checklist"]
+            self.checklist = {"goal": str(ck.get("goal") or "")[:300], "roles": ck.get("roles") if isinstance(ck.get("roles"), dict) else {},
+                              "plan": str(ck.get("plan") or "")[:300], "tried": [str(t)[:120] for t in (ck.get("tried") or [])][-8:]}
         out = res["stdout"]
         if res["error"]:
             out += ("\n" if out else "") + "Error: " + res["error"]

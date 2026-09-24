@@ -66,6 +66,8 @@ def _refresh(state):
     G["level_recaps"] = list(state.get("level_recaps") or [])
     if "notes" not in G or not G["notes"]:
         G["notes"] = state.get("notes") or ""
+    if not isinstance(G.get("checklist"), dict) or not G["checklist"]:
+        G["checklist"] = dict(state.get("checklist") or {"goal": "", "roles": {}, "plan": "", "tried": []})
     try:
         cur = [t for t in trans if t.before_frame.level == t.after_frame.level == G["level"]]
         G["level_transitions"] = cur
@@ -199,7 +201,11 @@ while True:
     finally:
         signal.alarm(0)
     sys.stdout = sys.stderr = open(os.devnull, "w")
-    _send({"type": "done", "stdout": _cap.getvalue(), "error": err, "notes": str(G.get("notes") or "")[:3000]})
+    try:
+        _ck = json.loads(json.dumps(G.get("checklist"), default=str))[:1] if isinstance(G.get("checklist"), list) else json.loads(json.dumps(G.get("checklist"), default=str))
+    except Exception:
+        _ck = {}
+    _send({"type": "done", "stdout": _cap.getvalue(), "error": err, "notes": str(G.get("notes") or "")[:3000], "checklist": _ck if isinstance(_ck, dict) else {}})
 '''
 
 
@@ -270,7 +276,8 @@ class Sandbox:
                 out = msg.get("stdout", "")
                 if len(out) > self.max_output_chars:
                     out = out[: self.max_output_chars // 2] + "\n...[truncated]...\n" + out[-self.max_output_chars // 2:]
-                return {"stdout": out, "error": msg.get("error"), "actions_executed": executed, "proposals": proposals, "notes": msg.get("notes", "")}
+                return {"stdout": out, "error": msg.get("error"), "actions_executed": executed, "proposals": proposals, "notes": msg.get("notes", ""),
+                        "checklist": msg.get("checklist") or {}}
             if time.time() > deadline:
                 self.close()
                 return {"stdout": "", "error": "TimeoutError: tool exceeded its time limit", "actions_executed": executed, "proposals": proposals}
