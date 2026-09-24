@@ -22,7 +22,7 @@ SERVE_PORT      ?= 8001
 SITE_PORT       ?= 8080
 STEPS           ?= 200
 
-.PHONY: help setup play-local pull-sample notebook submit status kaggle-log wheels llm-venv smoke-local verify-local serve exp-new exp-run exp-summary bench dashboard site site-publish clean _check-kaggle
+.PHONY: help setup arcnav play-local pull-sample notebook submit status kaggle-log wheels llm-venv smoke-local verify-local serve exp-new exp-run exp-summary bench dashboard site site-publish clean _check-kaggle
 
 _check-kaggle:
 	@if [ ! -s .kaggle/access_token ]; then \
@@ -51,6 +51,9 @@ setup: ## One-time install: venv, arc-agi, kaggle CLI, clone framework
 	@$(VENV_PY) scripts/slim_framework.py
 	@echo ""
 	@echo "Setup complete. Try:  make play-local"
+
+arcnav: ## Play games with our arcnav agent against the local vLLM server: make arcnav [GAME=ls20,vc33] [MINUTES=20] [JOBS=2] [TAG=x]
+	$(VENV_PY) scripts/run_arcnav.py --games $(or $(GAME),ls20) --minutes $(or $(MINUTES),20) --jobs $(or $(JOBS),2) --tag "$(TAG)"
 
 play-local: ## Run agent/my_agent.py against ALL games (or GAME=ls20 for a single one)
 	$(VENV_PY) scripts/play_local.py $(if $(GAME),--game $(GAME)) --max-steps $(STEPS)
