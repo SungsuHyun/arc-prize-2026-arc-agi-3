@@ -51,6 +51,7 @@ class GameSession:
         self.notes = ""
         self._run_actions = 0
         self.game_overs_this_level = 0
+        self.recent_codes: list[str] = []   # repetition guard: identical tool code is not executed twice in a row
         self.proposal_required = 0   # >0: action() blocked until propose_solver is called (set after a level completion)
         self.messages: list[dict] = []
         self.t0 = time.time()
@@ -337,7 +338,18 @@ class GameSession:
                 code = ""
             if call["function"].get("name") == "propose_solver" and code:
                 code = f"print(propose_solver({json.dumps(code)}))"   # routed through the sandbox's verifier
-            out = self._run_tool(code, who="model") if code else "Error: tool call had no `code` argument"
+            norm = " ".join(code.split())
+            if code and norm in self.recent_codes[-2:]:
+                used = {t.action if isinstance(t.action, str) else "MOUSE" for t in self.host_transitions if t.after_frame.level == self.level}
+                unused = [a for a in self.valid_actions if a not in used]
+                out = ("Rejected: this code is identical to one of your last two calls, so it was NOT executed (repeating it cannot give new information). "
+                       "Do something different: " + (f"actions not yet tried on this level: {unused}. " if unused else "") +
+                       "Try a different key, a different object, SPACE/MOUSE on things you have not touched, or update `notes` with a new hypothesis first.")
+                self._log("repetition guard: identical tool code rejected")
+            else:
+                out = self._run_tool(code, who="model") if code else "Error: tool call had no `code` argument"
+            if code:
+                self.recent_codes = (self.recent_codes + [norm])[-4:]
             if self.proposal_required > 0:
                 if "propose_solver(" in code:
                     self.proposal_required = 0
