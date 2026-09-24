@@ -17,6 +17,8 @@ from .sandbox import Sandbox
 
 MODEL_TO_ENGINE = {"UP": "ACTION1", "DOWN": "ACTION2", "LEFT": "ACTION3", "RIGHT": "ACTION4", "SPACE": "ACTION5", "MOUSE": "ACTION6"}
 ENGINE_TO_MODEL = {v: k for k, v in MODEL_TO_ENGINE.items()}
+MAX_ACTIONS_PER_CALL = 24   # blind 50-action batches walked straight into game over on s5i5
+MAX_ACTIONS_PER_TOOL_RUN = 30   # also caps loops of single-action calls inside one python tool run
 
 
 class _T:  # transition view for the host-side NavHelper
@@ -45,6 +47,8 @@ class GameSession:
         self.level_just_completed = False
         self.last_outcome: list[str] = []
         self.notes = ""
+        self._run_actions = 0
+        self.game_overs_this_level = 0
         self.messages: list[dict] = []
         self.t0 = time.time()
         self.transcript = open(self.log_dir / f"{game_id}.log", "a")
@@ -76,6 +80,8 @@ class GameSession:
     def execute(self, actions: list[dict]) -> dict:
         """Run actions until one completes a level or ends the game. Records transitions."""
         results, executed, changed_any, level_completed, game_over, stopped = [], 0, False, False, False, None
+        if len(actions) > MAX_ACTIONS_PER_CALL:
+            actions = actions[:MAX_ACTIONS_PER_CALL]; stopped = f"only the first {MAX_ACTIONS_PER_CALL} actions of a call are executed; look at the board, then continue"
         for act in actions:
             if act["action"] not in self.valid_actions and self.valid_actions:
                 stopped = f"{act['action']} is not a valid action now ({self.valid_actions})"; break
@@ -92,11 +98,11 @@ class GameSession:
             ch = before.ascii != after.ascii; changed_any |= ch
             results.append({"action": label, "changed": ch})
             if self.level > prev_level or self.state == "WIN":
-                level_completed = True; self.level_action_log.append(self.level_actions); self.level_actions = 0
+                level_completed = True; self.level_action_log.append(self.level_actions); self.level_actions = 0; self.game_overs_this_level = 0
                 self._log(f"*** level {prev_level} completed after {self.level_action_log[-1]} actions (total {self.actions_used})")
                 stopped = "level completed" if self.state != "WIN" else "game won"; break
             if self.state == "GAME_OVER":
-                game_over = True; self._log("*** game over -> reset"); self.reset(); stopped = "game over (reset done, level restarted)"; break
+                game_over = True; self.game_overs_this_level += 1; self._log("*** game over -> reset"); self.reset(); stopped = "game over (reset done, level restarted)"; break
         return {"executed_count": executed, "board_changed": changed_any, "level_completed": level_completed, "game_over": game_over,
                 "stopped_reason": stopped, "results": results[-12:]}
 
@@ -106,7 +112,13 @@ class GameSession:
                 "levels_total": self.levels_total, "transitions": self.transitions[-400:], "notes": self.notes}
 
     def _on_action(self, actions: list[dict]) -> tuple[dict, dict]:
-        res = self.execute(actions)
+        left = MAX_ACTIONS_PER_TOOL_RUN - self._run_actions
+        if left <= 0:
+            return {"executed_count": 0, "board_changed": False, "level_completed": False, "game_over": False,
+                    "stopped_reason": f"this tool run already executed {MAX_ACTIONS_PER_TOOL_RUN} actions: finish the call, read the board and the outcome, then continue in the next turn",
+                    "results": []}, self._state()
+        res = self.execute(actions[:left])
+        self._run_actions += res["executed_count"]
         if res["level_completed"]:
             self.level_just_completed = True
             if self.solver and self.solver["status"] == "active":
@@ -137,10 +149,27 @@ class GameSession:
             cur = [t for t in self.host_transitions if t.before_frame.level == t.after_frame.level == self.level]
             nav = NavHelper(cur, self.frame)
             if nav.moves:
-                return ["Navigation helper summary:", nav.summary()]
+                lines = ["Navigation helper summary:", nav.summary()]
+                ready = []
+                for t in [t for t in nav.targets() if t.get("path_len")][:3]:
+                    path = nav.path_to(t["row"], t["col"])
+                    if path:
+                        ready.append(f"  nav.path_to({t['row']}, {t['col']}) -> {path}  # colour {t.get('color')}, {'visited' if t.get('visited') else 'unvisited'}")
+                fr = nav.frontier()
+                if fr and (path := nav.path_to(fr[0], fr[1])):
+                    ready.append(f"  nav.path_to({fr[0]}, {fr[1]}) -> {path}  # nearest unexplored block")
+                if ready:
+                    lines.append("Ready-made routes (pass one straight to action(...)):\n" + "\n".join(ready))
+                return lines
+            g = nav.gauge()
+            if g:
+                return [f"Action gauge detected: colour {g.get('color')}, {g.get('size')} cells, {g.get('per_action')} per action, ~{g.get('actions_left')} actions left. "
+                        "This strip is a counter of your remaining actions (a HUD), NOT a goal to fill or empty: ignore it when choosing targets and finish the level before it runs out."]
         except Exception as e:  # never let the helper break a turn
             return [f"Navigation helper unavailable ({type(e).__name__})."]
-        return ["Navigation helper: no movement learned yet. If UP/DOWN/LEFT/RIGHT are valid, press each once, then read nav.summary()."]
+        if any(a in self.valid_actions for a in ("UP", "DOWN", "LEFT", "RIGHT")):
+            return ["Navigation helper: no movement learned yet. Press each of UP/DOWN/LEFT/RIGHT once, then read nav.summary()."]
+        return ["Navigation helper: this level has no movement keys (click game). Use current_frame.segmentation to enumerate objects; nodes with hud=True are edge strips (counters), not targets."]
 
     def _seconds_left(self) -> float:
         left = self.max_minutes * 60 - (time.time() - self.t0)
@@ -196,6 +225,7 @@ class GameSession:
         del self.messages[k:end]
 
     def _run_tool(self, code: str, *, who: str) -> str:
+        self._run_actions = 0
         res = self.sandbox.run(code, timeout=self.tool_timeout)
         if res.get("notes"):
             self.notes = res["notes"]
@@ -207,12 +237,16 @@ class GameSession:
 
     def _outcome_lines(self, before_n: int) -> list[str]:
         new = self.host_transitions[before_n:]
+        extra = []
+        if self.game_overs_this_level:
+            extra.append(f"GAME OVER count on this level: {self.game_overs_this_level} (each one reset the level). The action limit or the gauge ran out "
+                         "before the goal: stop repeating the same sweep, re-read what changed the board, and try a different hypothesis.")
         if not new:
-            return ["Last turn executed no actions."]
+            return ["Last turn executed no actions."] + extra
         acts = [t.action if isinstance(t.action, str) else "MOUSE" for t in new]
         diff = summarize_diff(new[0].before_frame, new[-1].after_frame)
         return [f"Last turn executed {len(new)} action(s): {', '.join(acts[:12])}{'...' if len(acts) > 12 else ''}. "
-                f"Board change over the turn: {json.dumps(diff, default=str)[:700]}"]
+                f"Board change over the turn: {json.dumps(diff, default=str)[:700]}"] + extra
 
     def model_turn(self) -> bool:
         """One model call + tool execution. Returns False when the model produced nothing usable."""

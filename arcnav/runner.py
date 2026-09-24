@@ -15,7 +15,9 @@ from typing import Optional
 
 ROOT = Path(__file__).resolve().parents[1]
 
-DEFAULT_CONFIG = {"base_url": "http://127.0.0.1:1234/v1", "model": "local-qwen", "temperature": 0.6, "top_p": 0.95, "max_tokens": 8192,
+# default = no chain-of-thought (set C: 2.30 vs 0.9 with thinking on the 4-game set; turns are 2x cheaper); configs/think.json re-enables it
+DEFAULT_CONFIG = {"base_url": "http://127.0.0.1:1234/v1", "model": "local-qwen", "temperature": 0.7, "top_p": 0.8, "max_tokens": 4096,
+                  "extra_body": {"chat_template_kwargs": {"enable_thinking": False}},
                   "max_minutes": 20, "max_actions": 3000, "max_model_turns": 400, "tool_timeout": 30, "context_tokens": 32768, "jobs": 2}
 
 

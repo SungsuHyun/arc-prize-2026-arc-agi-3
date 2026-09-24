@@ -389,6 +389,12 @@ class NavHelper:
             if s != 0 and k >= 2:
                 return {"color": color, "size": hist[-1], "per_action": s,
                         "actions_left": hist[-1] // abs(s) if s < 0 else None}
+            # monotonic but uneven steps (e.g. -1, -2, -1): still a counter; report the average step
+            recent = steps[-4:]
+            if len(recent) >= 3 and all(x < 0 for x in recent) or (len(recent) >= 3 and all(x > 0 for x in recent)):
+                avg = sum(recent) / len(recent)
+                return {"color": color, "size": hist[-1], "per_action": round(avg, 1),
+                        "actions_left": int(hist[-1] / abs(avg)) if avg < 0 else None}
         return None
 
     # ── text ───────────────────────────────────────────────────────────────
