@@ -11,20 +11,20 @@ NO_PROGRESS_ACTIONS = 80     # solver actions without a level advance
 CYCLE_WINDOW = 6             # identical board seen this many times -> cycling
 DEMAND_EVERY_TURNS: Optional[int] = None   # periodic proposal demand disabled (hurt free play in v012e/f)
 
-RUN_SNIPPET = f"""
+RUN_SNIPPET = """
 exec(compile(__solver_code, "solver.py", "exec"), globals())
 __acts = list(solve() or [])
 if not __acts:
     print("SOLVER_EMPTY")
 else:
-    __r = action(__acts[:{MAX_ACTIONS_PER_TURN}])
+    __r = action(__acts[:__solver_budget])
     print("SOLVER_RAN", len(__acts), __r.get("executed_count"), __r.get("board_changed"), __r.get("level_completed"), __r.get("game_over"))
 """
 
 
-def run_snippet(code: str) -> str:
+def run_snippet(code: str, budget: int = MAX_ACTIONS_PER_TURN) -> str:
     import json as _j
-    return f"__solver_code = {_j.dumps(code)}\n" + RUN_SNIPPET
+    return f"__solver_code = {_j.dumps(code)}\n__solver_budget = {int(budget)}\n" + RUN_SNIPPET
 
 
 def new_solver(code: str, report: dict) -> dict:

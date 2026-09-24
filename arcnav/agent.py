@@ -19,7 +19,8 @@ MODEL_TO_ENGINE = {"UP": "ACTION1", "DOWN": "ACTION2", "LEFT": "ACTION3", "RIGHT
 ENGINE_TO_MODEL = {v: k for k, v in MODEL_TO_ENGINE.items()}
 MAX_ACTIONS_PER_CALL = 24   # blind 50-action batches walked straight into game over on s5i5
 MAX_ACTIONS_PER_TOOL_RUN = 30   # also caps loops of single-action calls inside one python tool run
-PROPOSAL_ATTEMPTS = 3   # after a level completion, action() is blocked until propose_solver is called (or this many turns pass)
+PROPOSAL_ATTEMPTS = 0   # >0: after a level completion, action() is blocked and propose_solver is forced via tool_choice for this many turns.
+                        # Set E (forced, 3 turns): 0.75, level>=2 0/4 — forced solvers burned 50–80 actions per level; disabled by default.
 
 
 class _T:  # transition view for the host-side NavHelper
@@ -335,8 +336,20 @@ class GameSession:
 
     def solver_turn(self) -> None:
         s = self.solver
-        before_n = len(self.host_transitions); prev_level = self.level
-        out = self._run_tool(solver_policy.run_snippet(s["code"]), who="solver")
+        before_n = len(self.host_transitions); prev_level = self.level; prev_go = self.game_overs_this_level + self.resets
+        budget = solver_policy.MAX_ACTIONS_PER_TURN
+        try:  # never let a solver turn spend the last actions of a gauge blindly
+            cur = [t for t in self.host_transitions if t.before_frame.level == t.after_frame.level == self.level]
+            g = NavHelper(cur, self.frame).gauge() if self.frame else None
+            if g and g.get("actions_left") is not None:
+                budget = min(budget, int(g["actions_left"]) - 2)
+        except Exception:
+            pass
+        if budget <= 0:
+            s["status"], s["reason"] = "failed", "the action gauge is nearly exhausted; the solver is paused so you can decide what to do with the last actions"
+            self._log("solver paused: gauge nearly exhausted"); self.last_outcome = [f"The stored solver was paused: {s['reason']}."]
+            return
+        out = self._run_tool(solver_policy.run_snippet(s["code"], budget), who="solver")
         s["turns"] += 1; self.solver_turns += 1
         n = len(self.host_transitions) - before_n; s["actions_run"] += n
         # progress = change outside HUD strips (a ticking gauge alone is not progress)
@@ -348,6 +361,8 @@ class GameSession:
             s["status"], s["reason"] = "failed", "solve() returned [] (it could not decide)"
         elif n == 0:
             s["status"], s["reason"] = "failed", "solve() produced no executable action"
+        elif self.game_overs_this_level + self.resets > prev_go and self.level <= prev_level:
+            s["status"], s["reason"] = "failed", "its actions ran into a GAME OVER (gauge/action limit exhausted before the goal)"
         if self.level > prev_level:
             s["noop_turns"] = 0; s["no_progress_actions"] = 0; s["board_seen"] = {}
             return
