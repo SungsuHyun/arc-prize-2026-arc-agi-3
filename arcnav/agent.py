@@ -243,9 +243,15 @@ class GameSession:
             c = self.messages[i]["content"]
             if len(c) > 800:
                 self.messages[i]["content"] = c[:600] + "\n...[older tool output trimmed]..."
-        est = sum(len(m.get("content") or "") for m in self.messages) // 3 + 1500
-        while est > self.context_tokens * 0.8 and len(self.messages) > 6:
-            self._drop_oldest_turn(); est = sum(len(m.get("content") or "") for m in self.messages) // 3 + 1500
+        # token estimate calibrated on the last real prompt_tokens (hex boards tokenize at ~1 token per character)
+        budget = (self.context_tokens - self.client.max_tokens) * 0.85 if self.client else self.context_tokens * 0.8
+        est = self._estimate_tokens()
+        while est > budget and len(self.messages) > 4:
+            self._drop_oldest_turn(); est = self._estimate_tokens()
+
+    def _estimate_tokens(self) -> float:
+        chars = sum(len(m.get("content") or "") + len(json.dumps(m.get("tool_calls") or "")) for m in self.messages)
+        return chars * getattr(self, "_tok_per_char", 0.45) + 300
 
     def _drop_oldest_turn(self) -> None:
         # messages[0] is the system prompt; a turn is user, assistant(, tool)
@@ -290,12 +296,24 @@ class GameSession:
         tools = [PYTHON_TOOL, PROPOSE_TOOL]
         # after a level completion: one free inspection turn, then the proposal call is forced via tool_choice
         choice = {"type": "function", "function": {"name": "propose_solver"}} if 0 < self.proposal_required < PROPOSAL_ATTEMPTS else "auto"
-        try:
-            r = self.client.chat(self.messages, tools=tools, tool_choice=choice)
-        except ContextLengthError:
-            for _ in range(3):
-                self._drop_oldest_turn()
-            r = self.client.chat(self.messages, tools=tools, tool_choice=choice)
+        r = None
+        for attempt in range(6):
+            try:
+                r = self.client.chat(self.messages, tools=tools, tool_choice=choice); break
+            except ContextLengthError:
+                self._tok_per_char = min(1.2, getattr(self, "_tok_per_char", 0.45) * 1.3)   # we under-estimated: be more aggressive
+                n_before = len(self.messages)
+                for _ in range(2 + attempt):
+                    self._drop_oldest_turn()
+                if len(self.messages) == n_before:   # nothing left to drop: shrink the board text of the current turn
+                    self.messages[-1]["content"] = self.messages[-1]["content"].split("Current board:")[0] + "[board omitted: context full]"
+                self._log(f"context overflow: dropped turns ({n_before} -> {len(self.messages)} messages), retry {attempt + 1}")
+        if r is None:
+            raise RuntimeError("context overflow could not be resolved")
+        # calibrate the estimate with the real prompt size
+        pt = int(r.usage.get("prompt_tokens") or 0); chars = sum(len(m.get("content") or "") for m in self.messages)
+        if pt and chars:
+            self._tok_per_char = max(0.25, min(1.2, pt / chars))
         self.model_turns += 1
         msg = r.message
         self._event(kind="model", turn=self.model_turns, content=msg.get("content", "")[:2000], reasoning=r.reasoning[:1500],
