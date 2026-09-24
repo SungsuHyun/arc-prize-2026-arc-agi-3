@@ -144,8 +144,10 @@ class GameSession:
     def _on_solver(self, code: str, report: dict) -> dict:
         if report.get("ok"):
             self.solver = solver_policy.new_solver(code, report)
-            self._log("solver stored:\n" + code)
-            return {**report, "stored": True, "note": "Solver stored; the harness will run solve() automatically from the next turn."}
+            self._log(f"solver stored ({self.solver['status']}):\n" + code)
+            note = ("Solver stored and VERIFIED; the harness will run solve() automatically from the next turn." if self.solver["status"] == "active" else
+                    "Solver stored as a DRAFT (no predict() or accuracy < 0.8): the harness will show its suggestion each turn but will not run it by itself.")
+            return {**report, "stored": True, "note": note}
         self.solver = {"status": "rejected", "reason": report.get("reason"), "report": report, "code": code}
         self._log(f"solver rejected: {report.get('reason')}")
         return {**report, "stored": False}
@@ -167,10 +169,14 @@ class GameSession:
             if nav.moves:
                 lines = ["Navigation helper summary:", nav.summary()]
                 ready = []
-                for t in [t for t in nav.targets() if t.get("path_len")][:3]:
+                g = nav.gauge(); left = g.get("actions_left") if g else None
+                for t in [t for t in nav.targets() if t.get("path_len")][:4]:
                     path = nav.path_to(t["row"], t["col"])
                     if path:
-                        ready.append(f"  nav.path_to({t['row']}, {t['col']}) -> {path}  # colour {t.get('color')}, {'visited' if t.get('visited') else 'unvisited'}")
+                        tag = f"colour {t.get('color')}, {'visited' if t.get('visited') else 'unvisited'}"
+                        if left is not None and len(path) >= left:
+                            tag += f", TOO LONG for the gauge ({len(path)} >= {left} left)"
+                        ready.append(f"  nav.path_to({t['row']}, {t['col']}) -> {path}  # {tag}")
                 fr = nav.frontier()
                 if fr and (path := nav.path_to(fr[0], fr[1])):
                     ready.append(f"  nav.path_to({fr[0]}, {fr[1]}) -> {path}  # nearest unexplored block")
@@ -297,6 +303,12 @@ class GameSession:
                          f"the winning strategy from `transitions` of the previous level (use nav.path_to / segmentation, not fixed coordinates). "
                          f"action() stays blocked until you do ({self.proposal_required} turn(s) left before the requirement is waived); "
                          "inspecting the board is allowed.")
+        if self.solver and self.solver.get("status") == "draft":
+            try:
+                res = self.sandbox.run(f"__solver_code = {json.dumps(self.solver['code'])}\nexec(compile(__solver_code, 'solver.py', 'exec'), globals())\nprint(list(solve() or [])[:12])", timeout=15)
+                self.solver["suggestion"] = (res["stdout"].strip() or res.get("error") or "?")[:300]
+            except Exception as e:
+                self.solver["suggestion"] = f"(dry run failed: {e!r})"
         parts += solver_policy.status_lines(self.solver, model_turns=self.model_turns, level_just_completed=self.level_just_completed)
         self.level_just_completed = False
         if self.solver and self.solver.get("status") in ("failed", "rejected"):

@@ -27,8 +27,12 @@ def run_snippet(code: str, budget: int = MAX_ACTIONS_PER_TURN) -> str:
     return f"__solver_code = {_j.dumps(code)}\n__solver_budget = {int(budget)}\n" + RUN_SNIPPET
 
 
+VERIFY_TO_AUTORUN = True   # iter2: only solvers whose predict() scores >= 0.8 on >= 6 transitions run without the model
+
+
 def new_solver(code: str, report: dict) -> dict:
-    return {"code": code, "report": report, "status": "active", "turns": 0, "actions_run": 0, "noop_turns": 0,
+    status = "active" if (report.get("verified") or not VERIFY_TO_AUTORUN) else "draft"
+    return {"code": code, "report": report, "status": status, "turns": 0, "actions_run": 0, "noop_turns": 0,
             "no_progress_actions": 0, "reason": None, "failure_shown": 0, "board_seen": {}}
 
 
@@ -42,6 +46,10 @@ def status_lines(solver: Optional[dict], *, model_turns: int, level_just_complet
             return [base + f" {model_turns} thinking turns spent: encode your current plan in propose_solver(code) now; the harness reports failures."]
         return [base + " When the rules are clear, call propose_solver(code) so the harness can play on without you."]
     st = solver.get("status")
+    if st == "draft":
+        return [f"Solver: a DRAFT is stored (not verified, so the harness does not run it by itself). Its suggestion for the current board: "
+                f"{solver.get('suggestion', '?')}. To let it run automatically, add `def predict(before_frame, action_name)` that returns the "
+                "expected next board (ascii) and re-propose: accuracy >= 0.8 on the recorded transitions makes it verified. Or execute the suggestion yourself."]
     if st == "failed":
         shown = solver.get("failure_shown", 0); solver["failure_shown"] = shown + 1
         head = (f"Solver: your stored solver FAILED ({solver.get('reason')}) after {solver.get('actions_run', 0)} actions. "

@@ -151,6 +151,7 @@ def propose_solver(code, verify_last=12):
             report["reason"] = f"predict() accuracy {report['predict_accuracy']:.2f} < 0.5 — fix the world model first"
             _send({"type": "solver", "code": code, "report": report}); return _recv().get("result", report)
     report["ok"] = True
+    report["verified"] = bool("predict" in names and report.get("predict_accuracy", 0) >= 0.8 and len(G.get("transitions") or []) >= 6)
     exec(compile(code, "solver.py", "exec"), G)   # accepted: solve()/predict() live in the runtime namespace
     _send({"type": "solver", "code": code, "report": report})
     return _recv().get("result", report)

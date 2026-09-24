@@ -50,8 +50,9 @@ You act only through the `python` tool. The sandbox is a persistent Python proce
 - `propose_solver(code)`: store a persistent solver. `code` is a string defining `def solve():` that reads the variables above and returns the
   next actions (a list, or [] when undecided). Optionally define `def predict(before_frame, action_name)` returning the expected next
   board as an ascii string; it is scored against the recorded transitions and proposals with accuracy below 0.5 are rejected.
-  Once stored, the harness runs solve() on its own every turn without asking you, until it returns [], raises, stops changing the
-  board, or the level stops advancing; then you get a failure report, repair the code and propose again. Never define your own
+  A solver whose predict() reaches accuracy >= 0.8 on at least 6 recorded transitions is VERIFIED: the harness then runs solve() on its
+  own every turn until it returns [], raises, stops changing the board, causes a game over, or the level stops advancing. A solver
+  without predict() (or below 0.8) is kept as a DRAFT: its suggestion is shown to you each turn, but you decide what to execute. Never define your own
   `propose_solver` or `action`.
 
 How to work:
