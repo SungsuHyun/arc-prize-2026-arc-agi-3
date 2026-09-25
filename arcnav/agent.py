@@ -302,10 +302,8 @@ class GameSession:
                 plan = plan[:max(0, int(g["actions_left"]) - 4)]
         except Exception:
             pass
-        if not plan:
-            return ""
         rows = []
-        for act in plan:
+        for act in plan:   # may be empty when the model already pressed every key: the interaction probes below still run
             before = self.frame
             res = self.execute([{k: v for k, v in act.items() if k != "colour"}])
             if not res["executed_count"]:
@@ -326,16 +324,19 @@ class GameSession:
         inter = [a for a in ("SPACE", "ACTION7") if a in self.valid_actions]
         try:
             nav = NavHelper([t for t in cur if t.before_frame.level == self.level], self.frame)
-            if inter and nav.moves and nav.avatar():
+            if nav.moves and nav.avatar():
                 done = 0
-                for t in [t for t in nav.targets(max_n=12) if t.get("path_len")][:3]:
+                for t in [t for t in nav.targets(max_n=12) if t.get("path_len") and not t.get("visited")][:3 if inter else 2]:
                     path = nav.path_to(t["row"], t["col"])
                     if not path or len(path) > 14:
                         continue
+                    g = nav.gauge()
+                    if g and g.get("actions_left") is not None and len(path) + 1 > int(g["actions_left"]) - 2:
+                        continue   # would exhaust the gauge: not worth a game over
                     before = self.frame
-                    res = self.execute([{"action": a} for a in path] + [{"action": inter[0]}])
+                    res = self.execute([{"action": a} for a in path] + ([{"action": inter[0]}] if inter else []))
                     diff = summarize_diff(before, self.frame) if self.frame else {}
-                    rows.append(f"  go to colour {t['color']} at ({t['row']},{t['col']}) then {inter[0]}: {diff.get('changed_cells', 0)} cells changed"
+                    rows.append(f"  go to colour {t['color']} at ({t['row']},{t['col']}){' then ' + inter[0] if inter else ''}: {diff.get('changed_cells', 0)} cells changed"
                                 + (f"; disappeared: {[(m['color'], m['center']) for m in diff.get('disappeared', [])][:2]}" if diff.get("disappeared") else ""))
                     done += 1
                     if res["level_completed"] or res["game_over"]:
@@ -347,6 +348,8 @@ class GameSession:
         except Exception as e:
             rows.append(f"  (interaction probes skipped: {type(e).__name__})")
         self._log(f"probe sweep on level {self.level}: {len(rows)} probes")
+        if not rows:
+            return ""
         return "Harness probe sweep (each untried action once, then 'go to a target and interact'):\n" + "\n".join(rows)
 
     def _host_probe(self) -> str:
@@ -714,6 +717,7 @@ class GameSession:
     def model_turn(self) -> bool:
         """One model call + tool execution. Returns False when the model produced nothing usable."""
         text = self._user_message()
+        self._event(kind="user", turn=self.model_turns + 1, content=text[:6000])   # what the model saw (post-mortems need the harness lines too)
         if self.image_context and self.frame is not None:
             self.messages.append({"role": "user", "content": [{"type": "text", "text": text + "\nThe same board is attached as an image (8-cell grid lines)."},
                                                               {"type": "image_url", "image_url": {"url": "data:image/png;base64," + grid_to_png_b64(self.frame.grid)}}]})
