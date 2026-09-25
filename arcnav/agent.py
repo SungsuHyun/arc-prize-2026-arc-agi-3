@@ -13,6 +13,7 @@ from .frame import Frame, masked_ascii, summarize_diff
 from .llm import ChatClient, ContextLengthError
 from .nav import NavHelper
 from . import rules as rule_induction
+from .autopilot import run_two_body
 from .prompts import PROPOSE_TOOL, PYTHON_TOOL, system_prompt, turn_header
 from .sandbox import Sandbox
 
@@ -59,6 +60,7 @@ class GameSession:
         self.checklist: dict = {"goal": "", "roles": {}, "plan": "", "tried": []}   # model-owned fields; harness adds facts
         self.checklist_level = 1
         self.rules_text = ""
+        self.autopilot_tries: dict[int, int] = {}   # level -> attempts of the rule-based autopilot
         self._run_actions = 0
         self.game_overs_this_level = 0
         self.rejections_in_row = 0
@@ -776,6 +778,37 @@ class GameSession:
             return "turns"
         return None
 
+    def _maybe_autopilot(self) -> bool:
+        """Programmatic-first: when the induced rules show a mirrored second body and movement keys, let the
+        cell-space planner try the level before spending model turns. Returns True if it acted."""
+        if not any(a in self.valid_actions for a in ("UP", "DOWN", "LEFT", "RIGHT")) or self.frame is None:
+            return False
+        if self.autopilot_tries.get(self.level, 0) >= 2:
+            return False
+        cur = [t for t in self.host_transitions if t.before_frame.level == t.after_frame.level == self.level]
+        if len(cur) < 4:
+            return False
+        try:
+            rules, _ = rule_induction.induce(cur, self.frame)
+        except Exception:
+            return False
+        mirror = next((r for r in rules if r.kind == "mirror" and r.support >= 3), None)
+        if not mirror:
+            return False
+        nav = NavHelper(cur, self.frame); floor = set(nav.floor_colors) | {nav.background}
+        self.autopilot_tries[self.level] = self.autopilot_tries.get(self.level, 0) + 1
+        lvl = self.level
+        res = run_two_body(self, body_color=mirror.params["color"], transform=mirror.params["how"], floor_colors=floor,
+                           max_replans=10, max_actions=80, log=lambda m: self._log(m[:200]))
+        self._event(kind="autopilot", level=lvl, result=res)
+        if res["completed"]:
+            self.last_outcome = [f"HARNESS AUTOPILOT completed level {lvl} in {res['actions']} actions using the confirmed two-body rules "
+                                 "(mirrored movement, walls, hazards). Press each movement key once on the new level so the rules re-confirm; the autopilot will try again."]
+        else:
+            self.last_outcome = [f"HARNESS AUTOPILOT tried the two-body plan on level {lvl} and stopped: {res['reason']} after {res['actions']} actions. "
+                                 "A rule the planner does not know is in play (e.g. a gate or a selectable block): find it."]
+        return True
+
     def play(self) -> dict:
         self.reset()
         self.messages = [{"role": "system", "content": system_prompt()}]
@@ -784,6 +817,11 @@ class GameSession:
         while not (why := self._out_of_budget()):
             if self.solver and self.solver.get("status") == "active":
                 self.solver_turn(); continue
+            try:
+                if self._maybe_autopilot():
+                    continue
+            except Exception as e:
+                self._log(f"autopilot error: {e!r}")
             if self.client is None:
                 why = "no model"; break
             ok = self.model_turn()
