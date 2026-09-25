@@ -46,7 +46,7 @@ def collect(game, n_actions=40):
     return tr
 
 
-def render(tr, full_pairs=2, max_cells=60):
+def render(tr, full_pairs=1, max_cells=50):
     """Compact: the first board in full, the first `full_pairs` transitions as full before/after, the rest as changed-cell lists."""
     out = [f"INITIAL BOARD (transition 0 BEFORE):\n{tr[0][1].ascii}\n"]
     for i, (a, b, af) in enumerate(tr):
@@ -87,7 +87,7 @@ def score(code, tr):
 
 def main(games):
     cfg = DEFAULT_CONFIG
-    client = ChatClient(cfg["base_url"], cfg["model"], temperature=0.6, top_p=0.95, max_tokens=10000,
+    client = ChatClient(cfg["base_url"], cfg["model"], temperature=0.6, top_p=0.95, max_tokens=8000,
                         extra_body={"chat_template_kwargs": {"enable_thinking": True}})
     results = {}
     for game in games:
@@ -96,7 +96,7 @@ def main(games):
             print(f"{game}: only {len(tr)} transitions, skipped"); continue
         shown, held = tr[: len(tr) * 2 // 3], tr[len(tr) * 2 // 3:]
         messages = [{"role": "system", "content": "You are an expert at inferring the rules of grid games and implementing exact simulators in Python."},
-                    {"role": "user", "content": PROMPT + "\n" + render(shown[:14])}]
+                    {"role": "user", "content": PROMPT + "\n" + render(shown[:10])}]
         accs = []
         for rnd in range(ROUNDS):
             t0 = time.time(); r = client.chat(messages, tools=None); code = r.message.get("content") or ""
