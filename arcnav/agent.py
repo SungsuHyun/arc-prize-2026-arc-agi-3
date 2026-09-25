@@ -9,7 +9,7 @@ from typing import Any, Optional
 from arcengine import GameAction, GameState
 
 from . import solver as solver_policy
-from .frame import Frame, masked_ascii, summarize_diff
+from .frame import Frame, masked_ascii, summarize_diff, grid_to_png_b64
 from .llm import ChatClient, ContextLengthError
 from .nav import NavHelper
 from . import rules as rule_induction
@@ -36,12 +36,13 @@ class GameSession:
     def __init__(self, env, game_id: str, client: Optional[ChatClient], *, log_dir: Path, max_minutes: float = 20.0,
                  max_actions: int = 3000, max_model_turns: int = 400, keep_full_turns: int = 3, tool_timeout: int = 30,
                  context_tokens: int = 32768, verbose: bool = True, deadline: Optional[float] = None, think_first_turns: int = 0,
-                 tool_choice_required: bool = False, oracle_rules: str = ""):
+                 tool_choice_required: bool = False, oracle_rules: str = "", image_context: bool = False):
         self.env, self.game_id, self.client = env, game_id, client
         self.log_dir = Path(log_dir); self.log_dir.mkdir(parents=True, exist_ok=True)
         self.max_minutes, self.max_actions, self.max_model_turns = max_minutes, max_actions, max_model_turns
         self.keep_full_turns, self.tool_timeout, self.context_tokens, self.verbose = keep_full_turns, tool_timeout, context_tokens, verbose
         self.deadline = deadline   # absolute epoch seconds (global run cap), optional
+        self.image_context = image_context   # attach the current board as an image to the latest user message (VLM)
         self.oracle_rules = oracle_rules   # D1 diagnostic: ground-truth rules injected into every turn (never in submissions)
         self.tool_choice_required = tool_choice_required   # force a tool call every turn (models with flaky tool formatting)
         self.think_first_turns = think_first_turns   # iter3: chain-of-thought ON for the first N model turns of every level
@@ -545,6 +546,8 @@ class GameSession:
         user_idx = [i for i, m in enumerate(self.messages) if m["role"] == "user"]
         for i in user_idx[:-self.keep_full_turns]:
             c = self.messages[i]["content"]
+            if isinstance(c, list):
+                continue
             if "Current board:" in c:
                 self.messages[i]["content"] = c.split("Current board:")[0] + "[board omitted]"
         tool_idx = [i for i, m in enumerate(self.messages) if m["role"] == "tool"]
@@ -559,7 +562,9 @@ class GameSession:
             self._drop_oldest_turn(); est = self._estimate_tokens()
 
     def _estimate_tokens(self) -> float:
-        chars = sum(len(m.get("content") or "") + len(json.dumps(m.get("tool_calls") or "")) for m in self.messages)
+        def _len(c):
+            return len(c) if isinstance(c, str) else sum(len(p.get("text", "")) for p in c if p.get("type") == "text") + 1200 * sum(1 for p in c if p.get("type") == "image_url")
+        chars = sum(_len(m.get("content") or "") + len(json.dumps(m.get("tool_calls") or "")) for m in self.messages)
         return chars * getattr(self, "_tok_per_char", 0.45) + 300
 
     def _drop_oldest_turn(self) -> None:
@@ -602,9 +607,21 @@ class GameSession:
         return [f"Last turn executed {len(new)} action(s): {', '.join(acts[:12])}{'...' if len(acts) > 12 else ''}. "
                 f"Board change over the turn: {json.dumps(diff, default=str)[:700]}"] + extra
 
+    def _flatten_old_images(self) -> None:
+        """Keep only the newest user message multimodal; older ones become plain text (saves tokens)."""
+        users = [m for m in self.messages if m["role"] == "user" and isinstance(m.get("content"), list)]
+        for m in users[:-1]:
+            m["content"] = "\n".join(part.get("text", "") for part in m["content"] if part.get("type") == "text") + "\n[board image omitted]"
+
     def model_turn(self) -> bool:
         """One model call + tool execution. Returns False when the model produced nothing usable."""
-        self.messages.append({"role": "user", "content": self._user_message()})
+        text = self._user_message()
+        if self.image_context and self.frame is not None:
+            self.messages.append({"role": "user", "content": [{"type": "text", "text": text + "\nThe same board is attached as an image (8-cell grid lines)."},
+                                                              {"type": "image_url", "image_url": {"url": "data:image/png;base64," + grid_to_png_b64(self.frame.grid)}}]})
+            self._flatten_old_images()
+        else:
+            self.messages.append({"role": "user", "content": text})
         self._trim_context()
         tools = [PYTHON_TOOL, PROPOSE_TOOL]
         # after a level completion: one free inspection turn, then the proposal call is forced via tool_choice
@@ -622,12 +639,13 @@ class GameSession:
                 for _ in range(2 + attempt):
                     self._drop_oldest_turn()
                 if len(self.messages) == n_before:   # nothing left to drop: shrink the board text of the current turn
-                    self.messages[-1]["content"] = self.messages[-1]["content"].split("Current board:")[0] + "[board omitted: context full]"
+                    if isinstance(self.messages[-1]["content"], str):
+                        self.messages[-1]["content"] = self.messages[-1]["content"].split("Current board:")[0] + "[board omitted: context full]"
                 self._log(f"context overflow: dropped turns ({n_before} -> {len(self.messages)} messages), retry {attempt + 1}")
         if r is None:
             raise RuntimeError("context overflow could not be resolved")
         # calibrate the estimate with the real prompt size
-        pt = int(r.usage.get("prompt_tokens") or 0); chars = sum(len(m.get("content") or "") for m in self.messages)
+        pt = int(r.usage.get("prompt_tokens") or 0); chars = sum((len(m.get("content")) if isinstance(m.get("content"), str) else 1200) for m in self.messages if m.get("content"))
         if pt and chars:
             self._tok_per_char = max(0.25, min(1.2, pt / chars))
         self.model_turns += 1

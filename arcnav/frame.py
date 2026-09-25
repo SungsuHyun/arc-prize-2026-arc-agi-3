@@ -279,3 +279,27 @@ def lattice_cells(grid: list[list[int]], bounds: list[int]) -> list[list[Counter
             row.append(Counter(grid[i][j] for i in range(bounds[r], bounds[r + 1]) for j in range(bounds[c], bounds[c + 1])))
         out.append(row)
     return out
+
+
+# ARC colour palette (index -> RGB), used for the optional image observation
+PALETTE = [(0, 0, 0), (0, 116, 217), (255, 65, 54), (46, 204, 64), (255, 220, 0), (170, 170, 170), (240, 18, 190), (255, 133, 27),
+           (127, 219, 255), (135, 12, 37), (255, 255, 255), (177, 13, 201), (0, 200, 200), (140, 240, 60), (255, 160, 180), (0, 140, 120)]
+
+
+def grid_to_png_b64(grid: list[list[int]], scale: int = 6, gridlines: bool = True) -> str:
+    """Render the board as a PNG (base64) with a thin grid every cell so the model can count cells."""
+    import base64, io
+    from PIL import Image, ImageDraw
+    h, w = len(grid), len(grid[0])
+    img = Image.new("RGB", (w * scale, h * scale))
+    d = ImageDraw.Draw(img)
+    for r in range(h):
+        for c in range(w):
+            d.rectangle([c * scale, r * scale, (c + 1) * scale - 1, (r + 1) * scale - 1], fill=PALETTE[grid[r][c] & 15])
+    if gridlines and scale >= 4:
+        for k in range(0, w * scale, scale * 8):
+            d.line([(k, 0), (k, h * scale - 1)], fill=(60, 60, 60), width=1)
+        for k in range(0, h * scale, scale * 8):
+            d.line([(0, k), (w * scale - 1, k)], fill=(60, 60, 60), width=1)
+    buf = io.BytesIO(); img.save(buf, format="PNG")
+    return base64.b64encode(buf.getvalue()).decode()

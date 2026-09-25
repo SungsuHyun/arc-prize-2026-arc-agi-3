@@ -51,7 +51,7 @@ def play_game(arc, game_id: str, cfg: dict, log_dir: Path, *, lock: threading.Lo
     sess = GameSession(env, game_id, client, log_dir=log_dir, max_minutes=cfg["max_minutes"], max_actions=cfg["max_actions"],
                        max_model_turns=cfg["max_model_turns"], tool_timeout=cfg["tool_timeout"], context_tokens=cfg["context_tokens"],
                        verbose=cfg.get("verbose", True), deadline=cfg.get("deadline"), think_first_turns=int(cfg.get("think_first_turns", 0)), tool_choice_required=bool(cfg.get("tool_choice_required", False)),
-                       oracle_rules=(cfg.get("oracle_rules") or {}).get(game_id.split("-")[0], ""))
+                       oracle_rules=(cfg.get("oracle_rules") or {}).get(game_id.split("-")[0], ""), image_context=bool(cfg.get("image_context", False)))
     try:
         return sess.play()
     except Exception as e:
