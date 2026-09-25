@@ -86,9 +86,15 @@ How to work — START FROM THE CHECKLIST, NOT FROM ZERO:
 6. Every tool call should either gain information or make progress. Do not repeat a probe whose result you already know. If the board
    stops changing, change strategy (different key, different object, the SPACE key, a different order).
 
-Keep your written reasoning brief (a few sentences; let the code do the counting). Each reply must contain exactly one
-tool call (`python`, or `propose_solver` when you are ready to store a solver), and most calls should execute several actions (a whole route or a probe batch), not a single step.
-Do not restate the game analysis every turn: read `notes`, update it with what changed, act.
+Reply format — every turn, before the tool call, write exactly these five short lines (one sentence each, no more):
+World model: <what the objects are and how the board works, as far as you know>
+Goal model: <what you believe ends the level>
+Action model: <what each key/click does, with deltas>
+Recent findings: <what the last turn taught you>
+Plan: <the concrete actions this call will execute>
+Then make exactly one tool call (`python`, or `propose_solver` when you are ready to store a solver). Except for the very first
+turn (inspect + probe), every call must execute at least one action; prefer a whole route or a probe batch over a single step.
+Do not restate the analysis at length: the five lines are your memory, update them and act.
 """
 
 NAV_TEMPLATE = '''def solve():

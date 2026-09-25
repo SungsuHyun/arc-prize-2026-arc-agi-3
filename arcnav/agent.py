@@ -657,6 +657,12 @@ class GameSession:
         self._event(kind="model", turn=self.model_turns, content=msg.get("content", "")[:2000], reasoning=r.reasoning[:1500],
                     tool_calls=msg.get("tool_calls"), latency=round(r.latency, 1), usage=r.usage)
         self.messages.append({"role": "assistant", "content": msg.get("content", ""), **({"tool_calls": msg["tool_calls"]} if msg.get("tool_calls") else {})})
+        for line in (msg.get("content") or "").splitlines():   # the five-line memory feeds the checklist
+            low = line.strip().lower()
+            if low.startswith("goal model:"):
+                self.checklist["goal"] = line.split(":", 1)[1].strip()[:300]
+            elif low.startswith("plan:"):
+                self.checklist["plan"] = line.split(":", 1)[1].strip()[:300]
         self._log(f"model turn {self.model_turns} ({r.latency:.0f}s, {r.usage.get('completion_tokens', '?')} tok): {(msg.get('content') or r.reasoning)[:200]!r}")
         calls = msg.get("tool_calls") or []
         if not calls:
