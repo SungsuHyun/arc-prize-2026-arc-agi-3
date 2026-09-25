@@ -64,6 +64,7 @@ def _refresh(state):
     G["history"] = trans  # alias
     G["last_action_result"] = state.get("last_action_result")
     G["level_recaps"] = list(state.get("level_recaps") or [])
+    G["rules_text"] = state.get("rules_text") or ""
     if "notes" not in G or not G["notes"]:
         G["notes"] = state.get("notes") or ""
     if not isinstance(G.get("checklist"), dict) or not G["checklist"]:

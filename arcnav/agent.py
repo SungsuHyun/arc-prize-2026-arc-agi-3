@@ -12,6 +12,7 @@ from . import solver as solver_policy
 from .frame import Frame, masked_ascii, summarize_diff
 from .llm import ChatClient, ContextLengthError
 from .nav import NavHelper
+from . import rules as rule_induction
 from .prompts import PROPOSE_TOOL, PYTHON_TOOL, system_prompt, turn_header
 from .sandbox import Sandbox
 
@@ -57,6 +58,7 @@ class GameSession:
         self.notes = ""
         self.checklist: dict = {"goal": "", "roles": {}, "plan": "", "tried": []}   # model-owned fields; harness adds facts
         self.checklist_level = 1
+        self.rules_text = ""
         self._run_actions = 0
         self.game_overs_this_level = 0
         self.rejections_in_row = 0
@@ -113,7 +115,7 @@ class GameSession:
             after = self.frame
             label = act["action"] if act["action"] != "MOUSE" else {"action": "MOUSE", "row": act["row"], "col": act["col"]}
             self.transitions.append({"action": label, "before": before.to_payload(), "after": after.to_payload()})
-            self.host_transitions.append(_T(label if isinstance(label, str) else "MOUSE", before, after))
+            self.host_transitions.append(_T(label, before, after))   # dict label for MOUSE keeps row/col (rule induction needs them)
             ch = before.ascii != after.ascii; changed_any |= ch
             results.append({"action": label, "changed": ch})
             if self.level > prev_level or self.state == "WIN":
@@ -136,7 +138,7 @@ class GameSession:
     def _state(self) -> dict:
         return {"frame": self.frame.to_payload() if self.frame else None, "valid_actions": self.valid_actions, "level": self.level,
                 "levels_total": self.levels_total, "transitions": self.transitions[-400:], "notes": self.notes, "level_recaps": self.level_recaps,
-                "checklist": self.checklist}
+                "checklist": self.checklist, "rules_text": self.rules_text}
 
     def _on_action(self, actions: list[dict]) -> tuple[dict, dict]:
         if self.proposal_required > 0:
@@ -370,6 +372,18 @@ class GameSession:
         head = f"CHECKLIST (level {self.level}) — {done}/{len(items)} settled. " + (f"Resolve first: {first_gap.upper()}." if first_gap else "All settled: execute the plan.")
         return [head] + [f"[{'x' if ok else ' '}] {name}: {text}" for ok, name, text in items]
 
+    def _rule_lines(self) -> list[str]:
+        """Symbolic rules induced from this level's transitions (exact fit; confirmed vs tentative)."""
+        cur = [t for t in self.host_transitions if t.before_frame.level == t.after_frame.level == self.level]
+        if len(cur) < 2 or self.frame is None:
+            return []
+        try:
+            rules, unex = rule_induction.induce(cur, self.frame)
+            self.rules_text = rule_induction.summary(rules, unex)
+            return [self.rules_text + "\n(These are induced by the harness from what actually happened; extend them, do not contradict them.)"]
+        except Exception as e:
+            return [f"(rule induction unavailable: {type(e).__name__})"]
+
     def _new_kinds_lines(self) -> list[str]:
         """Object kinds (colour, size class) present on this level that never appeared on earlier levels: probe these first."""
         if self.level <= 1 or self.frame is None:
@@ -466,6 +480,7 @@ class GameSession:
             parts.append("KNOWN RULES OF THIS GAME (given, trust them fully):\n" + self.oracle_rules)
         try:
             parts += self._checklist_lines()
+            parts += self._rule_lines()
             parts += self._new_kinds_lines()
         except Exception as e:
             parts.append(f"(checklist unavailable: {type(e).__name__})")
