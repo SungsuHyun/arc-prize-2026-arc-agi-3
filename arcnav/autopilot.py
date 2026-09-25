@@ -97,3 +97,49 @@ def run_two_body(session, *, body_color: int, transform: str, floor_colors: set,
                     forbidden.add(target); log(f"autopilot: unexpected position after entering {target}; forbidding it")
             break
     return {"completed": False, "actions": session.actions_used - start_actions, "replans": replans, "reason": "budget exhausted"}
+
+
+
+def run_reach(session, hypothesis: dict, *, max_actions: int = 60, log=print) -> dict:
+    """Single-avatar autopilot for 'reach' / 'collect_reach' / 'collect_all' hypotheses: pick the next target from the
+    hypothesis (collectibles nearest-first, then the goal colour), route with nav.path_to over known-walkable cells,
+    execute at most 12 steps at a time, re-plan from the live board. Stops on level completion, game over, no path,
+    or no movement. Never spends more than max_actions."""
+    from .nav import NavHelper
+    level0 = session.level; start = session.actions_used; stalls = 0; visited_targets = set()
+    kind = hypothesis.get("type"); goal_c = hypothesis.get("reach"); coll_c = hypothesis.get("collect")
+    while session.actions_used - start < max_actions and session.level == level0:
+        cur = [t for t in session.host_transitions if t.before_frame.level == t.after_frame.level == session.level]
+        nav = NavHelper(cur, session.frame)
+        if not nav.moves or not nav.avatar():
+            return {"completed": False, "actions": session.actions_used - start, "reason": "movement not learned"}
+        targets = [t for t in nav.targets(max_n=20) if t.get("path_len")]
+        want = None
+        if kind in ("collect_reach", "collect_all") and coll_c is not None:
+            left = [t for t in targets if t["color"] == coll_c and (t["row"], t["col"]) not in visited_targets]
+            want = min(left, key=lambda t: t["path_len"]) if left else None
+        if want is None and kind in ("reach", "collect_reach") and goal_c is not None:
+            goals = [t for t in targets if t["color"] == goal_c]
+            want = min(goals, key=lambda t: t["path_len"]) if goals else None
+        if want is None:
+            return {"completed": False, "actions": session.actions_used - start, "reason": "no reachable target for the hypothesis"}
+        path = nav.path_to(want["row"], want["col"])
+        if not path:
+            return {"completed": False, "actions": session.actions_used - start, "reason": "no path"}
+        before = nav.avatar(); step = path[:12]
+        log(f"reach-autopilot: target colour {want['color']} at ({want['row']},{want['col']}), {len(path)} moves, executing {len(step)}")
+        res = session.execute([{"action": a} for a in step])
+        if res["level_completed"] or session.level > level0:
+            return {"completed": True, "actions": session.actions_used - start, "reason": "level completed"}
+        if res["game_over"]:
+            return {"completed": False, "actions": session.actions_used - start, "reason": "game over"}
+        after = NavHelper([t for t in session.host_transitions if t.before_frame.level == t.after_frame.level == session.level], session.frame).avatar()
+        if after and before and (after["row"], after["col"]) == (before["row"], before["col"]):
+            stalls += 1
+            if stalls >= 2:
+                return {"completed": False, "actions": session.actions_used - start, "reason": "avatar did not move (blocked target?)"}
+        else:
+            stalls = 0
+        if len(step) == len(path):
+            visited_targets.add((want["row"], want["col"]))
+    return {"completed": False, "actions": session.actions_used - start, "reason": "budget exhausted" if session.level == level0 else "level completed"}

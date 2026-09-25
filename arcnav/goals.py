@@ -71,10 +71,12 @@ def infer(attempt: list, level: int) -> list[dict]:
                 r, c = t.action["row"], t.action["col"]; seq.append(t.before_frame.grid[r][c])
         hyps.append({"type": "click_sequence", "sequence": seq[-12:], "text": f"level {level} was won by clicking colours in this order: {seq[-12:]}"})
     # two bodies of the avatar colour became one on the final move (merge games)
-    if not hyps and av:
+    if not hyps and avatar_cols:
         def n_bodies(frame):
             return sum(1 for o in _objs(frame) if o["color"] in avatar_cols and o["size"] >= 4)
-        if n_bodies(first) >= 2 and n_bodies(final.after_frame) <= 1 and n_bodies(last) >= 2:
+        bodies_last = [o for o in _objs(last) if o["color"] in avatar_cols and o["size"] >= 4]
+        adjacent = len(bodies_last) == 2 and abs(bodies_last[0]["center"][0] - bodies_last[1]["center"][0]) + abs(bodies_last[0]["center"][1] - bodies_last[1]["center"][1]) <= 12
+        if n_bodies(first) >= 2 and (len(bodies_last) <= 1 or adjacent):
             hyps.append({"type": "merge", "colors": sorted(avatar_cols), "text": f"bring the two colour-{sorted(avatar_cols)} bodies onto the same cell (they merged on the final move of level {level})"})
     if not hyps:
         hyps.append({"type": "unknown", "text": f"level {level} ended after {action}; no clear goal pattern (avatar colours {sorted(avatar_cols)}, vanished {dict(vanished)})"})

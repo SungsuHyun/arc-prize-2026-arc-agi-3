@@ -13,7 +13,7 @@ from .frame import Frame, masked_ascii, summarize_diff
 from .llm import ChatClient, ContextLengthError
 from .nav import NavHelper
 from . import rules as rule_induction
-from .autopilot import run_two_body
+from .autopilot import run_two_body, run_reach
 from . import goals as goal_inference
 from .prompts import PROPOSE_TOOL, PYTHON_TOOL, system_prompt, turn_header
 from .sandbox import Sandbox
@@ -813,7 +813,21 @@ class GameSession:
             return False
         mirror = next((r for r in rules if r.kind == "mirror" and r.support >= 3), None)
         if not mirror:
-            return False
+            # single-avatar: act on a goal hypothesis inferred from an earlier level
+            hyp = next((h for h in self.goal_hypotheses if h.get("type") in ("reach", "collect_reach", "collect_all") and h.get("level", 0) < self.level), None)
+            if not hyp or not NavHelper(cur, self.frame).moves:
+                return False
+            self.autopilot_tries[self.level] = self.autopilot_tries.get(self.level, 0) + 1
+            lvl = self.level
+            res = run_reach(self, hyp, max_actions=60, log=lambda m: self._log(m[:200]))
+            self._event(kind="autopilot", level=lvl, result=res, hypothesis=hyp)
+            if res["completed"]:
+                self.last_outcome = [f"HARNESS AUTOPILOT completed level {lvl} in {res['actions']} actions by following the inferred goal ({hyp['text']}). "
+                                     "Press each movement key once on the new level; it will try again."]
+            else:
+                self.last_outcome = [f"HARNESS AUTOPILOT followed the inferred goal ({hyp['text']}) on level {lvl} and stopped: {res['reason']} after {res['actions']} actions. "
+                                     "Something else is required first (a key, a switch, an item, a refill, an order): find it."]
+            return True
         nav = NavHelper(cur, self.frame); floor = set(nav.floor_colors) | {nav.background}
         self.autopilot_tries[self.level] = self.autopilot_tries.get(self.level, 0) + 1
         lvl = self.level
