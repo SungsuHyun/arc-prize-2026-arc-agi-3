@@ -43,6 +43,9 @@ class Rule:
             return f"touching colour {p['color']} resets the avatar to its start position ({self.support}x)"
         if self.kind == "click":
             return f"clicking colour {p['color']} changes colour(s) {sorted(p['changes'])} ({self.support}x)" if p["changes"] else f"clicking colour {p['color']} does nothing ({self.support}x)"
+        if self.kind == "mirror":
+            how = {"mirror_x": "horizontally mirrored (-dx, dy)", "mirror_y": "vertically mirrored (dx, -dy)", "mirror_xy": "point-mirrored (-dx, -dy)"}[p["how"]]
+            return f"a second body (colour {p['color']}, {p['size']}px) moves with every move, {how} — walls stop each body separately ({self.support}x)"
         if self.kind == "noop":
             return f"{p['action']} changed nothing ({self.support}x)"
         return f"{self.kind} {p}"
@@ -90,6 +93,32 @@ def induce(transitions: list, current_frame) -> tuple[list[Rule], list[str]]:
         rules.append(Rule("move", {"action": a, "dx": dx, "dy": dy}, support=per_action_ok[a], counter=0))
     for color, n in wall_hits.items():
         rules.append(Rule("wall", {"color": color}, support=n))
+    # 1b. mirrored / co-moving second body: another object that moves whenever the avatar moves, with a fixed transform
+    if moves:
+        pairs: Counter = Counter(); seen_moves = 0
+        for t in transitions:
+            a = t.action if isinstance(t.action, str) else "MOUSE"
+            if a not in moves:
+                continue
+            po, _ = _objs(t.before_frame); co, _ = _objs(t.after_frame)
+            from .nav import _moved
+            mv = [(o, dx, dy) for o, dx, dy in _moved(po, co) if o["size"] <= 400]
+            if len(mv) < 2:
+                continue
+            seen_moves += 1
+            adx, ady = moves[a]
+            for o, dx, dy in mv:
+                if (dx, dy) == (adx, ady):
+                    continue
+                if (dx, dy) == (-adx, ady):
+                    pairs[("mirror_x", o["color"], o["size"])] += 1
+                elif (dx, dy) == (adx, -ady):
+                    pairs[("mirror_y", o["color"], o["size"])] += 1
+                elif (dx, dy) == (-adx, -ady):
+                    pairs[("mirror_xy", o["color"], o["size"])] += 1
+        for (kind, color, size), n in pairs.items():
+            if n >= 2:
+                rules.append(Rule("mirror", {"how": kind, "color": color, "size": size}, support=n, counter=max(0, seen_moves - n)))
     # 2. gauge and refills
     g = nav.gauge()
     av0 = nav.avatar(); avatar_cols = set(av0["colors"]) if av0 else set()
