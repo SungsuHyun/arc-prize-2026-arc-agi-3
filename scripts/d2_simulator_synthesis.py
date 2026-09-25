@@ -46,10 +46,16 @@ def collect(game, n_actions=40):
     return tr
 
 
-def render(tr):
-    out = []
+def render(tr, full_pairs=2, max_cells=60):
+    """Compact: the first board in full, the first `full_pairs` transitions as full before/after, the rest as changed-cell lists."""
+    out = [f"INITIAL BOARD (transition 0 BEFORE):\n{tr[0][1].ascii}\n"]
     for i, (a, b, af) in enumerate(tr):
-        out.append(f"### transition {i}\nACTION: {a}\nBEFORE:\n{b.ascii}\nAFTER:\n{af.ascii}\n")
+        if i < full_pairs:
+            out.append(f"### transition {i}\nACTION: {a}\nBEFORE:\n{b.ascii}\nAFTER:\n{af.ascii}\n")
+        else:
+            cells = [(r, c, b.grid[r][c], af.grid[r][c]) for r in range(64) for c in range(64) if b.grid[r][c] != af.grid[r][c]]
+            desc = ", ".join(f"({r},{c}):{o}->{n}" for r, c, o, n in cells[:max_cells]) + (f" ... (+{len(cells)-max_cells} more)" if len(cells) > max_cells else "")
+            out.append(f"### transition {i}\nACTION: {a}\nCHANGED CELLS (row,col):old->new: {desc or 'none'}\n")
     return "\n".join(out)
 
 
@@ -81,7 +87,7 @@ def score(code, tr):
 
 def main(games):
     cfg = DEFAULT_CONFIG
-    client = ChatClient(cfg["base_url"], cfg["model"], temperature=0.6, top_p=0.95, max_tokens=12000,
+    client = ChatClient(cfg["base_url"], cfg["model"], temperature=0.6, top_p=0.95, max_tokens=10000,
                         extra_body={"chat_template_kwargs": {"enable_thinking": True}})
     results = {}
     for game in games:
@@ -90,7 +96,7 @@ def main(games):
             print(f"{game}: only {len(tr)} transitions, skipped"); continue
         shown, held = tr[: len(tr) * 2 // 3], tr[len(tr) * 2 // 3:]
         messages = [{"role": "system", "content": "You are an expert at inferring the rules of grid games and implementing exact simulators in Python."},
-                    {"role": "user", "content": PROMPT + "\n" + render(shown[:12])}]
+                    {"role": "user", "content": PROMPT + "\n" + render(shown[:14])}]
         accs = []
         for rnd in range(ROUNDS):
             t0 = time.time(); r = client.chat(messages, tools=None); code = r.message.get("content") or ""
