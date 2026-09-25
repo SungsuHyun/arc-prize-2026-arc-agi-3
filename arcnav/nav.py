@@ -322,6 +322,7 @@ class NavHelper:
         return acts[:max_len]
 
     def targets(self, max_n: int = 10) -> list[dict]:
+        av = self.avatar()
         """Non-floor, non-background small objects with (row, col) and path length."""
         if not self.md or self.md["player"] is None:
             return []
@@ -329,6 +330,21 @@ class NavHelper:
         out, seen = [], set()
         for o in self.objects:
             if o["size"] > 120 or o["color"] == self.background or o["color"] in self.floor_colors:
+                continue
+            bx0, by0, bx1, by1 = o["bbox"]
+            if ((bx1 - bx0 <= 2 and (bx0 <= 1 or bx1 >= 62)) or (by1 - by0 <= 2 and (by0 <= 1 or by1 >= 62))):
+                continue   # thin sliver hugging an edge (gauge / counter pieces), never a target
+            # small marks drawn inside a larger non-floor object are parts of that object, not targets
+            ox, oy = o["center"]; contained = False
+            for big in self.objects:
+                if big is o or big["size"] <= o["size"] * 3 or big["color"] == self.background or big["color"] in self.floor_colors:
+                    continue
+                bx0, by0, bx1, by1 = big["bbox"]
+                if bx0 < ox < bx1 and by0 < oy < by1:
+                    contained = True; break
+            if contained:
+                continue
+            if False:
                 continue
             x0, y0, x1, y1 = o["bbox"]
             if pb and not (x0 > pb[2] or x1 < pb[0] or y0 > pb[3] or y1 < pb[1]):

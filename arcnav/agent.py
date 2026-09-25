@@ -321,8 +321,33 @@ class GameSession:
             if res["level_completed"] or res["game_over"]:
                 rows.append(f"  -> {'LEVEL COMPLETED' if res['level_completed'] else 'GAME OVER (level restarted)'}")
                 break
+        # interaction probes: go to the nearest targets and press the interaction key there (many games end when you
+        # interact ON an object, which single-key probes never reveal)
+        inter = [a for a in ("SPACE", "ACTION7") if a in self.valid_actions]
+        try:
+            nav = NavHelper([t for t in cur if t.before_frame.level == self.level], self.frame)
+            if inter and nav.moves and nav.avatar():
+                done = 0
+                for t in [t for t in nav.targets(max_n=12) if t.get("path_len")][:3]:
+                    path = nav.path_to(t["row"], t["col"])
+                    if not path or len(path) > 14:
+                        continue
+                    before = self.frame
+                    res = self.execute([{"action": a} for a in path] + [{"action": inter[0]}])
+                    diff = summarize_diff(before, self.frame) if self.frame else {}
+                    rows.append(f"  go to colour {t['color']} at ({t['row']},{t['col']}) then {inter[0]}: {diff.get('changed_cells', 0)} cells changed"
+                                + (f"; disappeared: {[(m['color'], m['center']) for m in diff.get('disappeared', [])][:2]}" if diff.get("disappeared") else ""))
+                    done += 1
+                    if res["level_completed"] or res["game_over"]:
+                        rows.append(f"  -> {'LEVEL COMPLETED' if res['level_completed'] else 'GAME OVER (level restarted)'}")
+                        break
+                    nav = NavHelper([t2 for t2 in self.host_transitions if t2.before_frame.level == t2.after_frame.level == self.level], self.frame)
+                    if not nav.avatar():
+                        break
+        except Exception as e:
+            rows.append(f"  (interaction probes skipped: {type(e).__name__})")
         self._log(f"probe sweep on level {self.level}: {len(rows)} probes")
-        return "Harness probe sweep (each untried action once, so you can see what every action does):\n" + "\n".join(rows)
+        return "Harness probe sweep (each untried action once, then 'go to a target and interact'):\n" + "\n".join(rows)
 
     def _host_probe(self) -> str:
         """After repeated identical calls: execute ONE untried action so the model gets new information."""
