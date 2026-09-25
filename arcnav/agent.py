@@ -609,7 +609,7 @@ class GameSession:
                 try:
                     obj = json.loads(body)
                     if isinstance(obj, dict) and isinstance(obj.get("code"), str) and obj["code"].strip():
-                        calls = [{"id": "fallback_json", "function": {"name": "python", "arguments": json.dumps(obj)}}]
+                        calls = [{"id": "fallback_json", "type": "function", "function": {"name": "python", "arguments": json.dumps(obj)}}]
                         self.messages[-1]["tool_calls"] = calls; self.messages[-1]["content"] = ""
                         self._log("json-content fallback: executing the body's `code` field as the python tool")
                 except Exception:
@@ -618,7 +618,7 @@ class GameSession:
             if looks_like_code and len(body) < 6000:
                 try:
                     import ast as _ast; _ast.parse(body)
-                    calls = [{"id": "fallback_0", "function": {"name": "python", "arguments": json.dumps({"code": body})}}]
+                    calls = [{"id": "fallback_0", "type": "function", "function": {"name": "python", "arguments": json.dumps({"code": body})}}]
                     self.messages[-1]["tool_calls"] = calls; self.messages[-1]["content"] = ""
                     self._log("content-as-code fallback: executing the message body as python")
                 except SyntaxError:
