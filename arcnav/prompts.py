@@ -48,6 +48,8 @@ You act only through the `python` tool. The sandbox is a persistent Python proce
   containing that pixel (pass it straight to action), `nav.frontier()` the nearest unexplored walkable block (row, col) or None, `nav.targets()` a list of dicts with keys
   row, col, color, size, path_len (None if unreachable), visited, last_visit,
   `nav.map()` a coarse map (P = avatar, # = wall). It learns only from real moves, so press each movement key once or twice first.
+- `goal_hypotheses`: list of dicts the harness inferred from how earlier levels were won (type reach / collect_reach /
+  collect_all / click_sequence with colours); the same win rule usually holds on later levels — plan for it.
 - `rules_text`: rules the harness induced from this level's recorded transitions (movement deltas, walls, gauge cost,
   refills, collectibles, click effects) with support counts; CONFIRMED rules fit every transition. Build on them.
 - `level_recaps`: harness-written summaries of how each earlier level was won (winning action sequence, collected objects,

@@ -14,6 +14,7 @@ from .llm import ChatClient, ContextLengthError
 from .nav import NavHelper
 from . import rules as rule_induction
 from .autopilot import run_two_body
+from . import goals as goal_inference
 from .prompts import PROPOSE_TOOL, PYTHON_TOOL, system_prompt, turn_header
 from .sandbox import Sandbox
 
@@ -60,6 +61,7 @@ class GameSession:
         self.checklist: dict = {"goal": "", "roles": {}, "plan": "", "tried": []}   # model-owned fields; harness adds facts
         self.checklist_level = 1
         self.rules_text = ""
+        self.goal_hypotheses: list[dict] = []
         self.autopilot_tries: dict[int, int] = {}   # level -> attempts of the rule-based autopilot
         self._run_actions = 0
         self.game_overs_this_level = 0
@@ -127,6 +129,19 @@ class GameSession:
                     self.level_recaps.append(self._level_recap(prev_level))
                 except Exception as e:  # never break play on a recap error
                     self._log(f"recap failed: {e!r}")
+                try:
+                    cur = [t for t in self.host_transitions if t.before_frame.level == prev_level]
+                    first_ascii = cur[0].before_frame.ascii if cur else None; start = 0
+                    for i, t in enumerate(cur):   # last attempt = after the last reset on that level
+                        if i > 0 and t.before_frame.ascii == first_ascii:
+                            start = i
+                    hyps = goal_inference.infer(cur[start:], prev_level)
+                    if hyps:
+                        self.goal_hypotheses = hyps + [h for h in self.goal_hypotheses if h.get("level") != prev_level]
+                        self._log("goal hypotheses: " + " | ".join(h["text"] for h in hyps[:3]))
+                        self._event(kind="goals", level=prev_level, hypotheses=hyps)
+                except Exception as e:
+                    self._log(f"goal inference failed: {e!r}")
                 self._log(f"*** level {prev_level} completed after {self.level_action_log[-1]} actions (total {self.actions_used})")
                 stopped = "level completed" if self.state != "WIN" else "game won"; break
             if self.state == "GAME_OVER":
@@ -140,7 +155,7 @@ class GameSession:
     def _state(self) -> dict:
         return {"frame": self.frame.to_payload() if self.frame else None, "valid_actions": self.valid_actions, "level": self.level,
                 "levels_total": self.levels_total, "transitions": self.transitions[-400:], "notes": self.notes, "level_recaps": self.level_recaps,
-                "checklist": self.checklist, "rules_text": self.rules_text}
+                "checklist": self.checklist, "rules_text": self.rules_text, "goal_hypotheses": self.goal_hypotheses}
 
     def _on_action(self, actions: list[dict]) -> tuple[dict, dict]:
         if self.proposal_required > 0:
@@ -497,6 +512,10 @@ class GameSession:
             if self.level != lvl:
                 self.probe_sweeps.setdefault(self.level, "")
                 self.level_turn_start = self.model_turns
+        if self.goal_hypotheses:
+            parts.append(goal_inference.summary(self.goal_hypotheses))
+            if not self.checklist.get("goal"):
+                self.checklist["goal"] = "(harness hypothesis) " + self.goal_hypotheses[0]["text"][:200]
         if self.probe_sweeps.get(self.level):
             parts.append(self.probe_sweeps[self.level])
         if self.level_recaps:
