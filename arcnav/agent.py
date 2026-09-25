@@ -32,12 +32,14 @@ class _T:  # transition view for the host-side NavHelper
 class GameSession:
     def __init__(self, env, game_id: str, client: Optional[ChatClient], *, log_dir: Path, max_minutes: float = 20.0,
                  max_actions: int = 3000, max_model_turns: int = 400, keep_full_turns: int = 3, tool_timeout: int = 30,
-                 context_tokens: int = 32768, verbose: bool = True, deadline: Optional[float] = None, think_first_turns: int = 0):
+                 context_tokens: int = 32768, verbose: bool = True, deadline: Optional[float] = None, think_first_turns: int = 0,
+                 tool_choice_required: bool = False):
         self.env, self.game_id, self.client = env, game_id, client
         self.log_dir = Path(log_dir); self.log_dir.mkdir(parents=True, exist_ok=True)
         self.max_minutes, self.max_actions, self.max_model_turns = max_minutes, max_actions, max_model_turns
         self.keep_full_turns, self.tool_timeout, self.context_tokens, self.verbose = keep_full_turns, tool_timeout, context_tokens, verbose
         self.deadline = deadline   # absolute epoch seconds (global run cap), optional
+        self.tool_choice_required = tool_choice_required   # force a tool call every turn (models with flaky tool formatting)
         self.think_first_turns = think_first_turns   # iter3: chain-of-thought ON for the first N model turns of every level
         self.level_turn_start = 0
         self.transitions: list[dict] = []          # payloads for the sandbox
@@ -567,7 +569,7 @@ class GameSession:
         self._trim_context()
         tools = [PYTHON_TOOL, PROPOSE_TOOL]
         # after a level completion: one free inspection turn, then the proposal call is forced via tool_choice
-        choice = {"type": "function", "function": {"name": "propose_solver"}} if 0 < self.proposal_required < PROPOSAL_ATTEMPTS else "auto"
+        choice = {"type": "function", "function": {"name": "propose_solver"}} if 0 < self.proposal_required < PROPOSAL_ATTEMPTS else ("required" if self.tool_choice_required else "auto")
         override = None
         if self.think_first_turns and (self.model_turns - self.level_turn_start) < self.think_first_turns:
             override = {"chat_template_kwargs": {"enable_thinking": True}, "max_tokens": max(self.client.max_tokens, 8192), "temperature": 0.6, "top_p": 0.95}
@@ -596,6 +598,21 @@ class GameSession:
         self.messages.append({"role": "assistant", "content": msg.get("content", ""), **({"tool_calls": msg["tool_calls"]} if msg.get("tool_calls") else {})})
         self._log(f"model turn {self.model_turns} ({r.latency:.0f}s, {r.usage.get('completion_tokens', '?')} tok): {(msg.get('content') or r.reasoning)[:200]!r}")
         calls = msg.get("tool_calls") or []
+        if not calls:
+            # content-as-code fallback: some models write the python call in the message body instead of a tool call
+            body = (msg.get("content") or "").strip()
+            if body.startswith("```"):
+                body = body.strip("`"); body = body.split("\n", 1)[1] if "\n" in body else body
+                body = body.rsplit("```", 1)[0] if "```" in body else body
+            looks_like_code = any(k in body for k in ("action(", "propose_solver(", "print(", "nav.", "checklist[")) and not body.startswith("{")
+            if looks_like_code and len(body) < 6000:
+                try:
+                    import ast as _ast; _ast.parse(body)
+                    calls = [{"id": "fallback_0", "function": {"name": "python", "arguments": json.dumps({"code": body})}}]
+                    self.messages[-1]["tool_calls"] = calls; self.messages[-1]["content"] = ""
+                    self._log("content-as-code fallback: executing the message body as python")
+                except SyntaxError:
+                    pass
         if not calls:
             if r.finish_reason == "length":
                 self.last_outcome = ["Your last reply was cut off by the output limit while you were still reasoning, so nothing happened. "

@@ -32,7 +32,7 @@ PRESETS = {
                    "vllm_flags": ["--tool-call-parser", "openai", "--reasoning-parser", "openai_gptoss"],
                    "extra_datasets": ["sungsuhyun/tiktoken-o200k-cache"],   # o200k_base vocab under its sha1 name: harmony loads it offline
                    "env": {"TIKTOKEN_RS_CACHE_DIR": "/kaggle/input/datasets/sungsuhyun/tiktoken-o200k-cache"},
-                   "extra_body": {"reasoning_effort": "low"}, "max_tokens": 6144},
+                   "extra_body": {"reasoning_effort": "low"}, "max_tokens": 6144, "cfg_extra": {"tool_choice_required": True}},
 }
 PRESET = PRESETS[_ARGS.preset]
 KERNEL_ID = PRESET["kernel"]
@@ -149,7 +149,7 @@ def build() -> dict:
         logging.basicConfig(level=logging.WARNING)
         from arcnav.runner import run, make_arcade, DEFAULT_CONFIG
         cfg = dict(DEFAULT_CONFIG, model='{SERVED_MODEL}', base_url='http://127.0.0.1:1234/v1', verbose=True,
-                   extra_body={PRESET["extra_body"]!r}, max_tokens={PRESET["max_tokens"]})
+                   extra_body={PRESET["extra_body"]!r}, max_tokens={PRESET["max_tokens"]}, **{PRESET.get("cfg_extra", {})!r})
         out_dir = Path('/kaggle/working/arcnav-results')
         if RERUN:
             os.environ['ARC_API_KEY'] = 'test-key-123'
