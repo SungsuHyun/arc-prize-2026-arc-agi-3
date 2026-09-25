@@ -26,7 +26,7 @@ PRESETS = {
     "qwen27b": {"kernel": "sungsuhyun/arc3-arcnav", "title": "arc3-arcnav", "out": "arcnav",
                 "dataset_model": "driessmit1/vrfai-qwen3-6-27b-fp8-hf-snapshot", "model_source": None,
                 "vllm_flags": ["--tool-call-parser", "qwen3_coder", "--reasoning-parser", "qwen3", "--default-chat-template-kwargs", '{"preserve_thinking": true}'],
-                "extra_body": {"chat_template_kwargs": {"enable_thinking": False}}, "max_tokens": 4096},
+                "extra_body": {"chat_template_kwargs": {"enable_thinking": False}}, "max_tokens": 4096, "cfg_extra": {"think_first_turns": 3}},
     "gptoss120b": {"kernel": "sungsuhyun/arc3-arcnav-gptoss", "title": "arc3-arcnav-gptoss", "out": "arcnav-gptoss",
                    "dataset_model": None, "model_source": "danielhanchen/gpt-oss-120b/transformers/default/1",   # 65 GB MXFP4, Apache 2.0
                    "vllm_flags": ["--tool-call-parser", "openai", "--reasoning-parser", "openai_gptoss"],
@@ -52,7 +52,7 @@ RERUN_JOBS = 12               # concurrent games in the competition rerun
 RERUN_TOTAL_MINUTES = 470     # global cap (Kaggle rerun limit is 540 min incl. model load)
 RERUN_MAX_MINUTES_PER_GAME = 150
 
-SOURCE_FILES = ["__init__.py", "frame.py", "nav.py", "sandbox.py", "llm.py", "prompts.py", "solver.py", "agent.py", "runner.py"]
+SOURCE_FILES = ["__init__.py", "frame.py", "nav.py", "sandbox.py", "llm.py", "prompts.py", "solver.py", "rules.py", "planner.py", "autopilot.py", "agent.py", "runner.py"]
 
 
 def code_cell(src: str) -> dict:
