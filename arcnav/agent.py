@@ -604,7 +604,17 @@ class GameSession:
             if body.startswith("```"):
                 body = body.strip("`"); body = body.split("\n", 1)[1] if "\n" in body else body
                 body = body.rsplit("```", 1)[0] if "```" in body else body
-            looks_like_code = any(k in body for k in ("action(", "propose_solver(", "print(", "nav.", "checklist[")) and not body.startswith("{")
+            # JSON fallback: the tool arguments emitted as a bare JSON object in the body (seen with gpt-oss + tool_choice=required)
+            if body.startswith("{") and body.endswith("}"):
+                try:
+                    obj = json.loads(body)
+                    if isinstance(obj, dict) and isinstance(obj.get("code"), str) and obj["code"].strip():
+                        calls = [{"id": "fallback_json", "function": {"name": "python", "arguments": json.dumps(obj)}}]
+                        self.messages[-1]["tool_calls"] = calls; self.messages[-1]["content"] = ""
+                        self._log("json-content fallback: executing the body's `code` field as the python tool")
+                except Exception:
+                    pass
+            looks_like_code = not calls and any(k in body for k in ("action(", "propose_solver(", "print(", "nav.", "checklist[")) and not body.startswith("{")
             if looks_like_code and len(body) < 6000:
                 try:
                     import ast as _ast; _ast.parse(body)
