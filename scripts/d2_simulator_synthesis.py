@@ -5,7 +5,7 @@ For each game: play level 1 with the nav template (no LLM) to record transitions
 ask the model (thinking on) to write predict(), score it on the held-out transitions, feed back mismatches, up to
 ROUNDS rounds. Reports accuracy per round. Usage: python scripts/d2_simulator_synthesis.py ls20 m0r0 vc33 sb26
 """
-import json, logging, sys, time
+import json, logging, os, sys, time
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 logging.disable(logging.CRITICAL)
@@ -15,7 +15,10 @@ from arcnav.llm import ChatClient
 from arcnav.prompts import NAV_TEMPLATE
 
 ROUNDS = 3
-OUT = Path("/home/hss/code/kaggle/2026/arc-prize-2026-arc-agi-3/vendor/arcnav-runs/d2")
+THINK = os.environ.get("D2_THINK", "0") == "1"
+MAX_OUT = int(os.environ.get("D2_MAX_OUT", "8000"))
+FULL_PAIRS = int(os.environ.get("D2_FULL_PAIRS", "1"))
+OUT = Path("/home/hss/code/kaggle/2026/arc-prize-2026-arc-agi-3/vendor/arcnav-runs") / os.environ.get("D2_OUT", "d2")
 OUT.mkdir(parents=True, exist_ok=True)
 
 PROMPT = """You are given recorded transitions of an unknown grid game: for each, the board BEFORE (64x64 ascii, hex digit per cell),
@@ -46,7 +49,8 @@ def collect(game, n_actions=40):
     return tr
 
 
-def render(tr, full_pairs=1, max_cells=50):
+def render(tr, full_pairs=None, max_cells=50):
+    full_pairs = FULL_PAIRS if full_pairs is None else full_pairs
     """Compact: the first board in full, the first `full_pairs` transitions as full before/after, the rest as changed-cell lists."""
     out = [f"INITIAL BOARD (transition 0 BEFORE):\n{tr[0][1].ascii}\n"]
     for i, (a, b, af) in enumerate(tr):
@@ -87,8 +91,8 @@ def score(code, tr):
 
 def main(games):
     cfg = DEFAULT_CONFIG
-    client = ChatClient(cfg["base_url"], cfg["model"], temperature=0.6, top_p=0.95, max_tokens=8000,
-                        extra_body={"chat_template_kwargs": {"enable_thinking": True}})
+    client = ChatClient(cfg["base_url"], cfg["model"], temperature=0.6 if THINK else 0.3, top_p=0.95, max_tokens=MAX_OUT,
+                        extra_body={"chat_template_kwargs": {"enable_thinking": THINK}})
     results = {}
     for game in games:
         tr = collect(game)
