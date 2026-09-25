@@ -32,7 +32,7 @@ PRESETS = {
                    "vllm_flags": ["--tool-call-parser", "openai", "--reasoning-parser", "openai_gptoss"],
                    "extra_datasets": ["sungsuhyun/tiktoken-o200k-cache"],   # o200k_base vocab under its sha1 name: harmony loads it offline
                    "env": {"TIKTOKEN_RS_CACHE_DIR": "/kaggle/input/datasets/sungsuhyun/tiktoken-o200k-cache"},
-                   "extra_body": {"reasoning_effort": "low"}, "max_tokens": 6144, "cfg_extra": {"tool_choice_required": True}},
+                   "extra_body": {"reasoning_effort": "high"}, "max_tokens": 8192, "cfg_extra": {"tool_choice_required": False}},   # v7: low effort + required tool choice acted a lot but poorly
 }
 PRESET = PRESETS[_ARGS.preset]
 KERNEL_ID = PRESET["kernel"]
