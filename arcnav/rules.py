@@ -102,7 +102,7 @@ def induce(transitions: list, current_frame) -> tuple[list[Rule], list[str]]:
                 continue
             po, _ = _objs(t.before_frame); co, _ = _objs(t.after_frame)
             from .nav import _moved
-            mv = [(o, dx, dy) for o, dx, dy in _moved(po, co) if o["size"] <= 400]
+            mv = [(o, dx, dy) for o, dx, dy in _moved(po, co) if 4 <= o["size"] <= 400]   # ignore 1-3 px specks (ar25 false trigger)
             if len(mv) < 2:
                 continue
             seen_moves += 1
@@ -117,7 +117,7 @@ def induce(transitions: list, current_frame) -> tuple[list[Rule], list[str]]:
                 elif (dx, dy) == (-adx, -ady):
                     pairs[("mirror_xy", o["color"], o["size"])] += 1
         for (kind, color, size), n in pairs.items():
-            if n >= 2:
+            if n >= 2 and n * 2 >= seen_moves:   # the second body must move in at least half of the observed moves
                 rules.append(Rule("mirror", {"how": kind, "color": color, "size": size}, support=n, counter=max(0, seen_moves - n)))
     # 2. gauge and refills
     g = nav.gauge()
