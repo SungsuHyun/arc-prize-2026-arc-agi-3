@@ -150,3 +150,132 @@ def masked_ascii(frame: "Frame") -> str:
                 for c in range(c0, c1 + 1):
                     rows[r][c] = "."
     return "\n".join("".join(r) for r in rows)
+
+
+def infer_cell_grid(grid: list[list[int]], min_n: int = 6, max_n: int = 32, tolerance: float = 0.06):
+    """Recover the game's logical N x N cell grid from a 64 x 64 nearest-neighbour render.
+    Returns (n, cells) with cells[r][c] = the dominant colour of block (r, c), or None if no N fits."""
+    h = len(grid)
+    best = None
+    for n in range(min_n, max_n + 1):
+        bounds = [int(i * h / n) for i in range(n + 1)]
+        bad = 0; cells = []
+        for r in range(n):
+            row = []
+            for c in range(n):
+                vals = Counter(grid[i][j] for i in range(bounds[r], bounds[r + 1]) for j in range(bounds[c], bounds[c + 1]))
+                colour, cnt = vals.most_common(1)[0]
+                total = sum(vals.values())
+                if cnt < total:
+                    bad += 1
+                row.append(colour)
+            cells.append(row)
+        if bad <= tolerance * n * n:
+            return n, cells
+    return None
+
+
+def cell_bounds(n: int, size: int = 64) -> list[int]:
+    return [int(i * size / n) for i in range(n + 1)]
+
+
+def cell_lattice(grid: list[list[int]], hud_rows: set | None = None, hud_cols: set | None = None, min_votes: int = 2):
+    """Recover the cell lattice of a rendered game grid from colour-change positions.
+    Returns (row_bounds, col_bounds): boundary indices (a cell spans [b[k], b[k+1])). Works for any scaling."""
+    h, w = len(grid), len(grid[0])
+    hud_rows = hud_rows or set(); hud_cols = hud_cols or set()
+    col_votes = [0] * (w + 1); row_votes = [0] * (h + 1)
+    for i in range(h):
+        if i in hud_rows:
+            continue
+        for j in range(1, w):
+            if grid[i][j] != grid[i][j - 1]:
+                col_votes[j] += 1
+    for j in range(w):
+        if j in hud_cols:
+            continue
+        for i in range(1, h):
+            if grid[i][j] != grid[i - 1][j]:
+                row_votes[i] += 1
+    col_b = [0] + [j for j in range(1, w) if col_votes[j] >= min_votes] + [w]
+    row_b = [0] + [i for i in range(1, h) if row_votes[i] >= min_votes] + [h]
+    return row_b, col_b
+
+
+def to_cells(grid: list[list[int]], row_b: list[int], col_b: list[int]) -> list[list[int]]:
+    """Dominant colour per lattice cell."""
+    out = []
+    for r in range(len(row_b) - 1):
+        row = []
+        for c in range(len(col_b) - 1):
+            vals = Counter(grid[i][j] for i in range(row_b[r], row_b[r + 1]) for j in range(col_b[c], col_b[c + 1]))
+            row.append(vals.most_common(1)[0][0])
+        out.append(row)
+    return out
+
+
+def hud_lines(frame) -> tuple[set, set]:
+    rows, cols = set(), set()
+    for n in frame.segmentation["nodes"]:
+        if n["hud"]:
+            r0, c0, r1, c1 = n["bbox"]
+            if r1 - r0 <= 2:
+                rows |= set(range(r0, r1 + 1))
+            if c1 - c0 <= 2:
+                cols |= set(range(c0, c1 + 1))
+    return rows, cols
+
+
+def texture_colors(grid: list[list[int]]) -> set:
+    """Colours that occur mostly as isolated 1-px runs (checkerboard textures inside cells)."""
+    stats: dict = {}
+    for row in grid:
+        prev = row[0]; k = 0
+        for v in row + [None]:
+            if v == prev:
+                k += 1
+            else:
+                s = stats.setdefault(prev, [0, 0]); s[0] += 1; s[1] += (k == 1)
+                prev = v; k = 1
+    return {c for c, (n, ones) in stats.items() if n >= 8 and ones / n > 0.8}
+
+
+def find_lattice(grid: list[list[int]], ignore: set | None = None, n_range=(6, 24), origins=(0, 1, 2, 3, 4)):
+    """Find (n, origin, bounds) such that colour-change positions (ignoring texture colours) fall on the lattice
+    round(origin + k*(64-2*origin)/n). Returns (coverage, n, origin, bounds) or None."""
+    ignore = ignore or set()
+    h, w = len(grid), len(grid[0])
+    col_changes: Counter = Counter(); row_changes: Counter = Counter()
+    for i in range(h):
+        for j in range(1, w):
+            if grid[i][j] != grid[i][j - 1] and grid[i][j] not in ignore and grid[i][j - 1] not in ignore:
+                col_changes[j] += 1
+    for j in range(w):
+        for i in range(1, h):
+            if grid[i][j] != grid[i - 1][j] and grid[i][j] not in ignore and grid[i - 1][j] not in ignore:
+                row_changes[i] += 1
+    total = sum(col_changes.values()) + sum(row_changes.values())
+    if not total:
+        return None
+    best = None
+    for n in range(n_range[0], n_range[1] + 1):
+        for o in origins:
+            step = (w - 2 * o) / n
+            bounds = [round(o + k * step) for k in range(n + 1)]
+            bs = set(bounds)
+            hit = sum(v for j, v in col_changes.items() if j in bs) + sum(v for i, v in row_changes.items() if i in bs)
+            cov = hit / total
+            if best is None or cov > best[0] + 1e-9 or (abs(cov - best[0]) < 1e-9 and n < best[1]):
+                best = (cov, n, o, bounds)
+    return best
+
+
+def lattice_cells(grid: list[list[int]], bounds: list[int]) -> list[list[Counter]]:
+    """Colour histogram per lattice cell (cells outside the lattice margin are ignored)."""
+    out = []
+    for r in range(len(bounds) - 1):
+        row = []
+        for c in range(len(bounds) - 1):
+            row.append(Counter(grid[i][j] for i in range(bounds[r], bounds[r + 1]) for j in range(bounds[c], bounds[c + 1])))
+        out.append(row)
+    return out

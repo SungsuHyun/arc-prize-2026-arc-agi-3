@@ -1,0 +1,95 @@
+"""Autopilot for two-body (mirrored) merge games in cell space: lattice from the body, plan on cells,
+execute step by step, verify against the prediction, refine passable colours, replan. No model calls."""
+from __future__ import annotations
+
+from typing import Optional
+
+from .frame import texture_colors
+from .nav import extract_objects
+from .planner import lattice_from_body, cell_of, cell_colors, two_body_merge_cells
+
+TF = {"same": (1, 1), "mirror_x": (1, -1), "mirror_y": (-1, 1), "mirror_xy": (-1, -1)}
+MOVES = {"UP": (-1, 0), "DOWN": (1, 0), "LEFT": (0, -1), "RIGHT": (0, 1)}
+
+
+def _bodies(grid, color, min_size=4):
+    objs, _ = extract_objects(grid)
+    return sorted([o for o in objs if o["color"] == color and o["size"] >= min_size], key=lambda o: (o["center"][1], o["center"][0]))
+
+
+def run_two_body(session, *, body_color: int, transform: str, floor_colors: set, max_replans: int = 8, max_actions: int = 120, log=print) -> dict:
+    level0 = session.level; start_actions = session.actions_used
+    grid = session.frame.grid; tex = texture_colors(grid)
+    passable = set(floor_colors) | {body_color}; hazards = set(tex); forbidden = set()
+    replans = 0
+    while replans <= max_replans and session.actions_used - start_actions < max_actions:
+        grid = session.frame.grid; b = _bodies(grid, body_color)
+        if len(b) != 2:
+            return {"completed": False, "actions": session.actions_used - start_actions, "replans": replans, "reason": f"{len(b)} bodies visible"}
+        rows, cols = lattice_from_body(b[0]["bbox"])
+        cells = cell_colors(grid, rows, cols)
+        A, B = cell_of(b[0]["bbox"], rows, cols), cell_of(b[1]["bbox"], rows, cols)
+        plan = two_body_merge_cells(cells, A, B, transform, passable, hazards, forbidden=forbidden)
+        log(f"autopilot: replan {replans}: lattice {len(rows)-1}x{len(cols)-1}, A{A} B{B}, passable={sorted(passable)}, hazards={sorted(hazards)}, forbidden={sorted(forbidden)}, plan={plan}")
+        if not plan:
+            return {"completed": False, "actions": session.actions_used - start_actions, "replans": replans, "reason": "no plan"}
+        replans += 1
+        tf = TF[transform]
+        for k, act in enumerate(plan):
+            dr, dc = MOVES[act]
+            def stp(pos, r_, c_):
+                r, c = pos[0] + r_, pos[1] + c_
+                if not (0 <= r < len(cells) and 0 <= c < len(cells[0])):
+                    return pos
+                if cells[r][c][1] & hazards:
+                    return (r, c)
+                if cells[r][c][0] not in passable:
+                    return pos
+                return (r, c)
+            pa, pb = stp(A, dr, dc), stp(B, tf[0] * dr, tf[1] * dc)
+            res = session.execute([{"action": act}])
+            if res["level_completed"] or session.level > level0:
+                return {"completed": True, "actions": session.actions_used - start_actions, "replans": replans, "reason": "level completed"}
+            if res["game_over"]:
+                return {"completed": False, "actions": session.actions_used - start_actions, "replans": replans, "reason": "game over"}
+            grid = session.frame.grid; b2 = _bodies(grid, body_color)
+            if len(b2) != 2:   # bodies touched and segment as one: finish the next planned steps blindly
+                rest = plan[k + 1:][:3]
+                if rest:
+                    res = session.execute([{"action": x} for x in rest])
+                    if res["level_completed"] or session.level > level0:
+                        return {"completed": True, "actions": session.actions_used - start_actions, "replans": replans, "reason": "level completed"}
+                break
+            cells = cell_colors(grid, rows, cols)
+            c1, c2 = cell_of(b2[0]["bbox"], rows, cols), cell_of(b2[1]["bbox"], rows, cols)
+            # identity: the bodies may cross; assign observed cells to predictions by total distance
+            d = lambda x, y: abs(x[0] - y[0]) + abs(x[1] - y[1])
+            A2, B2 = ((c1, c2) if d(c1, pa) + d(c2, pb) <= d(c2, pa) + d(c1, pb) else (c2, c1))
+            if A2 == pa and B2 == pb:
+                A, B = A2, B2
+                continue
+            log(f"autopilot: divergence on {act}: predicted A{pa} B{pb}, actual A{A2} B{B2}")
+            jumped = [(pred, act_pos, body, d) for pred, act_pos, body, d in ((pa, A2, A, (dr, dc)), (pb, B2, B, (tf[0] * dr, tf[1] * dc)))
+                      if act_pos != pred and act_pos != body and act_pos != (body[0] + d[0], body[1] + d[1])]
+            if jumped:   # a reset: blame the body whose target cell shows hazard texture; if none does, blame both
+                blamed = [(body, d) for _, _, body, d in jumped
+                          if 0 <= body[0] + d[0] < len(cells) and 0 <= body[1] + d[1] < len(cells[0]) and (cells[body[0] + d[0]][body[1] + d[1]][1] & hazards)]
+                if not blamed:
+                    blamed = [(body, d) for _, _, body, d in jumped]
+                for body, d in blamed:
+                    forbidden.add((body[0] + d[0], body[1] + d[1]))
+                log(f"autopilot: reset; forbidding {sorted(forbidden)}")
+                break
+            for pred, act_pos, body, (r_, c_) in ((pa, A2, A, (dr, dc)), (pb, B2, B, (tf[0] * dr, tf[1] * dc))):
+                if act_pos == pred:
+                    continue
+                target = (body[0] + r_, body[1] + c_)
+                in_grid = 0 <= target[0] < len(cells) and 0 <= target[1] < len(cells[0])
+                if act_pos == body and in_grid:        # blocked where we predicted a move
+                    passable.discard(cells[target[0]][target[1]][0]); log(f"autopilot: colour {cells[target[0]][target[1]][0]} is a wall")
+                elif act_pos == target and in_grid:    # moved where we predicted a block
+                    passable.add(cells[target[0]][target[1]][0]); log(f"autopilot: colour {cells[target[0]][target[1]][0]} is passable")
+                elif in_grid:
+                    forbidden.add(target); log(f"autopilot: unexpected position after entering {target}; forbidding it")
+            break
+    return {"completed": False, "actions": session.actions_used - start_actions, "replans": replans, "reason": "budget exhausted"}
