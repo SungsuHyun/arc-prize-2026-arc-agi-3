@@ -92,17 +92,27 @@ def induce(transitions: list, current_frame) -> tuple[list[Rule], list[str]]:
         rules.append(Rule("wall", {"color": color}, support=n))
     # 2. gauge and refills
     g = nav.gauge()
+    av0 = nav.avatar(); avatar_cols = set(av0["colors"]) if av0 else set()
+    for (color, size), _ in nav.player_votes.most_common(5):
+        avatar_cols.add(color)
     if g:
         rules.append(Rule("gauge", {"color": g["color"], "per_action": g["per_action"]}, support=len(transitions)))
         color = g["color"]
+        refills: Counter = Counter(); amounts: dict = {}
         for t in transitions:
             b, af = _count(t.before_frame, color), _count(t.after_frame, color)
             if af > b + 2:
-                # which colour vanished near the avatar at the same time?
-                gone = [o for o in _objs(t.before_frame)[0] if o["size"] <= 40 and not any(
-                    p["color"] == o["color"] and p["center"] == o["center"] for p in _objs(t.after_frame)[0])]
+                # a small non-avatar object that vanished where the avatar arrived
+                av_a = NavHelper(transitions, t.after_frame).avatar()
+                after_objs = _objs(t.after_frame)[0]
+                gone = [o for o in _objs(t.before_frame)[0] if o["size"] <= 40 and o["color"] not in avatar_cols and o["color"] != nav.background
+                        and o["color"] not in nav.floor_colors
+                        and not any(p["color"] == o["color"] and p["center"] == o["center"] for p in after_objs)
+                        and (not av_a or (abs(o["center"][1] - av_a["row"]) <= 6 and abs(o["center"][0] - av_a["col"]) <= 6))]
                 for o in gone[:1]:
-                    rules.append(Rule("refill", {"color": o["color"], "amount": af - b}, support=1))
+                    refills[o["color"]] += 1; amounts[o["color"]] = af - b
+        for c, n in refills.items():
+            rules.append(Rule("refill", {"color": c, "amount": amounts[c]}, support=n))
     # 3. collectibles and hazards (movement games)
     if moves:
         vanish: Counter = Counter(); reset_colors: Counter = Counter()
