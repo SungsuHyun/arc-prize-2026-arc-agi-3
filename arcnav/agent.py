@@ -33,12 +33,13 @@ class GameSession:
     def __init__(self, env, game_id: str, client: Optional[ChatClient], *, log_dir: Path, max_minutes: float = 20.0,
                  max_actions: int = 3000, max_model_turns: int = 400, keep_full_turns: int = 3, tool_timeout: int = 30,
                  context_tokens: int = 32768, verbose: bool = True, deadline: Optional[float] = None, think_first_turns: int = 0,
-                 tool_choice_required: bool = False):
+                 tool_choice_required: bool = False, oracle_rules: str = ""):
         self.env, self.game_id, self.client = env, game_id, client
         self.log_dir = Path(log_dir); self.log_dir.mkdir(parents=True, exist_ok=True)
         self.max_minutes, self.max_actions, self.max_model_turns = max_minutes, max_actions, max_model_turns
         self.keep_full_turns, self.tool_timeout, self.context_tokens, self.verbose = keep_full_turns, tool_timeout, context_tokens, verbose
         self.deadline = deadline   # absolute epoch seconds (global run cap), optional
+        self.oracle_rules = oracle_rules   # D1 diagnostic: ground-truth rules injected into every turn (never in submissions)
         self.tool_choice_required = tool_choice_required   # force a tool call every turn (models with flaky tool formatting)
         self.think_first_turns = think_first_turns   # iter3: chain-of-thought ON for the first N model turns of every level
         self.level_turn_start = 0
@@ -461,6 +462,8 @@ class GameSession:
     def _user_message(self) -> str:
         parts = [turn_header(level=self.level, levels_total=self.levels_total, actions_used=self.actions_used, level_actions=self.level_actions,
                              valid_actions=self.valid_actions, budget_line=self._budget_line())]
+        if self.oracle_rules:
+            parts.append("KNOWN RULES OF THIS GAME (given, trust them fully):\n" + self.oracle_rules)
         try:
             parts += self._checklist_lines()
             parts += self._new_kinds_lines()
