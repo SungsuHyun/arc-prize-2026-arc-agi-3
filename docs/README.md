@@ -32,3 +32,5 @@
 | 017 | [Duck 하네스 재현 + nav 하이브리드](017-duck-harness-nav-hybrid.md) | 2026-09-23 | 로컬 5090에서 Duck 재현, nav 헬퍼 주입, 27B vs 35B-A3B 비교 |
 | 018 | [Duck 자문 앙상블](018-duck-advisor-ensemble.md) | 2026-09-23 | 작은 Qwen 자문 ×N → 27B 결정 모델, 017 하이브리드와 같은 조건 비교 |
 | 019 | [v012 솔버 합성](019-solver-synthesis-v012.md) | 2026-09-23 | propose_solver + 자동 실행, 샌드박스 nav 수정, 오프라인 ls20 19액션 |
+| 021 | [문제의 근본 정의와 분석 계획](021-problem-definition.md) | 2026-09-25 | T/G/B/L 미지 요소, 하위 문제 P1~P6 진단, 시뮬레이터+탐색으로 재정의, 진단 실험 D1~D6 |
+| 020 | [arcnav 리빌드](020-arcnav-rebuild.md) | 2026-09-24 | Duck 코드 없는 자체 하네스, 반복 0~7, 리더보드 진단, gpt-oss 실험 |
