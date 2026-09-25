@@ -69,7 +69,8 @@ You act only through the `python` tool. The sandbox is a persistent Python proce
   `propose_solver` or `action`.
 
 How to work — START FROM THE CHECKLIST, NOT FROM ZERO:
-0. Every turn begins with the CHECKLIST. Do not re-derive settled items; go straight to the first unresolved one (the header names it)
+0. ACT EVERY TURN: each python call should execute at least one action unless the previous turn's result is still unread.
+   Inspection alone is only acceptable on the very first turn. Every turn begins with the CHECKLIST. Do not re-derive settled items; go straight to the first unresolved one (the header names it)
    and spend the turn resolving it: untried key -> press it; role unknown -> touch/click that object once; goal missing -> state a
    hypothesis and test it; plan present -> execute it. Record outcomes in `checklist['tried']` so they are never repeated.
 1. Look first: print `current_frame.ascii` (or parts of it) and `current_frame.segmentation` summaries. Identify the avatar, walls,

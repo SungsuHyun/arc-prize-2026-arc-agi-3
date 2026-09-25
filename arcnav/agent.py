@@ -67,6 +67,7 @@ class GameSession:
         self._run_actions = 0
         self.game_overs_this_level = 0
         self.rejections_in_row = 0
+        self.zero_action_turns = 0   # consecutive model turns that executed nothing
         self.probe_sweeps: dict[int, str] = {}   # iter4: level -> transition table from the harness probe sweep
         self.level_recaps: list[str] = []   # harness-written summaries of how each completed level was won
         self.recent_codes: list[str] = []   # repetition guard: identical tool code is not executed twice in a row
@@ -497,9 +498,12 @@ class GameSession:
         if self.oracle_rules:
             parts.append("KNOWN RULES OF THIS GAME (given, trust them fully):\n" + self.oracle_rules)
         try:
-            parts += self._checklist_lines()
-            parts += self._rule_lines()
-            parts += self._new_kinds_lines()
+            block = self._checklist_lines() + self._rule_lines() + self._new_kinds_lines()
+            key = "\n".join(block)
+            if key != getattr(self, "_last_block", None) or self.model_turns % 5 == 0:
+                parts += block; self._last_block = key
+            else:
+                parts.append("(checklist and rules unchanged since last turn)")
         except Exception as e:
             parts.append(f"(checklist unavailable: {type(e).__name__})")
         if self.last_outcome:
@@ -738,6 +742,16 @@ class GameSession:
             self.last_outcome += self._micro_diff_lines(before_n)
         except Exception:
             pass
+        if len(self.host_transitions) == before_n:
+            self.zero_action_turns += 1
+            if self.zero_action_turns >= 2 and self.valid_actions:
+                try:   # analysis paralysis: keep the game moving with one untried action and report what it did
+                    self.last_outcome.append("You have spent 2 turns without acting. " + self._host_probe())
+                except Exception:
+                    pass
+                self.zero_action_turns = 0
+        else:
+            self.zero_action_turns = 0
         # harness-written 'tried' entry: what this turn did and what happened
         new = self.host_transitions[before_n:]
         acts = [t.action if isinstance(t.action, str) else "MOUSE" for t in new]
