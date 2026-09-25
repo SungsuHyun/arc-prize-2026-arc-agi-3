@@ -132,10 +132,14 @@ def build() -> dict:
                     raise TimeoutError(open(f'{{WORK}}/vllm-server.log').read()[-4000:])
                 time.sleep(5)
         print(f'vLLM ready after {{time.time()-t0:.0f}}s')
-        req = urllib.request.Request('http://127.0.0.1:1234/v1/chat/completions', data=json.dumps({{'model': '{SERVED_MODEL}', 'max_tokens': 64,
-              'messages': [{{'role': 'user', 'content': 'Say hello in five words.'}}]}}).encode(),
+        req = urllib.request.Request('http://127.0.0.1:1234/v1/chat/completions', data=json.dumps({{'model': '{SERVED_MODEL}', 'max_tokens': 400,
+              'messages': [{{'role': 'user', 'content': 'Say hello in five words.'}}], **{PRESET["extra_body"]!r}}}).encode(),
               headers={{'Content-Type': 'application/json'}})
-        print('smoke:', json.loads(urllib.request.urlopen(req, timeout=300).read())['choices'][0]['message']['content'][:200])
+        try:
+            _m = json.loads(urllib.request.urlopen(req, timeout=300).read())['choices'][0]['message']
+            print('smoke:', repr((_m.get('content') or '')[:200]), '| reasoning:', repr((_m.get('reasoning_content') or _m.get('reasoning') or '')[:120]))
+        except Exception as _e:   # the smoke chat is informational; the game run below is the real test
+            print('smoke chat failed:', repr(_e)[:300])
         """))
 
     play_cell = code_cell(dedent(f"""\
