@@ -111,14 +111,14 @@ def cell_colors(grid, rows, cols):
     return out
 
 
-def two_body_merge_cells(cells, a, b, transform: str, passable, hazard_colors=(), max_nodes: int = 200000, forbidden=()) -> Optional[list[str]]:
+def two_body_merge_cells(cells, a, b, transform: str, passable, hazard_colors=(), max_nodes: int = 200000, forbidden=(), blocked=()) -> Optional[list[str]]:
     """cells[r][c] = (dominant, colour set). a, b = (row, col) cell coords. Moves are one cell.
     A move is blocked for a body if the target cell's dominant colour is not passable (or off-grid).
     Hazard cells (containing a hazard colour) are never entered."""
     H, W = len(cells), len(cells[0])
     MOVES = {"UP": (-1, 0), "DOWN": (1, 0), "LEFT": (0, -1), "RIGHT": (0, 1)}
     tf = {"same": (1, 1), "mirror_x": (1, -1), "mirror_y": (-1, 1), "mirror_xy": (-1, -1)}[transform]   # (row sign, col sign)
-    hz = set(hazard_colors); fb = set(forbidden)
+    hz = set(hazard_colors); fb = set(forbidden); blocked = set(blocked); passable = set(passable)
 
     def step(pos, dr, dc):
         r, c = pos[0] + dr, pos[1] + dc
@@ -127,7 +127,7 @@ def two_body_merge_cells(cells, a, b, transform: str, passable, hazard_colors=()
         dom, cols = cells[r][c]
         if cols & hz:            # hazard-textured cells are enterable (and deadly), never walls
             return (r, c)
-        if dom not in passable:
+        if not cols <= passable or (r, c) in blocked:   # any unknown sprite in the cell blocks (gates, doors)
             return pos
         return (r, c)
 

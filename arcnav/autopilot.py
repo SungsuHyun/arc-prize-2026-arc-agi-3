@@ -20,7 +20,7 @@ def _bodies(grid, color, min_size=4):
 def run_two_body(session, *, body_color: int, transform: str, floor_colors: set, max_replans: int = 8, max_actions: int = 120, log=print) -> dict:
     level0 = session.level; start_actions = session.actions_used
     grid = session.frame.grid; tex = texture_colors(grid)
-    passable = set(floor_colors) | {body_color}; hazards = set(tex); forbidden = set()
+    passable = set(floor_colors) | {body_color}; hazards = set(tex); forbidden = set(); blocked_cells = set()
     replans = 0
     while replans <= max_replans and session.actions_used - start_actions < max_actions:
         grid = session.frame.grid; b = _bodies(grid, body_color)
@@ -29,7 +29,7 @@ def run_two_body(session, *, body_color: int, transform: str, floor_colors: set,
         rows, cols = lattice_from_body(b[0]["bbox"])
         cells = cell_colors(grid, rows, cols)
         A, B = cell_of(b[0]["bbox"], rows, cols), cell_of(b[1]["bbox"], rows, cols)
-        plan = two_body_merge_cells(cells, A, B, transform, passable, hazards, forbidden=forbidden)
+        plan = two_body_merge_cells(cells, A, B, transform, passable, hazards, forbidden=forbidden, blocked=blocked_cells)
         log(f"autopilot: replan {replans}: lattice {len(rows)-1}x{len(cols)-1}, A{A} B{B}, passable={sorted(passable)}, hazards={sorted(hazards)}, forbidden={sorted(forbidden)}, plan={plan}")
         if not plan:
             return {"completed": False, "actions": session.actions_used - start_actions, "replans": replans, "reason": "no plan"}
@@ -43,7 +43,7 @@ def run_two_body(session, *, body_color: int, transform: str, floor_colors: set,
                     return pos
                 if cells[r][c][1] & hazards:
                     return (r, c)
-                if cells[r][c][0] not in passable:
+                if not cells[r][c][1] <= passable or (r, c) in blocked_cells:
                     return pos
                 return (r, c)
             pa, pb = stp(A, dr, dc), stp(B, tf[0] * dr, tf[1] * dc)
@@ -86,9 +86,13 @@ def run_two_body(session, *, body_color: int, transform: str, floor_colors: set,
                 target = (body[0] + r_, body[1] + c_)
                 in_grid = 0 <= target[0] < len(cells) and 0 <= target[1] < len(cells[0])
                 if act_pos == body and in_grid:        # blocked where we predicted a move
-                    passable.discard(cells[target[0]][target[1]][0]); log(f"autopilot: colour {cells[target[0]][target[1]][0]} is a wall")
+                    extra = cells[target[0]][target[1]][1] - passable
+                    if extra:
+                        log(f"autopilot: colours {sorted(extra)} block")   # already implied by the whitelist; nothing to change
+                    else:
+                        blocked_cells.add(target); log(f"autopilot: cell {target} blocks although it looks like floor")
                 elif act_pos == target and in_grid:    # moved where we predicted a block
-                    passable.add(cells[target[0]][target[1]][0]); log(f"autopilot: colour {cells[target[0]][target[1]][0]} is passable")
+                    passable |= cells[target[0]][target[1]][1]; blocked_cells.discard(target); log(f"autopilot: colours {sorted(cells[target[0]][target[1]][1])} are passable")
                 elif in_grid:
                     forbidden.add(target); log(f"autopilot: unexpected position after entering {target}; forbidding it")
             break
