@@ -135,7 +135,7 @@ class GameSession:
                     for i, t in enumerate(cur):   # last attempt = after the last reset on that level
                         if i > 0 and t.before_frame.ascii == first_ascii:
                             start = i
-                    hyps = goal_inference.infer(cur[start:], prev_level)
+                    hyps = goal_inference.infer(cur[start:], prev_level, movement_keys=any(a in self.valid_actions for a in ("UP", "DOWN", "LEFT", "RIGHT")))
                     if hyps:
                         self.goal_hypotheses = hyps + [h for h in self.goal_hypotheses if h.get("level") != prev_level]
                         self._log("goal hypotheses: " + " | ".join(h["text"] for h in hyps[:3]))

@@ -19,7 +19,7 @@ def _objs(frame):
     return extract_objects(frame.grid)[0]
 
 
-def infer(attempt: list, level: int) -> list[dict]:
+def infer(attempt: list, level: int, movement_keys: bool = True) -> list[dict]:
     """attempt: transitions of the winning attempt on `level` (last one enters level+1)."""
     if not attempt:
         return []
@@ -64,7 +64,7 @@ def infer(attempt: list, level: int) -> list[dict]:
             hyps.append({"type": "collect_all", "collect": c, "collect_count": n, "text": f"make every colour-{c} object disappear ({n} on level {level}); the level ended when the last one vanished"})
     # click games: the winning click order by colour
     clicks = [t.action for t in same if isinstance(t.action, dict)]
-    if clicks and not nav.moves:
+    if clicks and not movement_keys:
         seq = []
         for t in same:
             if isinstance(t.action, dict):
