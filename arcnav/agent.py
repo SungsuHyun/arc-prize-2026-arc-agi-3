@@ -49,6 +49,8 @@ class GameSession:
         self.level_turn_start = 0
         self.transitions: list[dict] = []          # payloads for the sandbox
         self.host_transitions: list[_T] = []       # Frame views for the host NavHelper
+        self.attempt_start_index = 0               # index into host_transitions where the current level attempt began
+        self.cycle_hits_this_level = 0
         self.frame: Optional[Frame] = None
         self.level, self.levels_total, self.state = 1, 0, "NOT_PLAYED"
         self.valid_actions: list[str] = []
@@ -126,6 +128,7 @@ class GameSession:
             results.append({"action": label, "changed": ch})
             if self.level > prev_level or self.state == "WIN":
                 level_completed = True; self.level_action_log.append(self.level_actions); self.level_actions = 0; self.game_overs_this_level = 0; self.cycle_hits_this_level = 0
+                self.attempt_start_index = len(self.host_transitions)   # cycle guard compares states within the current attempt only
                 self.level_turn_start = self.model_turns
                 try:
                     self.level_recaps.append(self._level_recap(prev_level))
@@ -148,6 +151,7 @@ class GameSession:
                 stopped = "level completed" if self.state != "WIN" else "game won"; break
             if self.state == "GAME_OVER":
                 game_over = True; self.game_overs_this_level += 1; self._log("*** game over -> reset"); self.reset(); stopped = "game over (reset done, level restarted)"
+                self.attempt_start_index = len(self.host_transitions); self.cycle_hits_this_level = 0
                 self.level_turn_start = self.model_turns   # re-open the thinking window: the level restarts, re-plan with reasoning
                 break
         return {"executed_count": executed, "board_changed": changed_any, "level_completed": level_completed, "game_over": game_over,
@@ -650,9 +654,12 @@ class GameSession:
             pass
         return "; ".join(parts) if parts else "nothing obvious is untried: change the ORDER (e.g. interact right after arriving) or combine keys."
 
-    def _cycle_lines(self) -> list[str]:
-        """Detect (a) a board state already visited on this level and (b) a repeated action sequence; both mean the model is looping."""
-        cur = [t for t in self.host_transitions if t.before_frame.level == t.after_frame.level == self.level]
+    def _cycle_lines(self, before_n: int) -> list[str]:
+        """Detect (a) a board state already visited in this level attempt and (b) a repeated action sequence; both mean the model is looping.
+        Only evaluated on turns that executed at least one action (a warning is not repeated while the model merely thinks)."""
+        if len(self.host_transitions) == before_n:
+            return []
+        cur = [t for t in self.host_transitions[self.attempt_start_index:] if t.before_frame.level == t.after_frame.level == self.level]
         if len(cur) < 4 or self.frame is None:
             return []
         out = []
@@ -660,10 +667,12 @@ class GameSession:
         for t in cur:
             a = t.action
             labels.append(a if isinstance(a, str) else f"MOUSE({a['row'] // 4},{a['col'] // 4})")
-        # (b) period detection on the last actions: the same sequence of length k executed twice in a row (k = 1..8)
+        # (b) period detection on the last actions: the same sequence of length k (2..8) executed 3x in a row for short k, 2x for k >= 4
+        #     (k = 1 is excluded: walking UP UP UP or clicking a toggle twice is normal play; a real loop shows up as a state revisit)
         period = None
-        for k in range(1, 9):
-            if len(labels) >= 2 * k and labels[-k:] == labels[-2 * k:-k] and len(set(labels[-k:])) >= 1:
+        for k in range(2, 9):
+            reps = 3 if k <= 3 else 2
+            if len(labels) >= reps * k and all(labels[-k:] == labels[-(i + 1) * k:-i * k or None] for i in range(1, reps)) and len(set(labels[-k:])) >= 2:
                 period = k
         # (a) state revisit: the current masked board equals the board after an earlier action on this level
         now = masked_ascii(self.frame)
@@ -682,8 +691,8 @@ class GameSession:
             seq = " ".join(f"{a}x{n}" if n > 1 else a for a, n in compact)[:200]
             out.append(f"LOOP DETECTED: the board is identical to what it was after action #{first + 1} of this level, {len(since)} actions ago. "
                        f"The actions since then ({seq}) form a cycle and cannot progress the level. Do NOT repeat them. Untried here: {self._untried_here()}")
-        elif period and period >= 1 and len(cur) >= 2 * period + 1:
-            out.append(f"REPEATED SEQUENCE: your last {period} action(s) ({' '.join(labels[-period:])}) are the same as the {period} before them. "
+        elif period:
+            out.append(f"REPEATED SEQUENCE: your last {period} actions ({' '.join(labels[-period:])}) repeat the {period} before them. "
                        f"If the board did not move closer to the goal, stop repeating. Untried here: {self._untried_here()}")
         if out:
             self.cycle_hits_this_level = getattr(self, "cycle_hits_this_level", 0) + 1
@@ -847,7 +856,7 @@ class GameSession:
         except Exception:
             pass
         try:
-            self.last_outcome += self._cycle_lines()
+            self.last_outcome += self._cycle_lines(before_n)
         except Exception as e:
             self._log(f"cycle guard error: {type(e).__name__}: {e}")
         if len(self.host_transitions) == before_n:
