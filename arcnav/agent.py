@@ -125,7 +125,7 @@ class GameSession:
             ch = before.ascii != after.ascii; changed_any |= ch
             results.append({"action": label, "changed": ch})
             if self.level > prev_level or self.state == "WIN":
-                level_completed = True; self.level_action_log.append(self.level_actions); self.level_actions = 0; self.game_overs_this_level = 0
+                level_completed = True; self.level_action_log.append(self.level_actions); self.level_actions = 0; self.game_overs_this_level = 0; self.cycle_hits_this_level = 0
                 self.level_turn_start = self.model_turns
                 try:
                     self.level_recaps.append(self._level_recap(prev_level))
@@ -623,6 +623,75 @@ class GameSession:
         self._event(kind="tool", who=who, code=code, stdout=res["stdout"][:4000], error=res["error"], actions=res["actions_executed"])
         return out or "(no output)"
 
+    def _untried_here(self) -> str:
+        """What has never been tried on this level: keys, clicked objects (by 4x4 cell), reachable targets."""
+        cur = [t for t in self.host_transitions if t.before_frame.level == t.after_frame.level == self.level]
+        used = {t.action for t in cur if isinstance(t.action, str)}
+        parts = []
+        keys = [a for a in self.valid_actions if a != "MOUSE" and a not in used]
+        if keys:
+            parts.append(f"keys never pressed: {keys}")
+        if "MOUSE" in self.valid_actions and self.frame is not None:
+            clicked = {(t.action["row"] // 4, t.action["col"] // 4) for t in cur if isinstance(t.action, dict)}
+            nodes = [n for n in self.frame.segmentation["nodes"] if not n["hud"] and (n["center"][0] // 4, n["center"][1] // 4) not in clicked]
+            nodes.sort(key=lambda n: n["pixels"])
+            if nodes:
+                parts.append("objects never clicked: " + ", ".join(f"colour {n['color']} at {tuple(n['center'])}" for n in nodes[:6]) + (f" (+{len(nodes) - 6} more)" if len(nodes) > 6 else ""))
+        try:
+            nav = NavHelper(cur, self.frame) if self.frame else None
+            if nav and nav.avatar():
+                targets = [tg for tg in nav.targets() if tg.get("path_len") is not None and not tg.get("visited")]
+                if targets:
+                    parts.append("reachable targets: " + ", ".join(f"colour {tg['color']} at ({tg['row']},{tg['col']}) in {tg['path_len']} moves (never visited)" for tg in targets[:5]))
+        except Exception:
+            pass
+        return "; ".join(parts) if parts else "nothing obvious is untried: change the ORDER (e.g. interact right after arriving) or combine keys."
+
+    def _cycle_lines(self) -> list[str]:
+        """Detect (a) a board state already visited on this level and (b) a repeated action sequence; both mean the model is looping."""
+        cur = [t for t in self.host_transitions if t.before_frame.level == t.after_frame.level == self.level]
+        if len(cur) < 4 or self.frame is None:
+            return []
+        out = []
+        labels = []
+        for t in cur:
+            a = t.action
+            labels.append(a if isinstance(a, str) else f"MOUSE({a['row'] // 4},{a['col'] // 4})")
+        # (b) period detection on the last actions: the same sequence of length k executed twice in a row (k = 1..8)
+        period = None
+        for k in range(1, 9):
+            if len(labels) >= 2 * k and labels[-k:] == labels[-2 * k:-k] and len(set(labels[-k:])) >= 1:
+                period = k
+        # (a) state revisit: the current masked board equals the board after an earlier action on this level
+        now = masked_ascii(self.frame)
+        first = None
+        for i, t in enumerate(cur[:-1]):
+            if masked_ascii(t.after_frame) == now:
+                first = i; break
+        if first is not None and len(cur) - 1 - first >= 2:
+            since = labels[first + 1:]
+            compact = []
+            for a in since:
+                if compact and compact[-1][0] == a:
+                    compact[-1][1] += 1
+                else:
+                    compact.append([a, 1])
+            seq = " ".join(f"{a}x{n}" if n > 1 else a for a, n in compact)[:200]
+            out.append(f"LOOP DETECTED: the board is identical to what it was after action #{first + 1} of this level, {len(since)} actions ago. "
+                       f"The actions since then ({seq}) form a cycle and cannot progress the level. Do NOT repeat them. Untried here: {self._untried_here()}")
+        elif period and period >= 1 and len(cur) >= 2 * period + 1:
+            out.append(f"REPEATED SEQUENCE: your last {period} action(s) ({' '.join(labels[-period:])}) are the same as the {period} before them. "
+                       f"If the board did not move closer to the goal, stop repeating. Untried here: {self._untried_here()}")
+        if out:
+            self.cycle_hits_this_level = getattr(self, "cycle_hits_this_level", 0) + 1
+            self._log(f"cycle guard: {out[0][:90]!r} (hit {self.cycle_hits_this_level})")
+            if self.cycle_hits_this_level >= 3 and self.cycle_hits_this_level % 3 == 0 and self.valid_actions:
+                try:
+                    out.append(self._host_probe())
+                except Exception:
+                    pass
+        return out
+
     def _outcome_lines(self, before_n: int) -> list[str]:
         new = self.host_transitions[before_n:]
         extra = []
@@ -773,6 +842,10 @@ class GameSession:
             self.last_outcome += self._micro_diff_lines(before_n)
         except Exception:
             pass
+        try:
+            self.last_outcome += self._cycle_lines()
+        except Exception as e:
+            self._log(f"cycle guard error: {type(e).__name__}: {e}")
         if len(self.host_transitions) == before_n:
             self.zero_action_turns += 1
             if self.zero_action_turns >= 2 and self.valid_actions:
