@@ -88,12 +88,19 @@ class Explorer:
         return f"L{self.s.level}:" + str(hash(tuple(sorted(items))))
 
     KIND_RANK = {"goto+interact": 0, "goto": 0, "interact": 1, "click": 2, "frontier": 3, "key": 4, "key-run": 5}
+    KIND_RANK_MOVEMENT = {"goto+interact": 0, "goto": 0, "interact": 1, "frontier": 2, "key": 3, "key-run": 4, "click": 6}
 
     def _rank(self, level: int, m: Macro) -> tuple:
         """Goal-directed kinds first (after the world changed, re-trying a target is worth more than mapping another corridor),
         then never-tried labels before tried ones, dead labels (same state twice) last."""
         h = self.label_hist.get((level, m.label), [0, 0])
-        return (self.KIND_RANK.get(m.kind, 9), 1 if h[1] >= 2 else 0, 1 if h[0] > 0 else 0, m.priority)
+        ranks = self.KIND_RANK_MOVEMENT if self._movement_game() else self.KIND_RANK
+        dead = h[1] >= (1 if m.kind == "click" else 2)   # a click that changed nothing once is a dead button
+        return (ranks.get(m.kind, 9), 1 if dead else 0, 1 if h[0] > 0 else 0, m.priority)
+
+    def _movement_game(self) -> bool:
+        nav = self._nav()
+        return bool(nav and nav.moves and any(a in self.s.valid_actions for a in MOVE_KEYS))
 
     # ── state ────────────────────────────────────────────────────────────
     def state(self) -> str:
@@ -108,12 +115,18 @@ class Explorer:
 
     # ── macro generation ─────────────────────────────────────────────────
     def _nav(self) -> Optional[NavHelper]:
+        key = (len(self.s.host_transitions), self.s.attempt_start_index, id(self.s.frame))
+        cached = getattr(self, "_nav_cache", None)
+        if cached and cached[0] == key:
+            return cached[1]
         cur = [t for t in self.s.host_transitions[self.s.attempt_start_index:]
                if t.before_frame.level == t.after_frame.level == self.s.level]
         try:
-            return NavHelper(cur, self.s.frame)
+            nav = NavHelper(cur, self.s.frame)
         except Exception:
-            return None
+            nav = None
+        self._nav_cache = (key, nav)
+        return nav
 
     def macros(self, node: Node) -> list[Macro]:
         valid = list(self.s.valid_actions)
@@ -145,8 +158,19 @@ class Explorer:
             out.append(Macro("interact", [{"action": a}], f"{a}", 20))
         if "MOUSE" in valid and self.s.frame is not None:
             clicked = {(t.action["row"] // 4, t.action["col"] // 4) for t in cur if isinstance(t.action, dict)}
-            nodes = [n for n in self.s.frame.segmentation["nodes"] if not n["hud"]]
+            nodes = []
+            for n in self.s.frame.segmentation["nodes"]:
+                if n["hud"]:
+                    continue
+                r0, c0, r1, c1 = n["bbox"]
+                thin = (r1 - r0 <= 2) or (c1 - c0 <= 2)
+                if thin and (r0 <= 1 or r1 >= 62 or c0 <= 1 or c1 >= 62):
+                    continue   # edge strips (gauge / counters) are never click targets
+                if n["pixels"] <= 2 and keys:
+                    continue   # 1-2 px specks in a movement game are marks, not buttons
+                nodes.append(n)
             nodes.sort(key=lambda n: n["pixels"])
+            click_base = 25 if not (keys and nav and nav.moves) else 70   # in a movement game clicking is the last resort
             seen_colors: set = set(); seen_cells: set = set()
             for j, n in enumerate(nodes[:60]):
                 cell = (n["center"][0] // 4, n["center"][1] // 4)
@@ -155,7 +179,7 @@ class Explorer:
                 seen_cells.add(cell)
                 first_of_color = n["color"] not in seen_colors
                 seen_colors.add(n["color"])
-                pr = 25 + (0 if first_of_color else 10) + (20 if cell in clicked else 0) + j // 8
+                pr = click_base + (0 if first_of_color else 10) + (20 if cell in clicked else 0) + j // 8
                 out.append(Macro("click", [{"action": "MOUSE", "row": n["center"][0], "col": n["center"][1]}],
                                  f"click({n['color']}@{n['center'][0]},{n['center'][1]})", pr))
         for a in keys:

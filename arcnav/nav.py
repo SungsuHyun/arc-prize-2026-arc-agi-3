@@ -32,7 +32,23 @@ def _grid_of(frame: Any) -> Optional[list[list[int]]]:
     return [list(map(int, r)) for r in g]
 
 
+_OBJ_CACHE: dict[int, tuple[object, tuple]] = {}   # id(grid) -> (grid, result); grids live in host_transitions, so identity is stable
+
+
 def extract_objects(grid: list[list[int]], max_objects: int = 40) -> list[dict]:
+    """Memoised: NavHelper is rebuilt every turn over the whole history, so the same grids are segmented again and again."""
+    hit = _OBJ_CACHE.get(id(grid))
+    if hit is not None and hit[0] is grid and max_objects == 40:
+        return hit[1]
+    res = _extract_objects(grid, max_objects)
+    if max_objects == 40:
+        if len(_OBJ_CACHE) > 6000:
+            _OBJ_CACHE.clear()
+        _OBJ_CACHE[id(grid)] = (grid, res)
+    return res
+
+
+def _extract_objects(grid: list[list[int]], max_objects: int = 40) -> list[dict]:
     h, w = len(grid), len(grid[0])
     background = Counter(c for row in grid for c in row).most_common(1)[0][0]
     seen = [[False] * w for _ in range(h)]
