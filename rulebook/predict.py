@@ -38,8 +38,9 @@ class Verdict:
 class Evidence:
     """Everything the harness knows for sure at this moment, derived from the transitions."""
 
-    def __init__(self, game: Game):
+    def __init__(self, game: Game, distrust: Optional[dict] = None):
         self.game = game
+        self.distrust = distrust or {}     # click colour -> number of failed board predictions on this level (agent-maintained)
         self.frame: Frame = game.frame
         cur = game.attempt_transitions()
         self.nav = NavHelper(cur, self.frame) if cur or game.has_move_keys() else None
@@ -70,9 +71,16 @@ class Evidence:
                 cls = change_class(t.before_frame, t.after_frame)
                 cur = t.level == game.level
                 (self.click_hist if cur else hist_all).setdefault(c, Counter())[cls] += 1
-                if cls == "world":
-                    k = _object_vanished(t.before_frame, t.after_frame, t.action["row"], t.action["col"])
-                    (self.vanish_to if cur else van_all).setdefault(c, Counter())[k if k is not None else -1] += 1
+                k = _object_vanished(t.before_frame, t.after_frame, t.action["row"], t.action["col"]) if cls == "world" else None
+                (self.vanish_to if cur else van_all).setdefault(c, Counter())[k if k is not None else -1] += 1
+        # marker/cursor rule: after clicking colour c, an object of colour k sits at the click point (moved there)
+        self.cursor: dict[int, Counter] = {}
+        for t in game.level_transitions():
+            if isinstance(t.action, dict):
+                c = t.before_frame.grid[t.action["row"]][t.action["col"]]
+                d = summarize_diff(t.before_frame, t.after_frame)
+                hit = [m["color"] for m in d.get("moved", []) if abs(m["to"][0] - t.action["row"]) <= 2 and abs(m["to"][1] - t.action["col"]) <= 2]
+                self.cursor.setdefault(c, Counter())[hit[0] if hit else -1] += 1
         for c, h in hist_all.items():
             self.click_hist.setdefault(c, h)
         for c, h in van_all.items():
@@ -104,6 +112,15 @@ class Evidence:
                 f["params"]["local"] = len(rules)
             else:
                 out.append({"kind": "click", "params": {"color": c, "local": len(rules)}, "support": self.click.clicks[c], "counter": 0, "text": txt})
+        for c, cu in self.cursor.items():
+            k, n = cu.most_common(1)[0]
+            if k != -1 and n * 2 > sum(cu.values()):
+                f = next((f for f in out if f["kind"] == "click" and f["params"].get("color") == c), None)
+                txt = f"clicking colour {c} moves the colour-{k} marker to the clicked cell ({n}/{sum(cu.values())} clicks)"
+                if f:
+                    f["text"] = txt + "; " + f["text"]; f["params"]["marker"] = k
+                else:
+                    out.append({"kind": "click", "params": {"color": c, "marker": k}, "support": n, "counter": sum(cu.values()) - n, "text": txt})
         for c, h in self.click_hist.items():
             if h.get("world", 0) == 0 and not self.click.rules.get(c):
                 f = next((f for f in out if f["kind"] == "click" and f["params"].get("color") == c), None)
@@ -143,6 +160,22 @@ class Evidence:
         grid = self.frame.grid
         if isinstance(act, dict):
             r, c = act["row"], act["col"]; colour = grid[r][c]
+            h = self.click_hist.get(colour)
+            if h and h.get("world", 0) == 0:
+                kind = "hud" if h.get("hud") else "noop"
+                return Prediction(kind, f"colour {colour} clicked {sum(h.values())}x before: " + ("only the HUD changed" if kind == "hud" else "nothing changed"),
+                                  rules=[("click", {"color": colour})], confidence="confirmed" if sum(h.values()) >= 2 else "hypothesis")
+            if self.distrust.get(colour, 0) >= 2:
+                return Prediction("unknown", f"colour {colour}: the effect model was wrong {self.distrust[colour]}x on this level; effect not predictable yet "
+                                  f"(clicked {sum(h.values()) if h else 0}x here)", rules=[("click", {"color": colour})], confidence="none")
+            cu = self.cursor.get(colour)
+            if cu and cu.most_common(1)[0][0] != -1 and cu.most_common(1)[0][1] * 2 > sum(cu.values()):
+                k = cu.most_common(1)[0][0]
+                here = [n for n in self.frame.segmentation["nodes"] if n["color"] == k and abs(n["center"][0] - r) <= 2 and abs(n["center"][1] - c) <= 2]
+                if here:
+                    return Prediction("unknown", f"the colour-{k} marker is already at ({r},{c}); clicking here again has an unknown effect", confidence="none")
+                return Prediction("cursor", f"the colour-{k} marker moves to the click point ({r},{c}) (other cells may change too: {h.get('world', 0) if h else 0} world changes seen)",
+                                  rules=[("click", {"color": colour})], confidence="confirmed" if sum(cu.values()) >= 2 else "hypothesis", avatar_to=(r, c))
             vt = self.vanish_to.get(colour)
             if vt and vt.most_common(1)[0][0] != -1 and vt.most_common(1)[0][1] * 2 > sum(vt.values()):
                 k = vt.most_common(1)[0][0]
@@ -160,11 +193,6 @@ class Evidence:
                 conf = "confirmed" if self.click.clicks[colour] >= 2 else "hypothesis"
                 return Prediction("board", f"changes {changed} cells near ({r},{c}): " + ", ".join(f"{b}->{a}x{n}" for (b, a), n in pairs.most_common(3)),
                                   board=board, rules=[("click", {"color": colour})], confidence=conf)
-            h = self.click_hist.get(colour)
-            if h and h.get("world", 0) == 0:
-                kind = "hud" if h.get("hud") else "noop"
-                return Prediction(kind, f"colour {colour} clicked {sum(h.values())}x before: " + ("only the HUD changed" if kind == "hud" else "nothing changed"),
-                                  rules=[("click", {"color": colour})], confidence="confirmed" if sum(h.values()) >= 2 else "hypothesis")
             if h:
                 return Prediction("unknown", f"colour {colour} clicked {sum(h.values())}x before with no consistent local effect", rules=[("click", {"color": colour})], confidence="none")
             return Prediction("unknown", f"colour {colour} never clicked", confidence="none")
@@ -230,6 +258,10 @@ class Evidence:
             side = [x for x in (d.get("disappeared") or []) + (d.get("appeared") or [])]
             note = f"; side effect: {summary}" if ok and side else ""
             return Verdict(ok, ("as predicted" if ok else f"MISMATCH: avatar at {got}, predicted {tuple(pred.avatar_to)}") + note, d)
+        if pred.kind == "cursor":
+            r0, c0 = pred.avatar_to
+            ok = any(abs(m["to"][0] - r0) <= 2 and abs(m["to"][1] - c0) <= 2 for m in d.get("moved", []))
+            return Verdict(ok, ("as predicted (marker moved to the click); " if ok else "MISMATCH: no marker moved to the click; ") + summary, d)
         if pred.kind == "noop":
             ok = not world and not d.get("changed_cells")
             return Verdict(ok, "as predicted (nothing changed)" if ok else "MISMATCH: predicted no change but " + summary, d)

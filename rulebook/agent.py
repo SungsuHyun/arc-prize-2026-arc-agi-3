@@ -39,8 +39,8 @@ class RulebookAgent:
         self.deadline = deadline
         self.t0 = time.time()
         self._log_f = open(self.log_dir / f"{game.game_id}.log", "a")
-        self._rules_cache = None; self._rules_at = -1
         self.last_choice: list[str] = []
+        self.distrust: dict = {}          # (level, click colour) -> failed board predictions; the predictor stops predicting after 2
 
     # ── logging ───────────────────────────────────────────────────────────
     def log(self, text: str) -> None:
@@ -56,8 +56,8 @@ class RulebookAgent:
 
     # ── evidence ─────────────────────────────────────────────────────────
     def evidence(self, full: bool = False) -> Evidence:
-        ev = Evidence(self.g)
-        return ev
+        lv = self.g.level
+        return Evidence(self.g, distrust={c: n for (l, c), n in self.distrust.items() if l == lv})
 
     def sync(self, ev: Evidence) -> list[str]:
         changes = self.book.sync(ev.facts(), level=self.g.level)
@@ -203,6 +203,8 @@ class RulebookAgent:
                 return "over"
             if v.ok is False:
                 self.mismatches += 1
+                if isinstance(act, dict) and pred.kind == "board":
+                    key = (g.level, before.grid[act["row"]][act["col"]]); self.distrust[key] = self.distrust.get(key, 0) + 1
                 ev2 = self.evidence(); changes = self.sync(ev2)
                 if self.reviews - reviews0 < self.cfg["reviews_per_level"]:
                     self.review(f"MISMATCH on {action_label(act)} ({cand.label}). Predicted: {pred.text}. Observed: {v.text}. "
