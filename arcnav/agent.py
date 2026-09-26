@@ -541,7 +541,14 @@ class GameSession:
         if self.last_outcome:
             parts += self.last_outcome
         parts += self._nav_lines()
-        if (PROBE_SWEEP_AFTER_TURNS and self.level not in self.probe_sweeps and self.model_turns - self.level_turn_start >= PROBE_SWEEP_AFTER_TURNS
+        turns_here = self.model_turns - self.level_turn_start
+        early = False   # a shrinking gauge means the budget will be gone before turn 8: sweep from turn 4 while routes are still affordable
+        try:
+            g = NavHelper([t for t in self.host_transitions if t.before_frame.level == t.after_frame.level == self.level], self.frame).gauge() if self.frame else None
+            early = bool(g and g.get("actions_left") is not None and int(g["actions_left"]) <= 25 and turns_here >= 4)
+        except Exception:
+            pass
+        if (PROBE_SWEEP_AFTER_TURNS and self.level not in self.probe_sweeps and (turns_here >= PROBE_SWEEP_AFTER_TURNS or early)
                 and not (self.solver and self.solver.get("status") == "active")):
             lvl = self.level
             text = self._probe_sweep()

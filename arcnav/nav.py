@@ -335,8 +335,8 @@ class NavHelper:
             if o["size"] > 120 or o["color"] == self.background or o["color"] in self.floor_colors:
                 continue
             bx0, by0, bx1, by1 = o["bbox"]
-            if ((bx1 - bx0 <= 2 and (bx0 <= 1 or bx1 >= 62)) or (by1 - by0 <= 2 and (by0 <= 1 or by1 >= 62))):
-                continue   # thin sliver hugging an edge (gauge / counter pieces), never a target
+            if ((bx1 - bx0 <= 2 and by1 - by0 >= 8 and (bx0 <= 1 or bx1 >= 62)) or (by1 - by0 <= 2 and bx1 - bx0 >= 8 and (by0 <= 1 or by1 >= 62))):
+                continue   # thin LONG strip hugging an edge (gauge / counter pieces), never a target; small squares at the edge stay (ls20 goal squares)
             # small marks drawn inside a larger non-floor object are parts of that object, not targets
             ox, oy = o["center"]; contained = False
             for big in self.objects:
