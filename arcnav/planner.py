@@ -157,3 +157,55 @@ def two_body_merge_cells(cells, a, b, transform: str, passable, hazard_colors=()
             if ns not in prev:
                 prev[ns] = (s, act); q.append(ns)
     return None
+
+
+def plan_resources(nav, *, goal_cells: set, collect_cells: set, refill_cells: dict, hazard_colors: set,
+                   gauge_left: Optional[int], require_collect: bool = True, max_states: int = 300000) -> Optional[list[str]]:
+    """Resource-aware route on the nav block grid: state = (block, gauge actions left, collected set, refills used).
+    Moves cost one gauge unit; entering a refill block adds refill_cells[block] actions (once); entering a collect block collects it;
+    the goal is any goal block, entered after every collectible (when require_collect) — the final step may enter a non-floor block
+    (doors). Cells come from object centres (small items do not dominate a block's majority colour). Returns the action list or None."""
+    from collections import deque
+    md = nav.md
+    if not md or md["player"] is None or not goal_cells:
+        return None
+    bm = nav.block_moves()
+    if not bm:
+        return None
+    colors = md["colors"]; nrows, ncols = md["nrows"], md["ncols"]
+    def col_of(b):
+        c, r = b
+        return colors[r][c] if 0 <= r < nrows and 0 <= c < ncols else None
+    cl = sorted(collect_cells); idx = {b: i for i, b in enumerate(cl)}; full = (1 << len(cl)) - 1
+    start_b = md["player"]; g0 = gauge_left if gauge_left is not None else 10 ** 6
+    prev = {(start_b, 0, frozenset()): None}; best = {(start_b, 0, frozenset()): g0}
+    q = deque([(start_b, g0, 0, frozenset())]); n = 0
+    while q and n < max_states:
+        b, g, mask, used = q.popleft(); n += 1
+        for a, (dc, dr) in bm.items():
+            nb = (b[0] + dc, b[1] + dr); cc = col_of(nb)
+            if cc is None or nb in nav.walls or cc in hazard_colors:
+                continue
+            is_goal = nb in goal_cells
+            if not is_goal and not (cc in nav.floor_colors or nb in collect_cells or nb in refill_cells or nb == start_b):
+                continue
+            ng = g - 1
+            if ng < 0:
+                continue
+            nmask = mask | (1 << idx[nb]) if nb in idx else mask
+            nused = used
+            if nb in refill_cells and nb not in used:
+                ng += int(refill_cells[nb]); nused = used | {nb}
+            if is_goal:
+                if require_collect and nmask != full:
+                    continue
+                acts = [a]; cur = (b, mask, used)
+                while prev.get(cur) is not None:
+                    pb, pm, pu, pa = prev[cur]; acts.append(pa); cur = (pb, pm, pu)
+                return list(reversed(acts))
+            key = (nb, nmask, nused)
+            if best.get(key, -1) >= ng:
+                continue
+            best[key] = ng; prev[key] = (b, mask, used, a)
+            q.append((nb, ng, nmask, nused))
+    return None

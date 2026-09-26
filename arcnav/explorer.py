@@ -401,11 +401,19 @@ class Explorer:
             except Exception as e:
                 self.trace.append(f"layer1 induce error {type(e).__name__}")
             if goal_c or coll_c:
-                r = autopilot.run_goal_search(self.s, goal_colors=goal_c, collect_colors=coll_c, refill_colors=refill_c, hazard_colors=hazard_c,
-                                              max_actions=120, log=lambda m: self.trace.append(m))
-                self.trace.append(f"layer1 goal-search(goals={goal_c}, collect={coll_c}, refill={refill_c}): {r.get('reason')} ({r.get('actions')} actions)")
-                if r.get("completed") or self.s.level > level0:
-                    return {"level": level0, "completed": True, "actions": self.s.actions_used - a0, "macros": 0, "resets": 0, "path": ["layer1:goal-search"]}
+                amounts: dict = {}
+                for attempt in range(2):   # attempt 1 learns (refills, doors); a game over resets the level and attempt 2 replans with what was learned
+                    r = autopilot.run_goal_search(self.s, goal_colors=goal_c, collect_colors=coll_c, refill_colors=refill_c, hazard_colors=hazard_c,
+                                                  max_actions=120, log=lambda m: self.trace.append(m), refill_amounts=amounts)
+                    self.trace.append(f"layer1 goal-search #{attempt + 1}(goals={goal_c}, collect={coll_c}, refill={refill_c}): {r.get('reason')} ({r.get('actions')} actions)")
+                    if r.get("completed") or self.s.level > level0:
+                        return {"level": level0, "completed": True, "actions": self.s.actions_used - a0, "macros": 0, "resets": 0, "path": ["layer1:goal-search"]}
+                    refill_c = r.get("refill_colors", refill_c); amounts = r.get("refill_amounts", amounts)
+                    if attempt == 0 and (r.get("reason") == "game over" or not r.get("refill_colors")):
+                        if r.get("reason") != "game over":
+                            break   # nothing new was learned: a second pass would repeat the first
+                        self.s.attempt_start_index = len(self.s.host_transitions)
+                        self._execute([{"action": a} for a in keys])   # relearn controls on the fresh attempt
         if not hyps:
             return None
         for h in hyps[:3]:
