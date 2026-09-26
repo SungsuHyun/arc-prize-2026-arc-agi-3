@@ -90,13 +90,35 @@ class Explorer:
     KIND_RANK = {"goto+interact": 0, "goto": 0, "interact": 1, "click": 2, "frontier": 3, "key": 4, "key-run": 5}
     KIND_RANK_MOVEMENT = {"goto+interact": 0, "goto": 0, "interact": 1, "frontier": 2, "key": 3, "key-run": 4, "click": 6}
 
+    def goal_colors(self) -> dict[int, int]:
+        """Colours that mattered in earlier levels' wins (from goals.py hypotheses), with a rank: the goal colour first,
+        collectibles / clicked colours next. Soft transfer: they are tried first on the new level, nothing is replayed blindly."""
+        out: dict[int, int] = {}
+        for h in self.s.goal_hypotheses:
+            if h.get("level", 0) >= self.s.level:
+                continue
+            for c in ([h.get("reach")] if h.get("reach") is not None else []):
+                out.setdefault(int(c), 0)
+            for c in ([h.get("collect")] if h.get("collect") is not None else []):
+                out.setdefault(int(c), 1)
+            for i, c in enumerate(dict.fromkeys(h.get("sequence") or [])):
+                out.setdefault(int(c), 2 + i)
+        return out
+
+    def _macro_color(self, m: Macro) -> Optional[int]:
+        import re
+        mt = re.match(r"(?:goto|click)\((\d+)@", m.label)
+        return int(mt.group(1)) if mt else None
+
     def _rank(self, level: int, m: Macro) -> tuple:
-        """Goal-directed kinds first (after the world changed, re-trying a target is worth more than mapping another corridor),
-        then never-tried labels before tried ones, dead labels (same state twice) last."""
+        """Colours that won earlier levels first, then goal-directed kinds (after the world changed, re-trying a target is worth
+        more than mapping another corridor), then never-tried labels before tried ones, dead labels (same state twice) last."""
         h = self.label_hist.get((level, m.label), [0, 0])
         ranks = self.KIND_RANK_MOVEMENT if self._movement_game() else self.KIND_RANK
         dead = h[1] >= (1 if m.kind == "click" else 2)   # a click that changed nothing once is a dead button
-        return (ranks.get(m.kind, 9), 1 if dead else 0, 1 if h[0] > 0 else 0, m.priority)
+        gc = self.goal_colors(); c = self._macro_color(m)
+        goal_rank = gc.get(c, 99) if c is not None else 99
+        return (1 if dead else 0, 0 if goal_rank < 99 else 1, goal_rank, ranks.get(m.kind, 9), 1 if h[0] > 0 else 0, m.priority)
 
     def _movement_game(self) -> bool:
         nav = self._nav()
@@ -206,6 +228,7 @@ class Explorer:
 
     def _run_macro(self, node: Node, m: Macro) -> dict:
         actions = m.actions
+        full_before = self.s.frame.ascii if self.s.frame is not None else None
         if m.kind == "key-run":   # press until the board stops changing
             done = 0; last = None
             for _ in range(8):
@@ -223,7 +246,7 @@ class Explorer:
         node.edges[m.label] = (actions, result)
         h = self.label_hist.setdefault((node.level, m.label), [0, 0]); h[0] += 1
         if result == node.state:
-            h[1] += 1
+            h[1] += 1   # the masked board did not change: a click that only ticks the gauge is a wasted action (vc33/r11l data: masked rule wins)
         if r["game_over"]:
             self.hazard_labels.add((node.state, m.label))
         self.trace.append(f"{m.label} -> {result if result in ('LEVEL', 'GAME_OVER') else ('same' if result == node.state else 'new' if result not in self.nodes else 'known')}")
@@ -265,7 +288,7 @@ class Explorer:
                 return {"level": level, "completed": False, "actions": self.s.actions_used - a0, "macros": macros_run, "resets": resets, "reason": "budget"}
             node = self.node()
             ms = self.macros(node); node.macros_cache = ms
-            inv = self.inv_sig()
+            inv = self.inv_sig()   # world inventory (no avatar, gauge or edge strips): empirically better than the raw board for click games too (r11l, vc33)
             untried = [m for m in ms if m.label not in node.tried and (node.state, m.label) not in self.hazard_labels
                        and (level, inv, m.label) not in self.inv_tried]
             if self.frontier_actions.get(level, 0) > 0.4 * self.max_actions_per_level:
@@ -315,12 +338,52 @@ class Explorer:
                 return {"level": level, "completed": False, "actions": self.s.actions_used - a0, "macros": macros_run, "resets": resets, "reason": "exhausted"}
         return {"level": level, "completed": self.s.level > level, "actions": self.s.actions_used - a0, "macros": macros_run, "resets": resets, "path": path_labels}
 
+    def _layer1(self) -> Optional[dict]:
+        """Before exploring a new level, replay what won the previous one (goal hypotheses from goals.py): reach/collect
+        via the nav planner, click games via the recorded colour sequence. Cheap, deterministic, and it is exactly the
+        knowledge transfer the model never managed."""
+        from . import autopilot
+        level0 = self.s.level; a0 = self.s.actions_used
+        # rule-based autopilots (two-body merge when a mirrored body is confirmed) need a few observed moves first
+        keys = [a for a in MOVE_KEYS if a in self.s.valid_actions]
+        if keys and not [t for t in self.s.host_transitions[self.s.attempt_start_index:] if t.after_frame.level == level0]:
+            self._execute([{"action": a} for a in keys])   # one probe per key: learns controls and feeds rule induction
+            if self.s.level > level0:
+                return {"level": level0, "completed": True, "actions": self.s.actions_used - a0, "macros": 0, "resets": 0, "path": ["probe"]}
+        try:
+            for _ in range(2):
+                if self.s._maybe_autopilot() and self.s.level > level0:
+                    self.trace.append("layer1 rules-autopilot completed the level")
+                    return {"level": level0, "completed": True, "actions": self.s.actions_used - a0, "macros": 0, "resets": 0, "path": ["layer1:rules-autopilot"]}
+        except Exception as e:
+            self.trace.append(f"layer1 autopilot error {type(e).__name__}")
+        hyps = [h for h in self.s.goal_hypotheses if h.get("level", 0) < self.s.level]
+        if not hyps:
+            return None
+        for h in hyps[:3]:
+            try:
+                if h.get("type") in ("reach", "collect_reach", "collect_all"):
+                    r = autopilot.run_reach(self.s, h, max_actions=80, log=lambda m: None)
+                elif h.get("type") == "click_sequence":
+                    r = autopilot.run_click_sequence(self.s, h, max_actions=40, log=lambda m: None)
+                else:
+                    continue
+            except Exception as e:
+                self.trace.append(f"layer1 error {type(e).__name__}"); continue
+            self.trace.append(f"layer1 {h.get('type')}: {r.get('reason')} ({r.get('actions')} actions)")
+            if r.get("completed") or self.s.level > level0:
+                return {"level": level0, "completed": True, "actions": self.s.actions_used - a0, "macros": 0, "resets": 0, "path": [f"layer1:{h.get('type')}"]}
+        return None
+
     def play(self, max_levels: int = 3) -> list[dict]:
         out = []
         for _ in range(max_levels):
             if self.s.state == "WIN":
                 break
-            r = self.play_level(); out.append(r)
+            r = self._layer1()
+            if r is None:
+                r = self.play_level()
+            out.append(r)
             self.log(f"[explorer] level {r['level']}: {'COMPLETED' if r['completed'] else 'not completed'} in {r['actions']} actions, {r['macros']} macros, {r['resets']} resets" + (f" — {r.get('reason')}" if not r["completed"] else f" — path {r.get('path')}"))
             if not r["completed"]:
                 break

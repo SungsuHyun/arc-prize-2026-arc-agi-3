@@ -145,3 +145,31 @@ def run_reach(session, hypothesis: dict, *, max_actions: int = 60, log=print) ->
         if len(step) == len(path):
             visited_targets.add((want["row"], want["col"]))
     return {"completed": False, "actions": session.actions_used - start, "reason": "budget exhausted" if session.level == level0 else "level completed"}
+
+
+def run_click_sequence(session, hypothesis: dict, *, max_actions: int = 40, log=print) -> dict:
+    """Click-game autopilot for a 'click_sequence' hypothesis learned on an earlier level: click objects of the recorded
+    colours in the same order on the new level (positions differ; the nearest object of that colour to the previous click
+    is chosen). Stops on level completion, game over, a missing colour, or the action budget."""
+    level0 = session.level; start = session.actions_used
+    seq = list(hypothesis.get("sequence") or [])
+    if not seq or "MOUSE" not in session.valid_actions:
+        return {"completed": False, "actions": 0, "reason": "not a click game / empty sequence"}
+    last = None
+    for color in seq:
+        if session.actions_used - start >= max_actions or session.level != level0:
+            break
+        nodes = [n for n in session.frame.segmentation["nodes"] if not n["hud"] and n["color"] == color]
+        if not nodes:
+            return {"completed": False, "actions": session.actions_used - start, "reason": f"no colour-{color} object on this level"}
+        if last is not None:
+            nodes.sort(key=lambda n: abs(n["center"][0] - last[0]) + abs(n["center"][1] - last[1]))
+        else:
+            nodes.sort(key=lambda n: n["pixels"])
+        n = nodes[0]; last = n["center"]
+        res = session.execute([{"action": "MOUSE", "row": n["center"][0], "col": n["center"][1]}])
+        if res["level_completed"] or session.level > level0:
+            return {"completed": True, "actions": session.actions_used - start, "reason": "level completed"}
+        if res["game_over"]:
+            return {"completed": False, "actions": session.actions_used - start, "reason": "game over"}
+    return {"completed": False, "actions": session.actions_used - start, "reason": "sequence replayed without completion"}

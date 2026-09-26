@@ -1,7 +1,9 @@
 #!/usr/bin/env python
 """Layer-0 measurement: run the model-free Explorer on public games and report levels completed and actions.
 Deterministic (no LLM) so every run is reproducible. Usage: explore_all.py [--games a,b,c] [--levels 3] [--actions 300] [--seconds 300] [--jobs 4]"""
-import argparse, json, logging, sys, time
+import argparse, json, logging, os, sys, time
+if os.environ.get("PYTHONHASHSEED") != "0":   # str hashes are per-process salted; pin them so runs are reproducible
+    os.environ["PYTHONHASHSEED"] = "0"; os.execv(sys.executable, [sys.executable] + sys.argv)
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
