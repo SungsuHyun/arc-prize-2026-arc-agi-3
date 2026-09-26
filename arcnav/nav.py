@@ -305,7 +305,7 @@ class NavHelper:
         return md["colors"][r][c] in self.floor_colors or b == md["player"]
 
     # ── planning ───────────────────────────────────────────────────────────
-    def path_to(self, row: int, col: int, max_len: int = 40) -> Optional[list[str]]:
+    def path_to(self, row: int, col: int, max_len: int = 40, ignore_wall_target: bool = False) -> Optional[list[str]]:
         """BFS over known-walkable blocks to the block containing pixel (row, col).
         Returns action names (e.g. ['LEFT','LEFT','UP']) or None if unreachable
         / navigation not learned yet. The final step may enter any colour."""
@@ -317,7 +317,7 @@ class NavHelper:
         start, target = self.md["player"], self.block_of(row, col)
         if start == target:
             return []
-        if target in self.walls:
+        if target in self.walls and not ignore_wall_target:   # a door bumped before the key was collected is still a valid goal later
             return None
         prev = {start: (start, "")}
         q = deque([start])

@@ -367,14 +367,45 @@ class Explorer:
             self._execute([{"action": a} for a in keys])   # one probe per key: learns controls and feeds rule induction
             if self.s.level > level0:
                 return {"level": level0, "completed": True, "actions": self.s.actions_used - a0, "macros": 0, "resets": 0, "path": ["probe"]}
+        saved_hyps = self.s.goal_hypotheses
         try:
+            self.s.goal_hypotheses = []   # only the rule-based (two-body) branch here; goal hypotheses go through the gauge-aware goal search below
             for _ in range(2):
                 if self.s._maybe_autopilot() and self.s.level > level0:
                     self.trace.append("layer1 rules-autopilot completed the level")
                     return {"level": level0, "completed": True, "actions": self.s.actions_used - a0, "macros": 0, "resets": 0, "path": ["layer1:rules-autopilot"]}
         except Exception as e:
             self.trace.append(f"layer1 autopilot error {type(e).__name__}")
+        finally:
+            self.s.goal_hypotheses = saved_hyps
         hyps = [h for h in self.s.goal_hypotheses if h.get("level", 0) < self.s.level]
+        if keys and self.s.level > 1:
+            # generic movement solver on induced knowledge from earlier levels: goal colours + collectibles + refills + hazards
+            from .rules import induce
+            goal_c, coll_c, refill_c, hazard_c = [], [], [], set()
+            for h in hyps:
+                if h.get("reach") is not None and h["reach"] not in goal_c:
+                    goal_c.append(h["reach"])
+                if h.get("collect") is not None and h["collect"] not in coll_c:
+                    coll_c.append(h["collect"])
+            prev = [t for t in self.s.host_transitions if t.before_frame.level == t.after_frame.level < self.s.level]
+            try:
+                rules, _ = induce(prev[-400:], prev[-1].after_frame) if prev else ([], [])
+                for r_ in rules:
+                    if r_.kind == "collect" and r_.params["color"] not in coll_c:
+                        coll_c.append(r_.params["color"])
+                    if r_.kind == "refill" and r_.params["color"] not in refill_c:
+                        refill_c.append(r_.params["color"])
+                    if r_.kind == "hazard":
+                        hazard_c.add(r_.params["color"])
+            except Exception as e:
+                self.trace.append(f"layer1 induce error {type(e).__name__}")
+            if goal_c or coll_c:
+                r = autopilot.run_goal_search(self.s, goal_colors=goal_c, collect_colors=coll_c, refill_colors=refill_c, hazard_colors=hazard_c,
+                                              max_actions=120, log=lambda m: self.trace.append(m))
+                self.trace.append(f"layer1 goal-search(goals={goal_c}, collect={coll_c}, refill={refill_c}): {r.get('reason')} ({r.get('actions')} actions)")
+                if r.get("completed") or self.s.level > level0:
+                    return {"level": level0, "completed": True, "actions": self.s.actions_used - a0, "macros": 0, "resets": 0, "path": ["layer1:goal-search"]}
         if not hyps:
             return None
         for h in hyps[:3]:

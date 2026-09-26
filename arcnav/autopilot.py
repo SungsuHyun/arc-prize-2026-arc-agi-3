@@ -186,3 +186,125 @@ def run_click_sequence(session, hypothesis: dict, *, max_actions: int = 40, log=
             if res["game_over"]:
                 return {"completed": False, "actions": session.actions_used - start, "reason": "game over"}
     return {"completed": False, "actions": session.actions_used - start, "reason": "sequence replayed without completion"}
+
+
+def run_goal_search(session, *, goal_colors: list, collect_colors: list, refill_colors: list, hazard_colors: set,
+                    max_actions: int = 120, log=print) -> dict:
+    """Generic movement-game level solver on induced knowledge (no game-specific code):
+    1. go to the nearest goal-colour object (a door bumped earlier is still allowed as the final step);
+    2. if arriving did not finish the level or no goal is reachable, collect the known collectible colours nearest-first
+       (keys open doors), refuel at refill colours when the gauge is short, then retry the goal;
+    3. stop on completion, game over, budget, or two rounds without any progress."""
+    from .nav import NavHelper
+    level0 = session.level; start = session.actions_used
+    visited: set = set(); stale_rounds = 0
+
+    def nav_now():
+        cur = [t for t in session.host_transitions if t.before_frame.level == t.after_frame.level == session.level]
+        return NavHelper(cur, session.frame)
+
+    def go(nav, t, final_any=False) -> Optional[dict]:
+        path = nav.path_to(t["row"], t["col"], ignore_wall_target=final_any)
+        if not path:
+            return None
+        g = nav.gauge()
+        if g and g.get("actions_left") is not None and len(path) > int(g["actions_left"]) - 1:
+            return {"short": True}
+        res = session.execute([{"action": a} for a in path[:24]])
+        return res
+
+    def targets(nav, colors):
+        return sorted([t for t in nav.targets(max_n=30) if t["color"] in colors and (t["row"], t["col"]) not in visited],
+                      key=lambda t: (t.get("path_len") is None, t.get("path_len") or 999))
+
+    while session.actions_used - start < max_actions and session.level == level0:
+        nav = nav_now()
+        if not nav.moves or not nav.avatar():
+            return {"completed": False, "actions": session.actions_used - start, "reason": "movement not learned"}
+        progressed = False
+        # refuel first when the gauge is nearly empty
+        g = nav.gauge()
+        need = min([t["path_len"] for t in nav.targets(max_n=30) if t["color"] in set(goal_colors) | set(collect_colors) and t.get("path_len")] or [6])
+        if g and g.get("actions_left") is not None and int(g["actions_left"]) <= max(6, need + 2) and refill_colors:
+            for t in targets(nav, set(refill_colors))[:2]:
+                r = go(nav, t)
+                if r and not r.get("short") and r["executed_count"]:
+                    visited.add((t["row"], t["col"])); progressed = True
+                    log(f"goal-search: refuel at colour {t['color']}"); break
+            if session.level != level0:
+                break
+            nav = nav_now()
+        # 0. a tight gauge with unknown objects around: learn the nearest unknown first (it is often the refill this level adds)
+        if g and g.get("actions_left") is not None and int(g["actions_left"]) < 2 * need and not refill_colors:
+            known = set(goal_colors) | set(collect_colors) | set(hazard_colors)
+            unknown = sorted([t for t in nav.targets(max_n=30) if t["color"] not in known and t.get("path_len") and (t["row"], t["col"]) not in visited],
+                             key=lambda t: t["path_len"])
+            for t in unknown[:1]:
+                r = go(nav, t)
+                if r and not r.get("short") and r["executed_count"]:
+                    visited.add((t["row"], t["col"])); progressed = True
+                    g2 = nav_now().gauge()
+                    log(f"goal-search: tight gauge ({g['actions_left']} left, need {need}); probed unknown colour {t['color']} -> gauge {g.get('size')}->{g2 and g2.get('size')}")
+                    if session.level > level0:
+                        return {"completed": True, "actions": session.actions_used - start, "reason": "probe completed the level"}
+                    if r["game_over"]:
+                        return {"completed": False, "actions": session.actions_used - start, "reason": "game over"}
+                    if g2 and g2.get("size", 0) > g.get("size", 0):
+                        refill_colors.append(t["color"]); log(f"goal-search: colour {t['color']} refills the gauge")
+                    continue
+            if progressed:
+                continue
+        # 1. goal
+        for t in targets(nav, set(goal_colors))[:3]:
+            r = go(nav, t, final_any=True)
+            if r is None or r.get("short"):
+                continue
+            log(f"goal-search: went to goal colour {t['color']} at ({t['row']},{t['col']}) -> level {'done' if session.level > level0 else 'not done'}")
+            if session.level > level0:
+                return {"completed": True, "actions": session.actions_used - start, "reason": "reached goal"}
+            if r["game_over"]:
+                return {"completed": False, "actions": session.actions_used - start, "reason": "game over"}
+            visited.add((t["row"], t["col"])); progressed = True
+            break
+        if session.level != level0:
+            break
+        # 2. prerequisites: collect
+        nav = nav_now()
+        for t in targets(nav, set(collect_colors))[:4]:
+            r = go(nav, t)
+            if r is None or r.get("short"):
+                continue
+            log(f"goal-search: collected colour {t['color']} at ({t['row']},{t['col']})")
+            visited.add((t["row"], t["col"])); progressed = True
+            if session.level > level0:
+                return {"completed": True, "actions": session.actions_used - start, "reason": "collected -> level done"}
+            if r["game_over"]:
+                return {"completed": False, "actions": session.actions_used - start, "reason": "game over"}
+            break
+        if not progressed:
+            # every known route was too long for the gauge or nothing known is reachable: learn what the nearest unknown object is
+            # (new colours on this level first — they are usually the new mechanic, e.g. refills); rules.py will classify the effect
+            nav = nav_now(); known = set(goal_colors) | set(collect_colors) | set(refill_colors) | set(hazard_colors)
+            unknown = [t for t in nav.targets(max_n=30) if t["color"] not in known and t.get("path_len") and (t["row"], t["col"]) not in visited]
+            unknown.sort(key=lambda t: t["path_len"])
+            for t in unknown[:2]:
+                r = go(nav, t)
+                if r and not r.get("short") and r["executed_count"]:
+                    visited.add((t["row"], t["col"])); progressed = True
+                    log(f"goal-search: probed unknown colour {t['color']} at ({t['row']},{t['col']})")
+                    if session.level > level0:
+                        return {"completed": True, "actions": session.actions_used - start, "reason": "probe completed the level"}
+                    if r["game_over"]:
+                        return {"completed": False, "actions": session.actions_used - start, "reason": "game over"}
+                    g2 = nav_now().gauge()
+                    if g and g2 and g2.get("size", 0) > g.get("size", 0) and t["color"] not in refill_colors:
+                        refill_colors.append(t["color"]); log(f"goal-search: colour {t['color']} refills the gauge")
+                    break
+        if not progressed:
+            stale_rounds += 1
+            if stale_rounds >= 2:
+                return {"completed": False, "actions": session.actions_used - start, "reason": "no reachable goal or collectible"}
+            visited.clear()   # allow a second pass over the same targets once (doors may have opened)
+        else:
+            stale_rounds = 0
+    return {"completed": session.level > level0, "actions": session.actions_used - start, "reason": "budget" if session.level == level0 else "level completed"}

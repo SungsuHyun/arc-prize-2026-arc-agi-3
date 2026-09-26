@@ -34,7 +34,10 @@ def one(g):
         levels = ex.play(max_levels=a.levels)
         row = {"game": g, "levels_completed": sum(1 for r in levels if r["completed"]), "actions": s.actions_used,
                "per_level": [{k: v for k, v in r.items() if k != "path"} | ({"path": r.get("path", [])[-6:]} if r.get("path") else {}) for r in levels],
-               "nodes": len(ex.nodes), "seconds": round(time.time() - t0, 1), "valid": list(s.valid_actions)}
+               "nodes": len(ex.nodes), "seconds": round(time.time() - t0, 1), "valid": list(s.valid_actions),
+               "effects": {f"{k[0]}:{k[1]}": round(v[1] / v[0], 2) for k, v in ex.effect_stats.items() if v[0]},
+               "goal_hypotheses": [h.get("text", "")[:160] for h in s.goal_hypotheses][:4],
+               "recaps": [r_[:400] for r_ in s.level_recaps][:3]}
         s.sandbox.close()
     except Exception as e:
         row = {"game": g, "error": f"{type(e).__name__}: {e}"[:200], "seconds": round(time.time() - t0, 1)}
