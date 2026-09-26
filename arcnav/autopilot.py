@@ -14,7 +14,9 @@ MOVES = {"UP": (-1, 0), "DOWN": (1, 0), "LEFT": (0, -1), "RIGHT": (0, 1)}
 
 def _bodies(grid, color, min_size=4):
     objs, _ = extract_objects(grid)
-    return sorted([o for o in objs if o["color"] == color and o["size"] >= min_size], key=lambda o: (o["center"][1], o["center"][0]))
+    return sorted([o for o in objs if o["color"] == color and o["size"] >= min_size
+                   and o["bbox"][2] - o["bbox"][0] >= 1 and o["bbox"][3] - o["bbox"][1] >= 1],   # not a 1-px-thin HUD strip
+                  key=lambda o: (o["center"][1], o["center"][0]))
 
 
 def run_two_body(session, *, body_color: int, transform: str, floor_colors: set, max_replans: int = 8, max_actions: int = 120, log=print) -> dict:

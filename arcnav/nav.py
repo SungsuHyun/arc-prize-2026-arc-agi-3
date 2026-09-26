@@ -68,6 +68,8 @@ def _moved(prev: list[dict], cur: list[dict]) -> list[tuple[dict, int, int]]:
         for i, p in enumerate(pool):
             if p is None or p["color"] != c["color"] or p["size"] != c["size"]:
                 continue
+            if (p["bbox"][2] - p["bbox"][0], p["bbox"][3] - p["bbox"][1]) != (c["bbox"][2] - c["bbox"][0], c["bbox"][3] - c["bbox"][1]):
+                continue   # a translation keeps the bbox shape: a shrinking gauge strip must not be matched to a same-size block elsewhere (ar25)
             d = abs(p["center"][0] - c["center"][0]) + abs(p["center"][1] - c["center"][1])
             if best_d is None or d < best_d:
                 best, best_d = i, d
@@ -116,7 +118,8 @@ class NavHelper:
             po, _ = extract_objects(b); co, _ = extract_objects(a)
             moved = [m for m in _moved(po, co) if m[0]["size"] <= _BIG]
             if moved and not name.startswith("MOUSE"):
-                c, dx, dy = max(moved, key=lambda m: (abs(m[1]) + abs(m[2]), m[0]["size"]))
+                near = [m for m in moved if abs(m[1]) + abs(m[2]) <= 12] or moved   # one key press moves a body a few pixels; a 20px jump is a mismatch
+                c, dx, dy = max(near, key=lambda m: (m[0]["size"], abs(m[1]) + abs(m[2])))   # the biggest moving body is the player, not the farthest-jumping one
                 self.move_log.setdefault(name, []).append((dx, dy))
                 self.player_votes[(c["color"], c["size"])] += 1
                 self.player_parts = {(m[0]["color"], m[0]["size"]) for m in moved if (m[1], m[2]) == (dx, dy)}

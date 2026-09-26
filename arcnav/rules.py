@@ -95,7 +95,7 @@ def induce(transitions: list, current_frame) -> tuple[list[Rule], list[str]]:
         rules.append(Rule("wall", {"color": color}, support=n))
     # 1b. mirrored / co-moving second body: another object that moves whenever the avatar moves, with a fixed transform
     if moves:
-        pairs: Counter = Counter(); seen_moves = 0
+        pairs: Counter = Counter(); decisive: Counter = Counter(); seen_moves = 0
         for t in transitions:
             a = t.action if isinstance(t.action, str) else "MOUSE"
             if a not in moves:
@@ -108,16 +108,21 @@ def induce(transitions: list, current_frame) -> tuple[list[Rule], list[str]]:
             seen_moves += 1
             adx, ady = moves[a]
             for o, dx, dy in mv:
-                if (dx, dy) == (adx, ady):
-                    continue
-                if (dx, dy) == (-adx, ady):
+                # a pure vertical move is consistent with a horizontal mirror (and vice versa): it counts as support but is not decisive;
+                # a rule needs at least one decisive observation (otherwise co-moving avatar parts / trails would look mirrored: ls20, sk48)
+                if (dx, dy) == (-adx, ady) and not (adx == 0 and ady == 0):
                     pairs[("mirror_x", o["color"], o["size"])] += 1
-                elif (dx, dy) == (adx, -ady):
+                    if adx != 0:
+                        decisive[("mirror_x", o["color"], o["size"])] += 1
+                if (dx, dy) == (adx, -ady) and not (adx == 0 and ady == 0):
                     pairs[("mirror_y", o["color"], o["size"])] += 1
-                elif (dx, dy) == (-adx, -ady):
+                    if ady != 0:
+                        decisive[("mirror_y", o["color"], o["size"])] += 1
+                if (dx, dy) == (-adx, -ady) and adx != 0 and ady != 0:
                     pairs[("mirror_xy", o["color"], o["size"])] += 1
+                    decisive[("mirror_xy", o["color"], o["size"])] += 1
         for (kind, color, size), n in pairs.items():
-            if n >= 2 and n * 2 >= seen_moves:   # the second body must move in at least half of the observed moves
+            if n >= 2 and n * 2 >= seen_moves and decisive[(kind, color, size)] >= 1:   # moves in at least half of the observed moves, with a decisive one
                 rules.append(Rule("mirror", {"how": kind, "color": color, "size": size}, support=n, counter=max(0, seen_moves - n)))
     # 2. gauge and refills
     g = nav.gauge()
