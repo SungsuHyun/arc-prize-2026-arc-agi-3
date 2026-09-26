@@ -52,7 +52,7 @@ RERUN_JOBS = 12               # concurrent games in the competition rerun
 RERUN_TOTAL_MINUTES = 470     # global cap (Kaggle rerun limit is 540 min incl. model load)
 RERUN_MAX_MINUTES_PER_GAME = 150
 
-SOURCE_FILES = ["__init__.py", "frame.py", "nav.py", "sandbox.py", "llm.py", "prompts.py", "solver.py", "rules.py", "planner.py", "autopilot.py", "agent.py", "runner.py"]
+SOURCE_FILES = sorted(p.name for p in (Path(__file__).resolve().parent.parent / "arcnav").glob("*.py"))   # every module: a hand-kept list missed goals.py once (kernel v8 ImportError)
 
 
 def code_cell(src: str) -> dict:
