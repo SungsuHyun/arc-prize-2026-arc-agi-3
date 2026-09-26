@@ -61,10 +61,39 @@ class Explorer:
         self.solutions: dict[int, list[str]] = {}
         self.trace: list[str] = []
         self.label_hist: dict[tuple[int, str], list[int]] = {}   # (level, label) -> [tried, produced-same-state]
+        self.frontier_actions: dict[int, int] = {}
+        self.inv_tried: set = set()   # (level, inventory signature, label): a macro is tried once per world state, not once per avatar position
+
+    def inv_sig(self) -> str:
+        """World inventory: non-HUD objects except the avatar's own colours. Moving the avatar does not change it; collecting,
+        toggling or opening something does. Novelty is judged against this, so 'goto(target)' is retried only after the world changed."""
+        nav = self._nav(); skip_cols = set()
+        try:
+            av = nav.avatar() if nav else None
+            skip_cols |= set(av["colors"]) if av else set()
+            g = nav.gauge() if nav else None
+            if g:
+                skip_cols.add(g["color"])
+        except Exception:
+            pass
+        items = []
+        for n in self.s.frame.segmentation["nodes"]:
+            if n["hud"] or n["color"] in skip_cols:
+                continue
+            r0, c0, r1, c1 = n["bbox"]
+            thin = (r1 - r0 <= 2) or (c1 - c0 <= 2)
+            if thin and (r0 <= 1 or r1 >= 62 or c0 <= 1 or c1 >= 62):
+                continue   # gauge / counter pieces along the frame edge (their emptied part is not flagged as HUD)
+            items.append((n["color"], n["pixels"], (r0, c0, r1, c1)))
+        return f"L{self.s.level}:" + str(hash(tuple(sorted(items))))
+
+    KIND_RANK = {"goto+interact": 0, "goto": 0, "interact": 1, "click": 2, "frontier": 3, "key": 4, "key-run": 5}
 
     def _rank(self, level: int, m: Macro) -> tuple:
+        """Goal-directed kinds first (after the world changed, re-trying a target is worth more than mapping another corridor),
+        then never-tried labels before tried ones, dead labels (same state twice) last."""
         h = self.label_hist.get((level, m.label), [0, 0])
-        return (1 if h[1] >= 2 else 0, 1 if h[0] > 0 else 0, m.priority)
+        return (self.KIND_RANK.get(m.kind, 9), 1 if h[1] >= 2 else 0, 1 if h[0] > 0 else 0, m.priority)
 
     # ── state ────────────────────────────────────────────────────────────
     def state(self) -> str:
@@ -212,10 +241,17 @@ class Explorer:
                 return {"level": level, "completed": False, "actions": self.s.actions_used - a0, "macros": macros_run, "resets": resets, "reason": "budget"}
             node = self.node()
             ms = self.macros(node); node.macros_cache = ms
-            untried = [m for m in ms if m.label not in node.tried and (node.state, m.label) not in self.hazard_labels]
+            inv = self.inv_sig()
+            untried = [m for m in ms if m.label not in node.tried and (node.state, m.label) not in self.hazard_labels
+                       and (level, inv, m.label) not in self.inv_tried]
+            if self.frontier_actions.get(level, 0) > 0.4 * self.max_actions_per_level:
+                untried = [m for m in untried if m.kind != "frontier"] or untried
             if untried:
                 m = min(untried, key=lambda m: self._rank(level, m))   # never-tried-on-this-level labels first, dead labels last
+                self.inv_tried.add((level, inv, m.label))
                 r = self._run_macro(node, m); macros_run += 1
+                if m.kind == "frontier":
+                    self.frontier_actions[level] = self.frontier_actions.get(level, 0) + r["executed_count"]
                 if r["level_completed"]:
                     path_labels.append(m.label)
                     self.solutions[level] = path_labels
