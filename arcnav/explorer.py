@@ -392,12 +392,18 @@ class Explorer:
                 return {"level": level0, "completed": True, "actions": self.s.actions_used - a0, "macros": 0, "resets": 0, "path": [f"layer1:{h.get('type')}"]}
         return None
 
-    def play(self, max_levels: int = 3) -> list[dict]:
+    def play(self, max_levels: int = 3, client=None, advisor_rounds: int = 6) -> list[dict]:
         out = []
         for _ in range(max_levels):
             if self.s.state == "WIN":
                 break
             r = self._layer1()
+            if r is None and client is not None and self.s.level > 1:
+                from .advisor import advise_level
+                level0 = self.s.level; a0 = self.s.actions_used
+                adv = advise_level(self, client, rounds=advisor_rounds, log=self.log)
+                if adv.get("completed"):
+                    r = {"level": level0, "completed": True, "actions": self.s.actions_used - a0, "macros": 0, "resets": 0, "path": [f"advisor:{adv.get('hypothesis', '')[:60]}"]}
             if r is None:
                 r = self.play_level()
             out.append(r)
