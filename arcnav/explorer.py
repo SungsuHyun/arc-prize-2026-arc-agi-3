@@ -63,6 +63,7 @@ class Explorer:
         self.label_hist: dict[tuple[int, str], list[int]] = {}   # (level, label) -> [tried, produced-same-state]
         self.frontier_actions: dict[int, int] = {}
         self.inv_tried: set = set()   # (level, inventory signature, label): a macro is tried once per world state, not once per avatar position
+        self.effect_stats: dict[tuple[str, int], list[int]] = {}   # (kind, colour) -> [tries, effective]: which kinds of touches did anything, across levels
 
     def inv_sig(self) -> str:
         """World inventory: non-HUD objects except the avatar's own colours. Moving the avatar does not change it; collecting,
@@ -115,10 +116,11 @@ class Explorer:
         more than mapping another corridor), then never-tried labels before tried ones, dead labels (same state twice) last."""
         h = self.label_hist.get((level, m.label), [0, 0])
         ranks = self.KIND_RANK_MOVEMENT if self._movement_game() else self.KIND_RANK
-        dead = h[1] >= (1 if m.kind == "click" else 2)   # a click that changed nothing once is a dead button
+        dead = h[1] >= (1 if m.kind == "click" else 2)   # a click that changed nothing at all (HUD included) once is a dead button
         gc = self.goal_colors(); c = self._macro_color(m)
         goal_rank = gc.get(c, 99) if c is not None else 99
-        return (1 if dead else 0, 0 if goal_rank < 99 else 1, goal_rank, ranks.get(m.kind, 9), 1 if h[0] > 0 else 0, m.priority)
+        eff = self._effect_ratio(m)   # colours whose touches did something on earlier levels first; known no-ops last
+        return (1 if dead else 0, 0 if goal_rank < 99 else 1, goal_rank, ranks.get(m.kind, 9), 1 if eff < 0.2 else 0, -round(eff, 1), 1 if h[0] > 0 else 0, m.priority)
 
     def _movement_game(self) -> bool:
         nav = self._nav()
@@ -226,9 +228,17 @@ class Explorer:
                 break
         return res_all
 
+    def _effect_ratio(self, m: Macro) -> float:
+        c = self._macro_color(m)
+        if c is None:
+            return 0.5
+        st = self.effect_stats.get((m.kind, c))
+        return 0.5 if not st or st[0] == 0 else st[1] / st[0]
+
     def _run_macro(self, node: Node, m: Macro) -> dict:
         actions = m.actions
         full_before = self.s.frame.ascii if self.s.frame is not None else None
+        masked_before = masked_ascii(self.s.frame) if self.s.frame is not None else None
         if m.kind == "key-run":   # press until the board stops changing
             done = 0; last = None
             for _ in range(8):
@@ -245,8 +255,15 @@ class Explorer:
         result = "LEVEL" if r["level_completed"] else "GAME_OVER" if r["game_over"] else self.state()
         node.edges[m.label] = (actions, result)
         h = self.label_hist.setdefault((node.level, m.label), [0, 0]); h[0] += 1
-        if result == node.state:
-            h[1] += 1   # the masked board did not change: a click that only ticks the gauge is a wasted action (vc33/r11l data: masked rule wins)
+        # effect grade: 2 = the masked world changed, 1 = only the HUD/counter changed (progress can hide there: vc33 pumps), 0 = nothing
+        full_changed = self.s.frame is not None and full_before is not None and self.s.frame.ascii != full_before
+        world_changed = self.s.frame is not None and masked_before is not None and masked_ascii(self.s.frame) != masked_before
+        grade = 2 if (r["level_completed"] or world_changed) else 1 if full_changed else 0
+        c = self._macro_color(m)
+        if c is not None:
+            st = self.effect_stats.setdefault((m.kind, c), [0, 0]); st[0] += 2; st[1] += grade   # ratio in [0, 1]
+        if grade == 0:
+            h[1] += 1   # nothing at all changed: a dead button
         if r["game_over"]:
             self.hazard_labels.add((node.state, m.label))
         self.trace.append(f"{m.label} -> {result if result in ('LEVEL', 'GAME_OVER') else ('same' if result == node.state else 'new' if result not in self.nodes else 'known')}")
