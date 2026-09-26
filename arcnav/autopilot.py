@@ -155,21 +155,34 @@ def run_click_sequence(session, hypothesis: dict, *, max_actions: int = 40, log=
     seq = list(hypothesis.get("sequence") or [])
     if not seq or "MOUSE" not in session.valid_actions:
         return {"completed": False, "actions": 0, "reason": "not a click game / empty sequence"}
-    last = None
-    for color in seq:
-        if session.actions_used - start >= max_actions or session.level != level0:
-            break
-        nodes = [n for n in session.frame.segmentation["nodes"] if not n["hud"] and n["color"] == color]
-        if not nodes:
-            return {"completed": False, "actions": session.actions_used - start, "reason": f"no colour-{color} object on this level"}
-        if last is not None:
-            nodes.sort(key=lambda n: abs(n["center"][0] - last[0]) + abs(n["center"][1] - last[1]))
+    # compress the recorded sequence into runs: a run of >= 2 clicks on colour c generalises to "click every colour-c object"
+    runs: list[list] = []
+    for c in seq:
+        if runs and runs[-1][0] == c:
+            runs[-1][1] += 1
         else:
-            nodes.sort(key=lambda n: n["pixels"])
-        n = nodes[0]; last = n["center"]
-        res = session.execute([{"action": "MOUSE", "row": n["center"][0], "col": n["center"][1]}])
-        if res["level_completed"] or session.level > level0:
-            return {"completed": True, "actions": session.actions_used - start, "reason": "level completed"}
-        if res["game_over"]:
-            return {"completed": False, "actions": session.actions_used - start, "reason": "game over"}
+            runs.append([c, 1])
+    last = None
+    for color, count in runs:
+        clicked_cells: set = set()
+        todo = 64 if count >= 2 else 1
+        for _ in range(todo):
+            if session.actions_used - start >= max_actions or session.level != level0:
+                break
+            nodes = [n for n in session.frame.segmentation["nodes"] if not n["hud"] and n["color"] == color
+                     and (n["center"][0] // 4, n["center"][1] // 4) not in clicked_cells]
+            if not nodes:
+                if todo == 1:
+                    return {"completed": False, "actions": session.actions_used - start, "reason": f"no colour-{color} object on this level"}
+                break   # every colour-c object clicked: next run
+            if last is not None:
+                nodes.sort(key=lambda n: abs(n["center"][0] - last[0]) + abs(n["center"][1] - last[1]))
+            else:
+                nodes.sort(key=lambda n: n["pixels"])
+            n = nodes[0]; last = n["center"]; clicked_cells.add((n["center"][0] // 4, n["center"][1] // 4))
+            res = session.execute([{"action": "MOUSE", "row": n["center"][0], "col": n["center"][1]}])
+            if res["level_completed"] or session.level > level0:
+                return {"completed": True, "actions": session.actions_used - start, "reason": "level completed"}
+            if res["game_over"]:
+                return {"completed": False, "actions": session.actions_used - start, "reason": "game over"}
     return {"completed": False, "actions": session.actions_used - start, "reason": "sequence replayed without completion"}
