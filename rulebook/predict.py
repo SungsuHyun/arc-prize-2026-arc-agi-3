@@ -60,16 +60,30 @@ class Evidence:
         self.hazard_colors = {r["params"]["color"] for r in self.rules if r["kind"] == "hazard"}
         self.gauge = self.nav.gauge() if self.nav else None
         # colours whose clicks changed only the HUD / nothing, from the record
+        # click statistics: the current level's own observations win over earlier levels' (a colour can behave differently per level)
         self.click_hist: dict[int, Counter] = {}
         self.vanish_to: dict[int, Counter] = {}     # click colour -> Counter(colour the clicked object's cells became) when the object vanished
+        hist_all: dict[int, Counter] = {}; van_all: dict[int, Counter] = {}
         for t in game.transitions:
             if isinstance(t.action, dict):
                 c = t.before_frame.grid[t.action["row"]][t.action["col"]]
                 cls = change_class(t.before_frame, t.after_frame)
-                self.click_hist.setdefault(c, Counter())[cls] += 1
+                cur = t.level == game.level
+                (self.click_hist if cur else hist_all).setdefault(c, Counter())[cls] += 1
                 if cls == "world":
                     k = _object_vanished(t.before_frame, t.after_frame, t.action["row"], t.action["col"])
-                    self.vanish_to.setdefault(c, Counter())[k if k is not None else -1] += 1
+                    (self.vanish_to if cur else van_all).setdefault(c, Counter())[k if k is not None else -1] += 1
+        for c, h in hist_all.items():
+            self.click_hist.setdefault(c, h)
+        for c, h in van_all.items():
+            self.vanish_to.setdefault(c, h)
+        if game.level_transitions():   # the click-effect model too: refit on this level once it has clicks
+            lvl_clicks = [t for t in game.level_transitions() if isinstance(t.action, dict)]
+            if lvl_clicks:
+                self.click = ClickModel()
+                for t in lvl_clicks:
+                    self.click.observe(t.before_frame.grid, t.after_frame.grid, t.action["row"], t.action["col"])
+                self.click.fit()
 
     # ── facts for the rulebook ───────────────────────────────────────────
     def facts(self) -> list[dict]:

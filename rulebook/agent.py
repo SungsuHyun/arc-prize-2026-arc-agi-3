@@ -22,7 +22,8 @@ from .env import Game, action_label
 from .llm_io import Model
 from .predict import Evidence
 
-DEFAULTS = {"max_minutes": 20.0, "level_actions": 200, "max_actions": 2000, "reviews_per_level": 8, "sync_every": 4, "max_levels": 10}
+DEFAULTS = {"max_minutes": 20.0, "level_actions": 200, "max_actions": 2000, "reviews_per_level": 8, "max_levels": 10,
+            "review_think": "level"}   # thinking during reviews: "level" = only after a level completion, "always", "never"
 
 
 class RulebookAgent:
@@ -80,11 +81,13 @@ class RulebookAgent:
         self.book.plan = str(obj.get("plan", ""))[:600]
         self.log("INIT rulebook:\n" + self.book.render()); self.save_book()
 
-    def review(self, event: str, changes: list[str], *, before=None, bbox=None) -> None:
+    def review(self, event: str, changes: list[str], *, before=None, bbox=None, level_event: bool = False) -> None:
         if self.model is None:
             return
         self.reviews += 1
-        obj = self.model.review(self.g, self.book, event, changes, self.outcomes, before=before, bbox=bbox)
+        mode = self.cfg.get("review_think", "level")
+        think = mode == "always" or (mode == "level" and level_event)
+        obj = self.model.review(self.g, self.book, event, changes, self.outcomes, before=before, bbox=bbox, think=think)
         if not obj:
             return
         done = self.book.apply_edits(obj.get("edits") or [], level=self.g.level)
@@ -190,7 +193,7 @@ class RulebookAgent:
                 if g.state != "WIN":
                     self.review(f"LEVEL {level0} COMPLETED after {g.level_action_log[-1]} actions on the last attempt. Winning action sequence: {seq[-30:]}. "
                                 f"The last action was {action_label(act)} ({cand.label}). Level {g.level} starts now (new board below): state which win condition proved "
-                                f"true, mark it confirmed, and write the plan for the new level.", changes + wins)
+                                f"true, mark it confirmed, and write the plan for the new level.", changes + wins, level_event=True)
                 return "won" if g.state == "WIN" else "level"
             if res["game_over"]:
                 g.reset()
