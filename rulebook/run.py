@@ -28,8 +28,8 @@ DEFAULT_CONFIG = {"base_url": "http://127.0.0.1:1234/v1", "model": "local-qwen",
 
 def _git() -> dict:
     try:
-        rev = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], cwd=ROOT, text=True).strip()
-        dirty = bool(subprocess.check_output(["git", "status", "--porcelain", "rulebook"], cwd=ROOT, text=True).strip())
+        rev = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], cwd=ROOT, text=True, stderr=subprocess.DEVNULL).strip()
+        dirty = bool(subprocess.check_output(["git", "status", "--porcelain", "rulebook"], cwd=ROOT, text=True, stderr=subprocess.DEVNULL).strip())
         return {"commit": rev, "dirty": dirty}
     except Exception:
         return {}

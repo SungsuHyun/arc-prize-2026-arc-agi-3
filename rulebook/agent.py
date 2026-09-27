@@ -26,7 +26,8 @@ from .entities import build_scene
 from .plans import make_plans
 
 DEFAULTS = {"max_minutes": 20.0, "level_actions": 200, "max_actions": 2000, "reviews_per_level": 8, "max_levels": 10,
-            "review_think": "level"}   # thinking during reviews: "level" = only after a level completion, "always", "never"
+            "review_think": "level",   # thinking during reviews: "level" = only after a level completion, "always", "never"
+            "init_think": True}        # thinking for the initial rulebook (off on Kaggle: the FP8 27B thinks past the token budget)
 
 
 class RulebookAgent:
@@ -110,7 +111,7 @@ class RulebookAgent:
     def init_book(self) -> None:
         if self.model is None:
             self.book.plan = "no model: try untested actions, then act on harness-induced rules"; return
-        obj = self.model.init_rulebook(self.g)
+        obj = self.model.init_rulebook(self.g, think=bool(self.cfg.get("init_think", True)))
         if not obj:
             self.log("INIT failed; starting with an empty rulebook"); return
         for sec in ("env", "rules", "win"):
