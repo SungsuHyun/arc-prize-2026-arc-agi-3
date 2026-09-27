@@ -68,10 +68,26 @@ class Repl:
                 return [t.upper()]
             return [a]
 
+        KEYS = ("UP", "DOWN", "LEFT", "RIGHT", "SPACE", "ACTION7")
+
+        def _valid(a):
+            if isinstance(a, dict):
+                try:
+                    r, c = int(a.get("row")), int(a.get("col"))
+                except (TypeError, ValueError):
+                    raise StopTurn(f"a click needs integer row/col: got {a!r}")
+                if not (0 <= r < 64 and 0 <= c < 64):
+                    raise StopTurn(f"click ({r},{c}) is off the 64x64 board")
+                return {"action": "MOUSE", "row": r, "col": c}
+            if isinstance(a, str) and a in KEYS:
+                return a
+            raise StopTurn(f"act() takes 'UP'/'DOWN'/'LEFT'/'RIGHT'/'SPACE'/'ACTION7', (row, col) for a click, or a candidate/plan label; got {a!r}")
+
         def act(x):
             acts = []
             for a in (x if isinstance(x, list) and not (len(x) == 2 and all(isinstance(v, (int, float)) for v in x)) else [x]):
                 acts.extend(_resolve(a))
+            acts = [_valid(a) for a in acts]
             out = []
             for a in acts:
                 if self.turn_actions >= ACTION_CAP:
@@ -106,8 +122,13 @@ class Repl:
             p = self.a.evidence().predict(a if isinstance(a, dict) else str(a).upper())
             return f"{p.kind}: {p.text}"
 
+        class _SceneView(dict):
+            """dict with attribute access: scene().board and scene()['board'] both work."""
+            __getattr__ = dict.__getitem__
+
         def scene():
-            e = self.a.evidence(); return {"board": e.frame.grid, "ascii": e.frame.ascii, "objects": self._objects(e.scene), "regions": [(r.id, r.color, r.bbox) for r in e.scene.regions]}
+            e = self.a.evidence()
+            return _SceneView(board=e.frame.grid, ascii=e.frame.ascii, objects=self._objects(e.scene), regions=[(r.id, r.color, r.bbox) for r in e.scene.regions], entities=scene_text(e.scene))
 
         def check_rule(fn, name: Optional[str] = None):
             """fn(before_board, action) -> after_board or None. Scored on every recorded transition of this level; >= 0.8 on >= 4
