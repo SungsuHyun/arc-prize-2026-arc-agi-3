@@ -26,10 +26,14 @@ def parse_log(path: Path) -> dict:
     goal_progress: dict = defaultdict(list)
     if not path.exists():
         return {}
+    in_code = None
     for ln in path.read_text(errors="replace").splitlines():
         m = re.match(r"\[\s*(\d+)s a\s*(\d+) L(\d+)\] (.*)", ln)
         if not m:
+            if in_code is not None and "plan_actions[" in ln:   # coder mode: a plan run from model code counts as a chosen plan
+                per[in_code]["plan_chosen"] += 1; in_code = None
             continue
+        in_code = int(m.group(3)) if m.group(4).startswith("CODE:") else None
         t, a, lv, rest = int(m.group(1)), int(m.group(2)), int(m.group(3)), m.group(4)
         c = per[lv]
         if rest.startswith("OK :"):

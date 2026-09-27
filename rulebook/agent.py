@@ -52,8 +52,12 @@ class RulebookAgent:
         self.idle_turns = 0
         from collections import Counter as _C
         self.metrics = _C()               # counters for the evaluation report (prediction kinds, verdicts, plans, fallbacks ...)
+        self.attempt_start_actions = 0    # actions_used when the current attempt (level or reset) began
+        self.game_over_at: dict = {}      # level -> [actions into the attempt at which a game over happened]
         from collections import Counter as _C
         self.metrics = _C()               # counters for the evaluation report (prediction kinds, verdicts, plans, fallbacks ...)
+        self.attempt_start_actions = 0    # actions_used when the current attempt (level or reset) began
+        self.game_over_at: dict = {}      # level -> [actions into the attempt at which a game over happened]
         self.repl = None
         self.distrust: dict = {}          # (level, click colour) -> failed board predictions; the predictor stops predicting after 2
         self.preds: dict = {}             # rulebook entry id -> goals2.Predicate (win predicates learned from completed levels)
@@ -237,7 +241,7 @@ class RulebookAgent:
 
     def play_level(self) -> dict:
         g = self.g; level0 = g.level; a0 = g.actions_used; reviews0 = self.reviews; decisions = 0
-        self.level_start_frame = g.frame
+        self.level_start_frame = g.frame; self.attempt_start_actions = g.actions_used
         while g.level == level0 and g.state != "WIN":
             if self._out_of_time():
                 return self._lv(level0, a0, decisions, "time/actions budget")
@@ -258,6 +262,9 @@ class RulebookAgent:
             if not [c for c in cands if c.kind != "info"]:
                 return self._lv(level0, a0, decisions, "no candidates")
             budget = f"actions used on this level {g.actions_used - a0} (cap {self.cfg['level_actions']}), total {g.actions_used}"
+            lim = self.attempt_limit()
+            if lim:
+                budget += f"; THIS ATTEMPT ENDS IN A GAME OVER AFTER ~{lim} ACTIONS (seen {len(self.game_over_at.get(g.level, []))}x): {lim - (g.actions_used - self.attempt_start_actions)} left"
             if goal["lines"]:
                 self.log("goal state: " + " | ".join(goal["lines"]))
             if self.cfg.get("mode") == "coder" and self.model is not None:
@@ -316,6 +323,13 @@ class RulebookAgent:
         if self.repl.turn_status in ("won", "level", "over"):
             return self.repl.turn_status
         return "ok"
+
+    def attempt_limit(self) -> Optional[int]:
+        """If game overs on this level happened at (nearly) the same action count, that count is the attempt's action limit."""
+        xs = self.game_over_at.get(self.g.level, [])
+        if len(xs) >= 2 and max(xs) - min(xs) <= 3:
+            return round(sum(xs) / len(xs))
+        return None
 
     def _lv(self, level0, a0, decisions, reason) -> dict:
         return {"level": level0, "completed": self.g.level > level0 or self.g.state == "WIN", "actions": self.g.actions_used - a0, "decisions": decisions, "reason": reason}
@@ -387,8 +401,14 @@ class RulebookAgent:
                             f"true; and write the plan for the new level.", changes + wins, level_event=True, extra=extra)
             return "won" if g.state == "WIN" else "level"
         if res["game_over"]:
-            g.reset(); self.level_start_frame = g.frame
+            n_att = g.actions_used - self.attempt_start_actions
+            self.game_over_at.setdefault(g.level, []).append(n_att)
+            g.reset(); self.level_start_frame = g.frame; self.attempt_start_actions = g.actions_used
+            self.metrics["game_over"] += 1
             ev2 = self.evidence(); changes = self.sync(ev2)
+            lim = self.attempt_limit()
+            if lim:
+                changes = changes + [f"the attempt ends in a GAME OVER after about {lim} actions on this level (seen {len(self.game_over_at[g.level])}x): the level must be finished within that budget"]
             self.review(f"GAME OVER after {action_label(act)} ({label}): the level was reset. Predicted: {pred.text}. Observed: {v.text}. "
                         "Add the rule that explains the game over (hazard / limit) and adjust the plan.", changes, before=before, bbox=v.diff.get("bbox"))
             return "over"
