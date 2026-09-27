@@ -204,3 +204,18 @@ lp85에서 버튼 대신 블록 클릭)가 레벨 1 액션 수를 7~40으로 벌
 이후 수정(85088e6): 대체 정책이 직전 토글을 바로 되돌리지 않음, 거부된 라벨을 모델에 알림, 한 번 건드린 토글 물체는 후보 뒤로.
 캐글 v4 = 이 코드.
 | 캐글 v4 (85088e6) | 같은 스모크 | 4.17 | tn36 L1 실패(35액션), **lp85 L2** 41액션. v3와 같은 코드 계열에서 tn36이 갈린 것은 INIT 룰북 변동 |
+
+## 11. v3 코더 모드 (docs/025 §4-1, 2026-09-27 저녁)
+
+모델이 후보 라벨을 고르는 대신 **파이썬을 써서 라이브러리를 호출**한다(`rulebook/repl.py`, `--mode coder`). 네임스페이스:
+board/ascii/objects/regions/entities/transitions/book/goal/candidates/plans/notes, 함수 act·click·press·path_to·predict·scene·
+check_rule(재생 검증)·define_goal(하네스가 평가·기각하는 술어)·note·refute·set_plan·remember. act()가 실행하는 모든 액션은
+`_step`으로 예측·검증되고, 레벨 완료·게임오버·호출당 30액션에서 코드가 중단된다. 검증된 모델 규칙(check_rule ≥0.8, ≥4전이)은
+예측기가 내장 규칙보다 먼저 쓴다. 두 턴 연속 액션이 없으면 프로그램이 대체 후보를 실행한다(런어웨이 방지).
+
+| 실행 | 결과 |
+|---|---|
+| coder-smoke (tn36, lp85, 10분) | tn36 L1 7액션; lp85 L1 9액션 후 라벨 문자열 act("MOUSE(r,c)")·act("submit")이 무효로 처리돼 공회전(454턴) → 라벨 해석·유휴 턴 가드 추가 |
+| coder-smoke2 (tn36, lp85, vc33, r11l, 10분) | **2.99**: tn36 L1 8액션, lp85 L2(30액션), vc33 L1, r11l 0. 턴당 3–6초, 한 호출에 5–10액션 |
+
+캐글 커널 v5 = 코더 모드. 장기 측정(`make rulebook-bench`: 공개 25게임 × 60분 × 6동시, coder) 1회차 실행 중.
