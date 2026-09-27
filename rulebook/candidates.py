@@ -161,6 +161,9 @@ def resolve(label: str, cands: list, game: Game, ev: Evidence) -> Optional[Candi
         kind, col, r, c = m.group(1), int(m.group(2)), int(m.group(3)), int(m.group(4))
         same = [x for x in cands if x.kind == kind and x.color == col]
         if kind == "click" and 0 <= r < 64 and 0 <= c < 64 and game.frame.grid[r][c] == col and "MOUSE" in game.valid_actions:
+            o = ev.scene.obj_around(r, c)
+            if o is not None and ev.cs.is_dead(o.key):
+                return None   # an object that did nothing twice on this level is not clickable again, whatever the model writes
             act = {"action": "MOUSE", "row": r, "col": c}; p = ev.predict(act)
             return Candidate(f"click({col}@{r},{c})", "click", [act], p.text, color=col, pred_kind=p.kind)
         if same:

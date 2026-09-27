@@ -174,7 +174,8 @@ class RulebookAgent:
         # is a wasted action; so is the same label three times in a row
         self.last_choice.append(c.label)
         repeat = len(self.last_choice) >= 3 and len(set(self.last_choice[-3:])) == 1
-        if c.tested and (c.pred_kind in ("noop", "hud") or repeat):
+        recent = self.last_choice[-3:-1].count(c.label) >= 1
+        if (c.tested or recent) and (c.pred_kind in ("noop", "hud") or repeat):
             alt = next((x for x in cands if not x.tested and x.pred_kind not in ("noop", "hud")), None) or next((x for x in cands if not x.tested), None)
             if alt:
                 self.log(f"DECIDE: {c.label} already tried here and predicted '{c.pred_kind}'{' (3x in a row)' if repeat else ''} -> {alt.label}")
