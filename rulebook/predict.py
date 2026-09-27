@@ -62,7 +62,10 @@ class Evidence:
         self.avatar = self.nav.avatar() if self.nav else None
         self.wall_colors = {r["params"]["color"] for r in self.rules if r["kind"] == "wall" and r["support"] > r["counter"]}
         self.ambiguous_colors = {r["params"]["color"]: (r["support"], r["counter"]) for r in self.rules if r["kind"] == "wall" and r["counter"] >= 1}
-        self.noop_keys = {r["params"]["action"] for r in self.rules if r["kind"] == "noop" and r["support"] >= 1}
+        # a key is a no-op only while every press did nothing; once it did something the effect is conditional (state-dependent)
+        self.noop_keys = {r["params"]["action"] for r in self.rules if r["kind"] == "noop" and r["support"] >= 1 and r["counter"] == 0}
+        self.conditional_keys = {r["params"]["action"]: (r["support"], r["counter"]) for r in self.rules if r["kind"] == "noop" and r["counter"] >= 1}
+        self.flaky_moves = {r["params"]["action"]: (r["support"], r["counter"]) for r in self.rules if r["kind"] == "move" and r["counter"] >= max(2, r["support"])}
         self.hazard_colors = {r["params"]["color"] for r in self.rules if r["kind"] == "hazard"}
         self.gauge = self.nav.gauge() if self.nav else None
         # click statistics keyed by (colour, region) and by button object: the current level's records first, all levels as fallback
@@ -250,6 +253,12 @@ class Evidence:
                 return Prediction("unknown", f"colour {colour}{where} clicked {n}x before with no consistent effect model", rules=[rule], confidence="none")
             return Prediction("unknown", f"colour {colour}{where} never clicked" + ("" if this_level else " on this level"), confidence="none")
         name = act
+        if name in self.conditional_keys and name not in self.moves:
+            n0, n1 = self.conditional_keys[name]
+            return Prediction("unknown", f"{name}: changed nothing {n0}x but changed the board {n1}x — the effect depends on a condition (state) not yet known", confidence="none")
+        if name in self.flaky_moves:
+            n0, n1 = self.flaky_moves[name]
+            return Prediction("unknown", f"{name}: the learned move delta fit {n0}x but failed {n1}x — the avatar or step size is not identified reliably", confidence="none")
         if name in self.noop_keys and name not in self.moves:
             return Prediction("noop", f"{name} changed nothing before", rules=[("noop", {"action": name})],
                               confidence="confirmed" if any(r["kind"] == "noop" and r["params"]["action"] == name and r["support"] >= 2 for r in self.rules) else "hypothesis")
