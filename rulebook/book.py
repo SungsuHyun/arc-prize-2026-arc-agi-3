@@ -19,7 +19,8 @@ STATUSES = ("hypothesis", "confirmed", "refuted")
 # machine-checkable kinds and the params that identify one rule of that kind
 KIND_KEYS = {
     "move": ("action",), "wall": ("color",), "noop": ("action",), "gauge": ("color",), "refill": ("color",),
-    "collect": ("color",), "hazard": ("color",), "click": ("color",), "mirror": ("color",),
+    "collect": ("color",), "hazard": ("color",), "click": ("color", "region"), "mirror": ("color",),
+    "button": ("color", "region", "bbox"), "coupled": ("marker", "color"),
     # win kinds (from goals.infer)
     "reach": ("reach",), "collect_reach": ("collect", "reach"), "collect_all": ("collect",), "click_sequence": (), "merge": (),
     # env kinds
@@ -90,7 +91,8 @@ class Rulebook:
             return None
         loose = None
         for e in self.entries:
-            if e.kind == kind and all(str(e.params.get(k)) == str(params.get(k)) for k in keys):
+            # a key the entry does not carry is a wildcard (a model-written 'click colour 1' matches every region)
+            if e.kind == kind and all(k not in e.params or str(e.params.get(k)) == str(params.get(k)) for k in keys):
                 if all(str(e.params.get(k)) == str(v) for k, v in params.items() if k in e.params):
                     return e
                 loose = loose or e

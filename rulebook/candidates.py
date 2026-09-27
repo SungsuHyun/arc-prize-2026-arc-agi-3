@@ -79,43 +79,51 @@ def build(game: Game, ev: Evidence, tried: set, *, max_clicks: int = 24) -> list
         p = ev.predict(a)
         out.append(Candidate(a, "interact", [a], p.text, priority=20 if p.kind == "unknown" else 42, pred_kind=p.kind))
     if "MOUSE" in valid and game.frame is not None:
-        nodes = []
-        for n in game.frame.segmentation["nodes"]:
-            if n["hud"]:
+        sc = ev.scene
+        objs = []
+        dead = 0
+        for o in sc.objs:
+            if o.hud:
                 continue
-            r0, c0, r1, c1 = n["bbox"]
+            r0, c0, r1, c1 = o.bbox
             thin = (r1 - r0 <= 2) or (c1 - c0 <= 2)
             if thin and (r0 <= 1 or r1 >= 62 or c0 <= 1 or c1 >= 62):
                 continue
-            if n["pixels"] <= 2 and keys:
+            if o.size <= 2 and keys:
                 continue
-            nodes.append(n)
-        nodes.sort(key=lambda n: n["pixels"])
-        # round-robin over colours (smallest object of every colour first) so that no colour is crowded out by a big grid of tiles
-        by_colour: dict[int, list] = {}
-        for n in nodes:
-            by_colour.setdefault(n["color"], []).append(n)
+            if ev.cs.is_dead(o.key):
+                dead += 1; continue   # clicked twice on this level with no effect in the playfield: not offered again
+            objs.append(o)
+        # round-robin over (colour, region) groups, smallest objects first, so that no group crowds out the others
+        groups: dict = {}
+        for o in sorted(objs, key=lambda o: o.size):
+            groups.setdefault((o.color, o.region), []).append(o)
         ordered = []
-        for k in range(max((len(v) for v in by_colour.values()), default=0)):
-            for c in sorted(by_colour, key=lambda c: by_colour[c][0]["pixels"]):
-                if k < len(by_colour[c]) and k < 8:
-                    ordered.append(by_colour[c][k])
-        nodes = ordered
-        seen_cells: set = set(); seen_colors: Counter = Counter()
+        for k in range(max((len(v) for v in groups.values()), default=0)):
+            for key in sorted(groups, key=lambda k_: groups[k_][0].size):
+                if k < len(groups[key]) and k < 8:
+                    ordered.append(groups[key][k])
+        seen_cells: set = set(); seen_groups: Counter = Counter()
         base = 25 if not movement else 60
-        for n in nodes:
-            cell = (n["center"][0] // 4, n["center"][1] // 4)
+        for o in ordered:
+            r, c = o.center
+            if game.frame.grid[r][c] != o.color:   # centre of a hollow shape: pick one of its own cells
+                r, c = (o.cells or [(r, c)])[0]
+            cell = (r // 4, c // 4)
             if cell in seen_cells:
                 continue
             seen_cells.add(cell)
-            act = {"action": "MOUSE", "row": n["center"][0], "col": n["center"][1]}
+            act = {"action": "MOUSE", "row": r, "col": c}
             p = ev.predict(act)
-            lab = f"click({n['color']}@{n['center'][0]},{n['center'][1]})"
-            out.append(Candidate(lab, "click", [act], f"[{n['pixels']}px] {p.text}", color=n["color"],
-                                 priority=base + (0 if seen_colors[n["color"]] == 0 else 8) + min(seen_colors[n["color"]], 6) + (10 if p.kind in ("noop", "hud") else 0), pred_kind=p.kind))
-            seen_colors[n["color"]] += 1
+            lab = f"click({o.color}@{r},{c})"
+            g = (o.color, o.region)
+            out.append(Candidate(lab, "click", [act], f"[#{o.id} {o.size}px" + (f" in P{o.region}" if o.region >= 0 else "") + f"] {p.text}", color=o.color,
+                                 priority=base + (0 if seen_groups[g] == 0 else 8) + min(seen_groups[g], 6) + (10 if p.kind in ("noop", "hud") else 0), pred_kind=p.kind))
+            seen_groups[g] += 1
             if len([c for c in out if c.kind == "click"]) >= max_clicks:
                 break
+        if dead:
+            out.append(Candidate("(hidden)", "info", [], f"{dead} objects hidden: clicked twice on this level with no effect", priority=999))
     for c in out:
         c.tested = (st, c.label) in tried
     out.sort(key=lambda c: (c.tested, c.priority))

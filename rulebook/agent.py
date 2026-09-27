@@ -57,7 +57,7 @@ class RulebookAgent:
     # ── evidence ─────────────────────────────────────────────────────────
     def evidence(self, full: bool = False) -> Evidence:
         lv = self.g.level
-        return Evidence(self.g, distrust={c: n for (l, c), n in self.distrust.items() if l == lv})
+        return Evidence(self.g, distrust={key: n for (l, key), n in self.distrust.items() if l == lv})
 
     def sync(self, ev: Evidence) -> list[str]:
         changes = self.book.sync(ev.facts(), level=self.g.level)
@@ -96,6 +96,7 @@ class RulebookAgent:
         self.log(f"REVIEW ({event[:60]}): {done}\n" + self.book.render()); self.save_book()
 
     def choose(self, cands: list[Candidate], budget_text: str, ev: Evidence) -> Candidate:
+        cands = [c for c in cands if c.kind != "info"] or cands
         fallback = cands[0]   # untested first, then by priority (deterministic policy)
         if self.model is None or not cands:
             return fallback
@@ -154,7 +155,7 @@ class RulebookAgent:
                 return self._lv(level0, a0, decisions, "level action cap")
             ev = self.evidence(); self.sync(ev)
             cands = build(g, ev, self.tried)
-            if not cands:
+            if not [c for c in cands if c.kind != "info"]:
                 return self._lv(level0, a0, decisions, "no candidates")
             budget = f"actions used on this level {g.actions_used - a0} (cap {self.cfg['level_actions']}), total {g.actions_used}"
             cand = self.choose(cands, budget, ev); decisions += 1
@@ -203,8 +204,8 @@ class RulebookAgent:
                 return "over"
             if v.ok is False:
                 self.mismatches += 1
-                if isinstance(act, dict) and pred.kind == "board":
-                    key = (g.level, before.grid[act["row"]][act["col"]]); self.distrust[key] = self.distrust.get(key, 0) + 1
+                if isinstance(act, dict) and pred.kind in ("board", "objects", "cursor"):
+                    key = (g.level, ev.click_key(act["row"], act["col"])[0]); self.distrust[key] = self.distrust.get(key, 0) + 1
                 ev2 = self.evidence(); changes = self.sync(ev2)
                 if self.reviews - reviews0 < self.cfg["reviews_per_level"]:
                     self.review(f"MISMATCH on {action_label(act)} ({cand.label}). Predicted: {pred.text}. Observed: {v.text}. "

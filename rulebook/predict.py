@@ -16,6 +16,8 @@ from arcnav.nav import NavHelper, extract_objects
 from arcnav import goals as goal_inference
 
 from .env import Game, Transition, MOVE_KEYS, action_label
+from .entities import Obj, Scene, build_scene, match
+from .clicks import ClickStats, change_class, record, _edge_only_diff
 
 
 @dataclass
@@ -26,6 +28,8 @@ class Prediction:
     board: Optional[list] = None           # predicted grid (board kind)
     rules: list = field(default_factory=list)   # (kind, params) the prediction relies on
     confidence: str = "hypothesis"         # confirmed | hypothesis | none
+    moves: Optional[dict] = None           # objects kind: before-object id -> predicted new bbox
+    coupled: Optional[list] = None         # cursor kind: [(colour, predicted (dr, dc))] for objects coupled to the marker
 
 
 @dataclass
@@ -60,38 +64,33 @@ class Evidence:
         self.noop_keys = {r["params"]["action"] for r in self.rules if r["kind"] == "noop" and r["support"] >= 1}
         self.hazard_colors = {r["params"]["color"] for r in self.rules if r["kind"] == "hazard"}
         self.gauge = self.nav.gauge() if self.nav else None
-        # colours whose clicks changed only the HUD / nothing, from the record
-        # click statistics: the current level's own observations win over earlier levels' (a colour can behave differently per level)
-        self.click_hist: dict[int, Counter] = {}
-        self.vanish_to: dict[int, Counter] = {}     # click colour -> Counter(colour the clicked object's cells became) when the object vanished
-        hist_all: dict[int, Counter] = {}; van_all: dict[int, Counter] = {}
+        # click statistics keyed by (colour, region) and by button object: the current level's records first, all levels as fallback
+        self.scene: Scene = build_scene(self.frame)
+        self.distrust = {k if isinstance(k, tuple) else (k, None): v for k, v in self.distrust.items()}
+        self.cs = ClickStats(); self.cs_all = ClickStats()
         for t in game.transitions:
             if isinstance(t.action, dict):
-                c = t.before_frame.grid[t.action["row"]][t.action["col"]]
-                cls = change_class(t.before_frame, t.after_frame)
-                cur = t.level == game.level
-                (self.click_hist if cur else hist_all).setdefault(c, Counter())[cls] += 1
-                k = _object_vanished(t.before_frame, t.after_frame, t.action["row"], t.action["col"]) if cls == "world" else None
-                (self.vanish_to if cur else van_all).setdefault(c, Counter())[k if k is not None else -1] += 1
-        # marker/cursor rule: after clicking colour c, an object of colour k sits at the click point (moved there)
-        self.cursor: dict[int, Counter] = {}
-        for t in game.level_transitions():
-            if isinstance(t.action, dict):
-                c = t.before_frame.grid[t.action["row"]][t.action["col"]]
-                d = summarize_diff(t.before_frame, t.after_frame)
-                hit = [m["color"] for m in d.get("moved", []) if abs(m["to"][0] - t.action["row"]) <= 2 and abs(m["to"][1] - t.action["col"]) <= 2]
-                self.cursor.setdefault(c, Counter())[hit[0] if hit else -1] += 1
-        for c, h in hist_all.items():
-            self.click_hist.setdefault(c, h)
-        for c, h in van_all.items():
-            self.vanish_to.setdefault(c, h)
-        if game.level_transitions():   # the click-effect model too: refit on this level once it has clicks
+                rec = record(t)
+                (self.cs if t.level == game.level else self.cs_all).add(rec)
+        if game.level_transitions():   # the offset click-effect model too: refit on this level once it has clicks
             lvl_clicks = [t for t in game.level_transitions() if isinstance(t.action, dict)]
             if lvl_clicks:
                 self.click = ClickModel()
                 for t in lvl_clicks:
                     self.click.observe(t.before_frame.grid, t.after_frame.grid, t.action["row"], t.action["col"])
-                self.click.fit()
+                self.click.fit(min_support=0.8)
+
+    def _stat(self, name: str, colour: int, region: int):
+        """(counter, exact_region?) from this level's stats, else from all levels."""
+        v, exact = getattr(self.cs, name)(colour, region)
+        if v:
+            return v, exact, True
+        v, exact = getattr(self.cs_all, name)(colour, region)
+        return v, exact, False
+
+    def click_key(self, r: int, c: int) -> tuple:
+        o = self.scene.obj_around(r, c)
+        return (o.color if o is not None else self.frame.grid[r][c], o.region if o else self.scene.label[r][c]), o
 
     # ── facts for the rulebook ───────────────────────────────────────────
     def facts(self) -> list[dict]:
@@ -100,36 +99,42 @@ class Evidence:
             av = self.avatar; x0, y0, x1, y1 = av["bbox_xyxy"]
             out.append({"kind": "avatar", "params": {"colors": av["colors"]}, "support": 2, "counter": 0,
                         "text": f"the avatar (what the movement keys move) is the colour-{av['colors']} block, {y1 - y0 + 1}x{x1 - x0 + 1} px, now at rows {y0}-{y1} cols {x0}-{x1}"})
-        for c, rules in self.click.rules.items():
-            maps = Counter()
-            for m in rules.values():
-                for b, a in m.items():
-                    maps[(b, a)] += 1
-            txt = f"clicking colour {c} changes {len(rules)} cells around the click point ({', '.join(f'{b}->{a}x{n}' for (b, a), n in maps.most_common(4))})"
-            f = next((f for f in out if f["kind"] == "click" and f["params"].get("color") == c), None)
-            if f:
-                f["text"] = txt + f" ({self.click.clicks[c]} clicks)"
-                f["params"]["local"] = len(rules)
-            else:
-                out.append({"kind": "click", "params": {"color": c, "local": len(rules)}, "support": self.click.clicks[c], "counter": 0, "text": txt})
-        for c, cu in self.cursor.items():
-            k, n = cu.most_common(1)[0]
-            if k != -1 and n * 2 > sum(cu.values()):
-                f = next((f for f in out if f["kind"] == "click" and f["params"].get("color") == c), None)
-                txt = f"clicking colour {c} moves the colour-{k} marker to the clicked cell ({n}/{sum(cu.values())} clicks)"
-                if f:
-                    f["text"] = txt + "; " + f["text"]; f["params"]["marker"] = k
-                else:
-                    out.append({"kind": "click", "params": {"color": c, "marker": k}, "support": n, "counter": sum(cu.values()) - n, "text": txt})
-        for c, h in self.click_hist.items():
-            if h.get("world", 0) == 0 and not self.click.rules.get(c):
-                f = next((f for f in out if f["kind"] == "click" and f["params"].get("color") == c), None)
+        # per (colour, region) click facts from this level (fallback: all levels)
+        stats = self.cs if self.cs.n else self.cs_all
+        for (c, rg), h in sorted(stats.hist.items()):
+            n = sum(h.values()); where = f" in P{rg}" if rg >= 0 else ""
+            rgl = self.scene.region_named(rg)
+            rgtxt = f" (P{rg} = the colour-{rgl.color} area)" if rgl else ""
+            if h.get("world", 0) == 0:
                 what = "changes only the HUD/counter" if h.get("hud") else "changes nothing"
-                txt = f"clicking colour {c} {what} ({sum(h.values())} clicks)"
-                if f:
-                    f["text"] = txt
-                else:
-                    out.append({"kind": "click", "params": {"color": c, "changes": []}, "support": sum(h.values()), "counter": 0, "text": txt})
+                out.append({"kind": "click", "params": {"color": c, "region": rg, "changes": []}, "support": n, "counter": 0,
+                            "text": f"clicking colour {c}{where}{rgtxt} {what} ({n} clicks)"})
+                continue
+            parts = []
+            vt = stats.vanish.get((c, rg)); cu = stats.cursor.get((c, rg))
+            if vt and vt.most_common(1)[0][0] != -1 and vt.most_common(1)[0][1] * 2 > n:
+                k, m = vt.most_common(1)[0]; parts.append(f"the clicked object turns into colour {k} ({m}/{n})")
+            if cu and cu.most_common(1)[0][0] != -1 and cu.most_common(1)[0][1] * 2 > n:
+                k, m = cu.most_common(1)[0]
+                sel = stats.select.get((c, rg), Counter())
+                parts.append(f"the colour-{k} marker {'jumps onto the clicked object (selection)' if sel.get(True, 0) > sel.get(False, 0) else 'moves to the clicked cell'} ({m}/{n})")
+            if h.get("hud", 0) + h.get("none", 0):
+                parts.append(f"{h.get('hud', 0) + h.get('none', 0)}/{n} clicks changed nothing in the playfield")
+            if not parts:
+                parts.append(f"changes the playfield ({h.get('world', 0)}/{n}), effect not yet modelled")
+            out.append({"kind": "click", "params": {"color": c, "region": rg}, "support": n, "counter": 0,
+                        "text": f"clicking colour {c}{where}{rgtxt}: " + "; ".join(parts)})
+        for b, n in stats.succ_n.items():
+            sg = stats.sigma(b); moving = sum(1 for p_, q in sg.items() if p_ != q)
+            out.append({"kind": "button", "params": {"color": b[0], "region": b[1], "bbox": list(b[2])}, "support": n, "counter": 0,
+                        "text": f"the colour-{b[0]} button at rows {b[2][0]}-{b[2][2]} cols {b[2][1]}-{b[2][3]} shifts every block on its track one slot "
+                                f"({moving} slot transitions solved from {n} presses; blocks return to their slot after a full cycle)"})
+        for (mk, oc), cnt in stats.coupled.items():
+            r = stats.coupling(mk, oc)
+            if r:
+                (rr, rc), m = r
+                out.append({"kind": "coupled", "params": {"marker": mk, "color": oc, "ratio": [str(rr), str(rc)]}, "support": m, "counter": sum(cnt.values()) - m,
+                            "text": f"when the colour-{mk} marker moves by (dr, dc), each colour-{oc} object moves by ({rr}*dr, {rc}*dc) — it sits at a fixed fraction (e.g. the centroid) of the markers"})
         return out
 
     def win_facts(self, level: int) -> list[dict]:
@@ -160,42 +165,81 @@ class Evidence:
         grid = self.frame.grid
         if isinstance(act, dict):
             r, c = act["row"], act["col"]; colour = grid[r][c]
-            h = self.click_hist.get(colour)
-            if h and h.get("world", 0) == 0:
+            (colour, region), obj = self.click_key(r, c)
+            where = f" in P{region}" if region >= 0 else ""
+            rule = ("click", {"color": colour, "region": region})
+            h, exact, this_level = self._stat("hist_of", colour, region)
+            n = sum(h.values()) if h else 0
+            if h and h.get("world", 0) == 0 and (exact or n >= 3):
                 kind = "hud" if h.get("hud") else "noop"
-                return Prediction(kind, f"colour {colour} clicked {sum(h.values())}x before: " + ("only the HUD changed" if kind == "hud" else "nothing changed"),
-                                  rules=[("click", {"color": colour})], confidence="confirmed" if sum(h.values()) >= 2 else "hypothesis")
-            if self.distrust.get(colour, 0) >= 2:
-                return Prediction("unknown", f"colour {colour}: the effect model was wrong {self.distrust[colour]}x on this level; effect not predictable yet "
-                                  f"(clicked {sum(h.values()) if h else 0}x here)", rules=[("click", {"color": colour})], confidence="none")
-            cu = self.cursor.get(colour)
+                return Prediction(kind, f"colour {colour}{where} clicked {n}x before: " + ("only the HUD changed" if kind == "hud" else "nothing changed"),
+                                  rules=[rule], confidence="confirmed" if n >= 2 else "hypothesis")
+            if obj is not None and self.cs.is_dead(obj.key):
+                return Prediction("hud", f"this object was clicked {self.cs.dead[obj.key]}x on this level with no effect in the playfield", rules=[rule], confidence="confirmed")
+            if self.distrust.get((colour, region), 0) >= 2:
+                return Prediction("unknown", f"colour {colour}{where}: the effect model was wrong {self.distrust[(colour, region)]}x on this level; effect not predictable yet (clicked {n}x)", rules=[rule], confidence="none")
+            # button with learned slot successors (conveyor / permutation)
+            if obj is not None and self.cs.succ_n.get(obj.key):
+                moves = {}; known = 0; unknown = 0; slots = self.cs.slots(obj.key); tent = self.cs.tentative(obj.key); guesses = {}
+                for o in self.scene.objs:
+                    if o.hud or o.id == obj.id:
+                        continue
+                    nb = self.cs.successor(obj.key, o.color, o.bbox)
+                    if nb is not None and nb != o.bbox:
+                        moves[o.id] = nb; known += 1
+                    elif nb is None and o.bbox in slots:
+                        unknown += 1
+                        if o.bbox in tent and tent[o.bbox] != o.bbox:
+                            guesses[o.id] = tent[o.bbox]
+                if moves and known * 2 >= known + unknown:
+                    return Prediction("objects", f"button #{obj.id}: {known} objects shift one slot along their tracks (" + ", ".join(f"#{i}->({b[0]},{b[1]})" for i, b in list(moves.items())[:4]) + (" ..." if len(moves) > 4 else ")") + (f"; {unknown} objects on slots not yet solved" + (", probably " + ", ".join(f"#{i}->({b[0]},{b[1]})" for i, b in list(guesses.items())[:3]) if guesses else "") if unknown else ""),
+                                      moves=moves, rules=[("button", {"color": colour, "region": region})], confidence="confirmed" if self.cs.succ_n[obj.key] >= 2 else "hypothesis")
+                if moves:
+                    return Prediction("unknown", f"button #{obj.id}: {known} objects would shift along known tracks but {unknown} sit on slots whose next slot is still unknown", rules=[rule], confidence="none")
+                return Prediction("unknown", f"button #{obj.id}: moved objects before ({self.cs.succ_n[obj.key]} presses), track not yet solved", rules=[rule], confidence="none")
+            cu, cu_exact, _ = self._stat("cursor_of", colour, region)
             if cu and cu.most_common(1)[0][0] != -1 and cu.most_common(1)[0][1] * 2 > sum(cu.values()):
                 k = cu.most_common(1)[0][0]
-                here = [n for n in self.frame.segmentation["nodes"] if n["color"] == k and abs(n["center"][0] - r) <= 2 and abs(n["center"][1] - c) <= 2]
+                markers = [o for o in self.scene.objs if o.color == k and not o.hud and o.size >= 4]
+                here = [o for o in markers if o.bbox[0] <= r <= o.bbox[2] and o.bbox[1] <= c <= o.bbox[3]]
                 if here:
                     return Prediction("unknown", f"the colour-{k} marker is already at ({r},{c}); clicking here again has an unknown effect", confidence="none")
-                return Prediction("cursor", f"the colour-{k} marker moves to the click point ({r},{c}) (other cells may change too: {h.get('world', 0) if h else 0} world changes seen)",
-                                  rules=[("click", {"color": colour})], confidence="confirmed" if sum(cu.values()) >= 2 else "hypothesis", avatar_to=(r, c))
-            vt = self.vanish_to.get(colour)
-            if vt and vt.most_common(1)[0][0] != -1 and vt.most_common(1)[0][1] * 2 > sum(vt.values()):
+                sel = self.cs.select.get((colour, region)) or self.cs_all.select.get((colour, region)) or Counter()
+                if obj is not None and obj.size >= 4 and sel.get(True, 0) > sel.get(False, 0):
+                    return Prediction("cursor", f"the colour-{k} marker jumps onto the clicked object #{obj.id} (selection)", rules=[rule], confidence="confirmed" if sum(cu.values()) >= 2 else "hypothesis", avatar_to=(r, c))
+                coupled = []
+                if markers:
+                    mk = min(markers, key=lambda o: abs(o.center[0] - r) + abs(o.center[1] - c))
+                    dr, dc = r - mk.center[0], c - mk.center[1]
+                    for oc in {o.color for o in self.scene.objs if not o.hud and o.color != k}:
+                        cp = self.cs.coupling(k, oc)
+                        if cp:
+                            (rr, rc), _ = cp; coupled.append((oc, (round(float(rr) * dr), round(float(rc) * dc))))
+                txt = f"the colour-{k} marker moves to the click point ({r},{c})"
+                if coupled:
+                    txt += "; coupled: " + ", ".join(f"colour {oc} objects move by ({d[0]:+},{d[1]:+})" for oc, d in coupled)
+                else:
+                    txt += f" (other cells may change too: {h.get('world', 0) if h else 0} world changes seen)"
+                return Prediction("cursor", txt, rules=[rule], confidence="confirmed" if sum(cu.values()) >= 2 else "hypothesis", avatar_to=(r, c), coupled=coupled or None)
+            vt, _, _ = self._stat("vanish_of", colour, region)
+            hit = self.scene.obj_at(r, c)
+            if vt and vt.most_common(1)[0][0] != -1 and vt.most_common(1)[0][1] * 2 > sum(vt.values()) and hit is not None and hit.cells:
                 k = vt.most_common(1)[0][0]
-                cells = _object_cells(self.frame, r, c)
-                if cells:
-                    board = [row[:] for row in grid]
-                    for rr, cc in cells:
-                        board[rr][cc] = k
-                    return Prediction("board", f"the clicked colour-{colour} object ({len(cells)} cells) disappears (becomes colour {k})", board=board,
-                                      rules=[("click", {"color": colour})], confidence="confirmed" if sum(vt.values()) >= 2 else "hypothesis")
-            board = self.click.predict(grid, r, c)
+                board = [row[:] for row in grid]
+                for rr, cc in hit.cells:
+                    board[rr][cc] = k
+                return Prediction("board", f"the clicked colour-{colour} object #{hit.id}{where} ({hit.size} cells) turns into colour {k}", board=board,
+                                  rules=[rule], confidence="confirmed" if sum(vt.values()) >= 2 else "hypothesis")
+            board = self.click.predict(grid, r, c) if self.click.clicks[colour] >= 5 else None
             if board is not None:
                 changed = sum(1 for i in range(64) for j in range(64) if board[i][j] != grid[i][j])
                 pairs = Counter((grid[i][j], board[i][j]) for i in range(64) for j in range(64) if board[i][j] != grid[i][j])
                 conf = "confirmed" if self.click.clicks[colour] >= 2 else "hypothesis"
                 return Prediction("board", f"changes {changed} cells near ({r},{c}): " + ", ".join(f"{b}->{a}x{n}" for (b, a), n in pairs.most_common(3)),
-                                  board=board, rules=[("click", {"color": colour})], confidence=conf)
+                                  board=board, rules=[rule], confidence=conf)
             if h:
-                return Prediction("unknown", f"colour {colour} clicked {sum(h.values())}x before with no consistent local effect", rules=[("click", {"color": colour})], confidence="none")
-            return Prediction("unknown", f"colour {colour} never clicked", confidence="none")
+                return Prediction("unknown", f"colour {colour}{where} clicked {n}x before with no consistent effect model", rules=[rule], confidence="none")
+            return Prediction("unknown", f"colour {colour}{where} never clicked" + ("" if this_level else " on this level"), confidence="none")
         name = act
         if name in self.noop_keys and name not in self.moves:
             return Prediction("noop", f"{name} changed nothing before", rules=[("noop", {"action": name})],
@@ -259,9 +303,33 @@ class Evidence:
             note = f"; side effect: {summary}" if ok and side else ""
             return Verdict(ok, ("as predicted" if ok else f"MISMATCH: avatar at {got}, predicted {tuple(pred.avatar_to)}") + note, d)
         if pred.kind == "cursor":
-            r0, c0 = pred.avatar_to
-            ok = any(abs(m["to"][0] - r0) <= 2 and abs(m["to"][1] - c0) <= 2 for m in d.get("moved", []))
-            return Verdict(ok, ("as predicted (marker moved to the click); " if ok else "MISMATCH: no marker moved to the click; ") + summary, d)
+            rec = record(t)
+            ok = rec.marker is not None
+            note = ""
+            if ok and pred.coupled:
+                mdr, mdc = rec.marker_to[0] - rec.marker.bbox[0], rec.marker_to[1] - rec.marker.bbox[1]
+                for oc, (pdr, pdc) in pred.coupled:
+                    got = [(dr, dc) for oa, ob, dr, dc in rec.moved if oa.color == oc and oa.size >= 4]
+                    if not got:
+                        ok = False; note += f"; colour {oc} did not move (predicted ({pdr:+},{pdc:+}))"
+                    elif not any(abs(dr - pdr) <= 1 and abs(dc - pdc) <= 1 for dr, dc in got):
+                        ok = False; note += f"; colour {oc} moved {got[0]} (predicted ({pdr:+},{pdc:+}))"
+            return Verdict(ok, ("as predicted (marker moved to the click" + ("; coupled objects as predicted" if pred.coupled else "") + "); " if ok else "MISMATCH: " + ("no marker moved to the click; " if rec.marker is None else "marker moved but" + note + "; ")) + summary, d)
+        if pred.kind == "objects":
+            sb, sa_ = build_scene(t.before_frame), build_scene(t.after_frame)
+            occ_after = {o.bbox: (o.color, o.shape) for o in sa_.objs if not o.hud}
+            arriving = set(pred.moves.values())
+            wrong = []
+            for i, q in pred.moves.items():
+                o = sb.objs[i]
+                if occ_after.get(q) != (o.color, o.shape):
+                    wrong.append((i, q, "slot not filled as predicted"))
+                elif o.bbox not in arriving and occ_after.get(o.bbox) == (o.color, o.shape):
+                    wrong.append((i, q, "did not leave its slot"))
+            if not wrong:
+                return Verdict(True, f"as predicted ({len(pred.moves)} objects shifted along their tracks)", d)
+            i, q, why = wrong[0]
+            return Verdict(False, f"MISMATCH: {len(wrong)}/{len(pred.moves)} objects not where predicted (e.g. #{i} colour {sb.objs[i].color} -> ({q[0]},{q[1]}): {why}); " + summary, d)
         if pred.kind == "noop":
             ok = not world and not d.get("changed_cells")
             return Verdict(ok, "as predicted (nothing changed)" if ok else "MISMATCH: predicted no change but " + summary, d)
@@ -297,21 +365,6 @@ def _diff_text(d: dict, world: bool) -> str:
     return "; ".join(parts)
 
 
-def _edge_only_diff(a, b, margin: int = 3) -> bool:
-    for i in range(64):
-        for j in range(64):
-            if a[i][j] != b[i][j] and margin <= i < 64 - margin and margin <= j < 64 - margin:
-                return False
-    return True
-
-
-def change_class(before: Frame, after: Frame) -> str:
-    """'world' = something inside the playfield changed; 'hud' = only cells within 3px of the board edge or HUD strips changed; 'none'."""
-    if before.ascii == after.ascii:
-        return "none"
-    if masked_ascii(before) == masked_ascii(after) or _edge_only_diff(before.grid, after.grid):
-        return "hud"
-    return "world"
 
 
 def _avatar_in(grid, nav: NavHelper) -> Optional[dict]:
@@ -405,37 +458,3 @@ def induce(game: Game, nav: Optional[NavHelper]) -> list[dict]:
         out.append({"kind": "hazard", "params": {"color": c}, "support": n, "counter": 0, "text": f"entering colour {c} sends the avatar back to its start ({n}x)"})
     return out
 
-
-def _object_cells(frame: Frame, r: int, c: int) -> list:
-    for n in frame.segmentation["nodes"]:
-        r0, c0, r1, c1 = n["bbox"]
-        if r0 <= r <= r1 and c0 <= c <= c1 and frame.grid[r][c] == n["color"]:
-            col = n["color"]
-            # flood fill from (r, c) within the bbox for that colour
-            seen = set(); stack = [(r, c)]
-            while stack:
-                rr, cc = stack.pop()
-                if (rr, cc) in seen or not (r0 <= rr <= r1 and c0 <= cc <= c1) or frame.grid[rr][cc] != col:
-                    continue
-                seen.add((rr, cc)); stack.extend([(rr + 1, cc), (rr - 1, cc), (rr, cc + 1), (rr, cc - 1)])
-            return sorted(seen)
-    return []
-
-
-def _object_vanished(before: Frame, after: Frame, r: int, c: int) -> Optional[int]:
-    """If the clicked object's cells all changed to one colour and no other playfield cell changed, return that colour."""
-    cells = _object_cells(before, r, c)
-    if not cells:
-        return None
-    cs = set(cells); target = None
-    for rr, cc in cells:
-        if before.grid[rr][cc] == after.grid[rr][cc]:
-            return None
-        target = after.grid[rr][cc] if target is None else target
-        if after.grid[rr][cc] != target:
-            return None
-    for i in range(3, 61):
-        for j in range(3, 61):
-            if before.grid[i][j] != after.grid[i][j] and (i, j) not in cs:
-                return None
-    return target
