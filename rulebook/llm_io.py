@@ -208,12 +208,20 @@ class Model:
         msg = r.message; content = msg.get("content") or ""
         code = ""
         for call in msg.get("tool_calls") or []:
+            raw = call.get("function", {}).get("arguments") or ""
             try:
-                args = json.loads(call["function"].get("arguments") or "{}")
+                args = json.loads(raw or "{}")
                 if isinstance(args, dict) and args.get("code"):
                     code = str(args["code"]); break
+                if isinstance(args, str) and args.strip():
+                    code = args; break
             except Exception:
-                continue
+                m = re.search(r'"code"\s*:\s*"(.*)"\s*}?\s*$', raw, re.S)   # unterminated / badly escaped JSON: salvage the code string
+                if m:
+                    code = m.group(1).encode().decode("unicode_escape", errors="ignore"); break
+                if any(k in raw for k in ("act(", "click(", "press(", "print(")):
+                    code = raw; break
+                self.log(f"[model:code] unparsable tool arguments: {raw[:200]!r}")
         if not code:
             m = re.search(r"```(?:python)?\s*(.*?)```", content, re.S)
             if m:
