@@ -181,8 +181,9 @@ class RulebookAgent:
         self.last_choice.append(c.label)
         repeat = len(self.last_choice) >= 3 and len(set(self.last_choice[-3:])) == 1
         recent = self.last_choice[-3:-1].count(c.label) >= 1
-        if (c.tested or recent) and (c.pred_kind in ("noop", "hud") or repeat):
-            alt = next((x for x in cands if not x.tested and x.pred_kind not in ("noop", "hud")), None) or next((x for x in cands if not x.tested), None)
+        if (c.tested or recent) and (c.pred_kind in ("noop", "hud", "blocked") or repeat):
+            alt = next((x for x in cands if not x.tested and x.label != c.label and x.pred_kind not in ("noop", "hud", "blocked")), None) or \
+                next((x for x in cands if not x.tested and x.label != c.label), None)
             if alt:
                 self.log(f"DECIDE: {c.label} already tried here and predicted '{c.pred_kind}'{' (3x in a row)' if repeat else ''} -> {alt.label}")
                 self.outcomes.append(f"(program vetoed {c.label}: already tried here, no world change expected; ran {alt.label} instead)")
@@ -224,6 +225,10 @@ class RulebookAgent:
             cands = build(g, ev, self.tried, goal=goal)
             plans = make_plans(g, ev, self.live_preds())
             for c in plans:
+                if c.kind == "plan" and c.actions:
+                    k = ev.predict(c.actions[0]).kind
+                    if k in ("noop", "hud", "blocked"):
+                        c.pred_kind = k; c.prediction = f"[first step predicted {k}] " + c.prediction
                 self.log(f"plan candidate: {c.label} -> {c.prediction[:160]}")
             cands = [c for c in plans if c.kind == "plan"] + cands + [c for c in plans if c.kind != "plan"]
             if not [c for c in cands if c.kind != "info"]:

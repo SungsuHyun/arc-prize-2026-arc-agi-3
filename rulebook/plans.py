@@ -233,14 +233,20 @@ def _plan_move(ev: Evidence, sc: Scene, p, eid: str) -> Optional[Candidate]:
     targets = [o for o in sc.objs if o.color == colour and not o.hud and o.size <= 400 and not (box and goals2._touching(box, o, 0))]
     if not targets:
         return None
-    best = None
+    best = None; skipped = []
     for o in sorted(targets, key=lambda o: abs(o.center[0] - box[0]) + abs(o.center[1] - box[1]))[:8]:
+        enclosing = sc.obj_around(o.center[0], o.center[1])
+        if enclosing is not None and enclosing.id != o.id and enclosing.color in ev.wall_colors:
+            skipped.append(f"#{o.id} is drawn inside a colour-{enclosing.color} wall object"); continue   # a decoration on a door, not a collectible
         path = nav.path_to(o.center[0], o.center[1], ignore_wall_target=True)
         if path:
+            first = ev.predict(path[0])
+            if first.kind == "blocked":
+                skipped.append(f"#{o.id}: first step {path[0]} is blocked"); continue
             if best is None or len(path) < len(best[1]):
                 best = (o, path)
     if best is None:
-        return Candidate(f"plan:{what}({eid})", "info", [], f"no known path from the avatar to a colour-{colour} object yet (explore the floor first)", priority=999)
+        return Candidate(f"plan:{what}({eid})", "info", [], f"no usable path from the avatar to a colour-{colour} object yet" + (" (" + "; ".join(skipped[:3]) + ")" if skipped else " (explore the floor first)"), priority=999)
     o, path = best
     gauge = f"; gauge {ev.gauge['per_action'] * len(path):+}" if ev.gauge else ""
     return Candidate(f"plan:{what}({eid})", "plan", list(path), f"walk {len(path)} steps ({''.join(a[0] for a in path)}) to colour-{colour} object #{o.id} at ({o.center[0]},{o.center[1]}){gauge} -> {eid}: {'it should vanish' if what == 'collect' else 'the avatar touches it'}",
