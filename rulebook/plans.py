@@ -243,6 +243,10 @@ def _plan_move(ev: Evidence, sc: Scene, p, eid: str) -> Optional[Candidate]:
             first = ev.predict(path[0])
             if first.kind == "blocked":
                 skipped.append(f"#{o.id}: first step {path[0]} is blocked"); continue
+            if "HAZARD" in first.text:
+                skipped.append(f"#{o.id}: first step {path[0]} enters a hazard"); continue
+            if not all(isinstance(a, str) for a in path):
+                skipped.append(f"#{o.id}: path unusable"); continue
             if best is None or len(path) < len(best[1]):
                 best = (o, path)
     if best is None:

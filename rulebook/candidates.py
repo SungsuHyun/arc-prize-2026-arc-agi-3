@@ -90,10 +90,13 @@ def build(game: Game, ev: Evidence, tried: set, *, max_clicks: int = 24, goal: O
     if "MOUSE" in valid and game.frame is not None:
         sc = ev.scene
         objs = []
-        dead = 0
+        dead = 0; inert_groups = set()
         for o in sc.objs:
             if o.hud:
                 continue
+            h = ev.cs.hist.get((o.color, o.region))
+            if h and h.get("world", 0) == 0 and sum(h.values()) >= 3 and len({k for k in ev.cs.clicked_at if k[0] == o.region}) >= 3:
+                inert_groups.add((o.color, o.region)); dead += 1; continue   # three different objects of this colour/area did nothing: the whole group is inert
             r0, c0, r1, c1 = o.bbox
             thin = (r1 - r0 <= 2) or (c1 - c0 <= 2)
             if thin and (r0 <= 1 or r1 >= 62 or c0 <= 1 or c1 >= 62):
@@ -136,7 +139,8 @@ def build(game: Game, ev: Evidence, tried: set, *, max_clicks: int = 24, goal: O
             if len([c for c in out if c.kind == "click"]) >= max_clicks:
                 break
         if dead:
-            out.append(Candidate("(hidden)", "info", [], f"{dead} objects hidden: clicked twice on this level with no effect", priority=999))
+            out.append(Candidate("(hidden)", "info", [], f"{dead} objects hidden: clicked with no effect on this level" +
+                                 ("; inert groups: " + ", ".join(f"colour {c} in P{r}" for c, r in sorted(inert_groups)) if inert_groups else ""), priority=999))
     for c in out:
         c.tested = (st, c.label) in tried
     out.sort(key=lambda c: (c.tested, c.priority))

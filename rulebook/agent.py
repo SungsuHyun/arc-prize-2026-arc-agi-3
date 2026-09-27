@@ -53,10 +53,16 @@ class RulebookAgent:
         from collections import Counter as _C
         self.metrics = _C()               # counters for the evaluation report (prediction kinds, verdicts, plans, fallbacks ...)
         self.attempt_start_actions = 0    # actions_used when the current attempt (level or reset) began
+        self.plan_ignored = 0             # consecutive decisions in which the model ignored an offered plan
+        self.plan_fail: dict = {}         # (level, plan label) -> executions that ended in a mismatch / game over
+        self.refused: dict = {}           # (level, label) -> times the model asked for a label that is not a candidate
         self.game_over_at: dict = {}      # level -> [actions into the attempt at which a game over happened]
         from collections import Counter as _C
         self.metrics = _C()               # counters for the evaluation report (prediction kinds, verdicts, plans, fallbacks ...)
         self.attempt_start_actions = 0    # actions_used when the current attempt (level or reset) began
+        self.plan_ignored = 0             # consecutive decisions in which the model ignored an offered plan
+        self.plan_fail: dict = {}         # (level, plan label) -> executions that ended in a mismatch / game over
+        self.refused: dict = {}           # (level, label) -> times the model asked for a label that is not a candidate
         self.game_over_at: dict = {}      # level -> [actions into the attempt at which a game over happened]
         self.repl = None
         self.distrust: dict = {}          # (level, click colour) -> failed board predictions; the predictor stops predicting after 2
@@ -183,6 +189,10 @@ class RulebookAgent:
         if self.model is None or not cands:
             return fallback
         extra = ("WIN CONDITION PROGRESS (program-evaluated on the current board):\n  " + "\n  ".join(goal["lines"])) if goal and goal.get("lines") else ""
+        bad = [lab for (lv, lab), n in self.refused.items() if lv == self.g.level and n >= 2]
+        if bad:
+            extra = (f"NOTE: there is NO candidate named {', '.join(repr(b) for b in bad[:3])} in this game (asked {sum(self.refused[(self.g.level, b)] for b in bad[:3])}x, refused). "
+                     "Choose an exact label from CANDIDATES.\n") + extra
         obj = self.model.decide(self.g, self.book, cands, self.outcomes, budget_text, extra=extra)
         if not obj:
             return fallback
@@ -196,6 +206,7 @@ class RulebookAgent:
             self.log(f"DECIDE: label {label!r} resolved to {c.label}")
         if c is None:
             self.metrics["fallback"] += 1
+            self.refused[(self.g.level, label)] = self.refused.get((self.g.level, label), 0) + 1
             self.log(f"DECIDE: label {label!r} not a candidate -> fallback {fallback.label}")
             self.outcomes.append(f"(program refused {label}: not a candidate — hidden objects did nothing twice on this level; ran {fallback.label} instead)")
             return fallback
@@ -251,6 +262,10 @@ class RulebookAgent:
             goal = self.goal_state(ev)
             cands = build(g, ev, self.tried, goal=goal)
             plans = make_plans(g, ev, self.live_preds())
+            for c in plans:
+                nf = self.plan_fail.get((g.level, c.label), 0)
+                if c.kind == "plan" and nf >= 2:
+                    c.priority = 40; c.prediction = f"[failed {nf}x on this level] " + c.prediction
             self.metrics["plans_offered"] += sum(1 for c in plans if c.kind == "plan")
             for c in plans:
                 if c.kind == "plan" and c.actions:
@@ -274,8 +289,19 @@ class RulebookAgent:
                     return self._lv(level0, a0, decisions, "completed")
                 continue
             cand = self.choose(cands, budget, ev, goal); decisions += 1
+            live_plans = [c for c in plans if c.kind == "plan" and self.plan_fail.get((g.level, c.label), 0) < 2 and c.pred_kind not in ("noop", "hud", "blocked")]
+            if live_plans and cand.kind != "plan":
+                self.plan_ignored += 1
+                if self.plan_ignored >= 3:   # the model keeps ignoring a program-made plan for a live win condition: the program runs it
+                    cand = live_plans[0]; self.plan_ignored = 0; self.metrics["plan_autorun"] += 1
+                    self.log(f"DECIDE: plan ignored 3x -> program runs {cand.label}")
+                    self.outcomes.append(f"(program ran {cand.label} because the plan was ignored three times)")
+            elif cand.kind == "plan":
+                self.plan_ignored = 0
             self.tried.add((state_key(g, ev), cand.label))
             res = self.execute(cand, level0, reviews0)
+            if cand.kind == "plan" and res in ("mismatch", "over"):
+                self.plan_fail[(g.level, cand.label)] = self.plan_fail.get((g.level, cand.label), 0) + 1
             if res == "won":
                 return self._lv(level0, a0, decisions, "completed")
         return self._lv(level0, a0, decisions, "completed" if g.level > level0 else "left")
