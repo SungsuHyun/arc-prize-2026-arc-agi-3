@@ -53,7 +53,7 @@ setup: ## One-time install: venv, arc-agi, kaggle CLI, clone framework
 	@echo "Setup complete. Try:  make play-local"
 
 rulebook: ## Rulebook agent (hypothesis rulebook + deterministic predictor + model choice): make rulebook [GAME=ls20,tn36] [MINUTES=12] [JOBS=2] [TAG=x] [NOMODEL=1]
-	$(VENV_PY) scripts/run_rulebook.py --games $(or $(GAME),ls20) --minutes $(or $(MINUTES),12) --jobs $(or $(JOBS),2) --tag "$(TAG)" $(if $(NOMODEL),--no-model,)
+	$(VENV_PY) scripts/run_rulebook.py --games $(or $(GAME),ls20) --minutes $(or $(MINUTES),12) --jobs $(or $(JOBS),2) --tag "$(TAG)" $(if $(NOMODEL),--no-model,) $(if $(MODE),--mode $(MODE),)
 
 rulebook-notebook: ## Build notebooks/rulebook/rulebook_submission.ipynb (rulebook agent + arcnav library + in-notebook vLLM)
 	$(VENV_PY) scripts/build_rulebook_notebook.py

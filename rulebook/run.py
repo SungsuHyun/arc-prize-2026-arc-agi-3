@@ -23,7 +23,7 @@ from .llm_io import Model
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = {"base_url": "http://127.0.0.1:1234/v1", "model": "local-qwen", "temperature": 0.6, "top_p": 0.95,
                   "think_tokens": 12000, "review_tokens": 6000, "decide_tokens": 1500, "max_minutes": 20, "level_actions": 200, "max_actions": 2000,
-                  "reviews_per_level": 8, "max_levels": 10, "review_think": "level", "jobs": 2}
+                  "reviews_per_level": 8, "max_levels": 10, "review_think": "level", "mode": "choose", "jobs": 2}
 
 
 def _git() -> dict:
@@ -94,6 +94,7 @@ def main(argv=None) -> None:
     ap.add_argument("--out", default=str(ROOT / "experiments" / "rulebook" / "results"))
     ap.add_argument("--minutes", type=float); ap.add_argument("--jobs", type=int); ap.add_argument("--level-actions", type=int)
     ap.add_argument("--no-model", action="store_true", help="deterministic fallback policy only (smoke test)")
+    ap.add_argument("--mode", choices=["choose", "coder"], help="choose = model picks a candidate label; coder = model writes python against the library")
     a = ap.parse_args(argv)
     logging.basicConfig(level=logging.WARNING)
     cfg = dict(DEFAULT_CONFIG)
@@ -102,6 +103,7 @@ def main(argv=None) -> None:
     if a.minutes: cfg["max_minutes"] = a.minutes
     if a.jobs: cfg["jobs"] = a.jobs
     if a.level_actions: cfg["level_actions"] = a.level_actions
+    if a.mode: cfg["mode"] = a.mode
     cfg["no_model"] = a.no_model
     arc = make_arcade()
     games = sorted(e.game_id.split("-")[0] for e in arc.get_environments()) if a.games == "all" else [g.strip() for g in a.games.split(",") if g.strip()]

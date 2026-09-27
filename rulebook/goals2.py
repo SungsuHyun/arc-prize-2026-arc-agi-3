@@ -300,6 +300,29 @@ class CollectReach(Predicate):
         return ok1 and ok2, ("holds" if ok1 and ok2 else ("collected; " + t2 if ok1 else t1)), (p1 + (p2 if ok1 else 0)) / 2
 
 
+class CustomGoal(Predicate):
+    """A model-written predicate fn(objects, board) -> bool, evaluated and refuted like the built-in ones."""
+    kind = "custom"
+
+    def __init__(self, name: str, fn, needs_submit: bool = False):
+        self.name, self.fn, self._submit = name, fn, needs_submit
+
+    def fact(self) -> dict:
+        return {"kind": "custom", "params": {"name": self.name}, "support": 0, "counter": 0, "text": f"GOAL {self.name}"}
+
+    def evaluate(self, sc: Scene, ev=None) -> tuple:
+        objs = [{"id": o.id, "color": o.color, "size": o.size, "bbox": o.bbox, "center": o.center, "region": o.region, "hud": o.hud, "cells": o.cells} for o in sc.objs]
+        try:
+            ok = bool(self.fn(objs, sc.frame.grid))
+        except Exception as e:
+            return False, f"predicate raised {type(e).__name__}: {e}", 0.0
+        return ok, ("holds" if ok else "not yet"), 1.0 if ok else 0.0
+
+    @property
+    def needs_submit(self) -> bool:
+        return self._submit
+
+
 def from_entry(entry) -> Optional[Predicate]:
     """A predicate object for a rulebook win entry of a known kind (model-written or harness-written), else None."""
     k, p = entry.kind, entry.params or {}

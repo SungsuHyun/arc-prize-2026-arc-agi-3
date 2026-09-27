@@ -56,6 +56,30 @@ Answer with JSON only: {"roles": {"<#id or 'colour c in Pk'>": "<role>"}, "proce
 {"op":"edit","id":"W1","text":".."}, {"op":"remove","id":"E4"} ], "plan": "<updated plan>"}"""
 
 
+PYTHON_TOOL = {"type": "function", "function": {"name": "python", "description": "Run Python code against the game library. Use act()/click()/press() inside it to play; print what you need to see.",
+                                                 "parameters": {"type": "object", "properties": {"code": {"type": "string", "description": "Python source to execute"}}, "required": ["code"]}}}
+
+CODER_SYSTEM = """You play an unknown 64x64 grid puzzle game (colours 0-15 as hex digits, row 0 at the top) by writing Python that runs against a
+game library. The score per level is (baseline_actions/your_actions)^2, so use few actions; unfinished levels score 0. Levels of one game
+share rules, so what won level N is the plan for level N+1 (adapted to the new board).
+
+Variables (rebuilt every call): board (64x64 ints), ascii, level, valid_actions, objects (dicts: id,color,size,bbox=(r0,c0,r1,c1),center=(r,c),
+region,hud,cells), regions [(id,colour,bbox)], entities (text), transitions (last 60: action, before, after, level), book (the RULEBOOK text:
+[OK] confirmed / [?] hypothesis / [X] refuted), goal (win-condition progress lines), candidates [(label, program prediction)],
+plans [(label, prediction, actions)], plan_actions {label: actions}, notes (your own memory).
+Functions: act(a) executes one action or a list — a = 'UP'|'DOWN'|'LEFT'|'RIGHT'|'SPACE'|'ACTION7' or (row, col) for a click; every action
+is checked against the program's prediction and the result is printed; act stops at a level end / game over / 30 actions per call.
+click(r,c), press(key, n), path_to(r,c) -> key list on the learned floor map, predict(a) -> what the program expects, scene() -> fresh board
+and objects, check_rule(fn) scores fn(before_board, action)->after_board|None on every recorded transition (>=0.8 on >=4 makes it a
+verified rule the predictor uses), define_goal(name, fn(objects, board)->bool, needs_submit=False) registers a win condition the program
+evaluates and refutes automatically, note(text, section, kind, params) adds a rulebook entry, refute(id, why), set_plan(text), remember(text).
+
+How to work: read book/goal/candidates/plans first. If a plan candidate says a win condition will hold, run it: act(plan_actions[label]).
+Otherwise write the procedure as code (loops over objects, not one click at a time), verify a hypothesis about an effect with check_rule
+before relying on it, and define the win condition with define_goal so the program can tell you when it holds. Never repeat an action
+that changed nothing. Write ONE python call per turn; print little. No prose outside the tool call."""
+
+
 def objects_text(frame: Frame, limit: int = 10) -> str:
     by: dict[int, list] = {}
     hud = []
@@ -153,6 +177,53 @@ class Model:
                 f"BOARD (64x64 hex digits, row 0 at the top):\n{f.ascii}\n\n"
                 "Write the initial rulebook (hypotheses) and the plan. Name the role of each area and object group (env entries).")
         return self._call("init", INIT_SYSTEM, user, think=think)
+
+    def code_turn(self, game, book, cands: list, plans: list, goal: dict, outcomes: list[str], budget_text: str, notes: str, prev_outputs: list, nudge: str = "") -> tuple:
+        """One coder-mode turn: returns (code, text). Code comes from the python tool call, or from a ```python block in the content."""
+        f = game.frame
+        parts = [book.render(), f"GAME: level {game.level} of {game.levels_total or '?'}; {budget_text}; valid actions {game.valid_actions}."]
+        if goal and goal.get("lines"):
+            parts.append("WIN CONDITION PROGRESS (program-evaluated):\n  " + "\n  ".join(goal["lines"]))
+        if nudge:
+            parts.append("NOTE: " + nudge)
+        if notes:
+            parts.append("YOUR NOTES:\n" + notes)
+        if prev_outputs:
+            parts.append("YOUR LAST CALLS AND THEIR OUTPUT:\n" + "\n".join(prev_outputs[-2:]))
+        if outcomes:
+            parts.append("RECENT ACTIONS (newest last):\n  " + "\n  ".join(outcomes[-8:]))
+        parts.append(f"ENTITIES (areas P0.. and the objects in each; #id colour size @(row,col)):\n{entities_text(f)}")
+        parts.append(f"BOARD:\n{f.ascii}")
+        parts.append("PLAN CANDIDATES (program-made; run with act(plan_actions[label])):\n  " + ("\n  ".join(f"{c.label} -> {c.prediction[:200]}" for c in plans if c.kind == "plan") or "(none)"))
+        parts.append("CANDIDATE ACTIONS (label -> program prediction):\n  " + "\n  ".join(c.line() for c in cands[:32] if c.kind != "info"))
+        parts.append("Write the python call for this turn.")
+        user = "\n\n".join(parts)
+        self.calls["decide"] += 1
+        msgs = [{"role": "system", "content": CODER_SYSTEM}, {"role": "user", "content": user}]
+        try:
+            r = self.client.chat(msgs, tools=[PYTHON_TOOL], tool_choice="auto", override={"chat_template_kwargs": {"enable_thinking": False}, "max_tokens": 2500})
+        except Exception as e:
+            self.log(f"[model:code] call failed: {e!r}"); self.calls["failed"] += 1; return "", ""
+        self.seconds += r.latency
+        msg = r.message; content = msg.get("content") or ""
+        code = ""
+        for call in msg.get("tool_calls") or []:
+            try:
+                args = json.loads(call["function"].get("arguments") or "{}")
+                if isinstance(args, dict) and args.get("code"):
+                    code = str(args["code"]); break
+            except Exception:
+                continue
+        if not code:
+            m = re.search(r"```(?:python)?\s*(.*?)```", content, re.S)
+            if m:
+                code = m.group(1)
+            elif any(k in content for k in ("act(", "click(", "press(", "print(")) and not content.strip().startswith("{"):
+                code = content
+        self.log(f"[model:code] {r.latency:.0f}s finish={r.finish_reason} tool_calls={len(msg.get('tool_calls') or [])} code={len(code)} chars content={len(content)} chars")
+        if not code:
+            self.calls["failed"] += 1
+        return code, content
 
     def decide(self, game, book: Rulebook, cands: list, outcomes: list[str], budget_text: str, extra: str = "") -> Optional[dict]:
         f = game.frame

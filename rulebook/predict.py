@@ -42,8 +42,9 @@ class Verdict:
 class Evidence:
     """Everything the harness knows for sure at this moment, derived from the transitions."""
 
-    def __init__(self, game: Game, distrust: Optional[dict] = None):
+    def __init__(self, game: Game, distrust: Optional[dict] = None, custom_rules: Optional[list] = None):
         self.game = game
+        self.custom_rules = custom_rules or []   # (name, fn, accuracy, n): model-written, replay-verified transition rules
         self.distrust = distrust or {}     # click colour -> number of failed board predictions on this level (agent-maintained)
         self.frame: Frame = game.frame
         cur = game.attempt_transitions()
@@ -163,6 +164,14 @@ class Evidence:
 
     def predict(self, act) -> Prediction:
         grid = self.frame.grid
+        for name, fn, acc, n in self.custom_rules:
+            try:
+                out = fn([row[:] for row in grid], act)
+            except Exception:
+                out = None
+            if out is not None and len(out) == 64:
+                changed = sum(1 for i in range(64) for j in range(64) if out[i][j] != grid[i][j])
+                return Prediction("board", f"model rule `{name}` ({acc:.0%} on {n} replays): {changed} cells change", board=out, rules=[("other", {"name": name})], confidence="confirmed" if acc >= 0.9 else "hypothesis")
         if isinstance(act, dict):
             r, c = act["row"], act["col"]; colour = grid[r][c]
             (colour, region), obj = self.click_key(r, c)
