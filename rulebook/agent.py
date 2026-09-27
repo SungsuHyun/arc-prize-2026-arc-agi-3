@@ -182,7 +182,9 @@ class RulebookAgent:
         self.last_choice.append(c.label)
         repeat = len(self.last_choice) >= 3 and len(set(self.last_choice[-3:])) == 1
         recent = self.last_choice[-3:-1].count(c.label) >= 1
-        if (c.tested or recent) and (c.pred_kind in ("noop", "hud", "blocked") or repeat):
+        no_effect = c.pred_kind in ("noop", "hud", "blocked")
+        # veto only wasted repeats: a repeat that keeps changing the world (pressing a conveyor button again) is legitimate
+        if (c.tested and (no_effect or repeat)) or (recent and no_effect):
             alt = next((x for x in cands if not x.tested and x.label != c.label and x.pred_kind not in ("noop", "hud", "blocked")), None) or \
                 next((x for x in cands if not x.tested and x.label != c.label), None)
             if alt:
