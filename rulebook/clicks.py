@@ -112,6 +112,7 @@ class ClickStats:
         self.coupled: dict = defaultdict(Counter)       # (marker colour, other colour) -> Counter((ratio_r, ratio_c))
         self.coupled_obs: dict = defaultdict(list)      # (marker colour, other colour) -> [((marker dr, dc), (other dr, dc))]
         self.dead: Counter = Counter()                  # object key -> none/hud clicks
+        self.clicked_at: Counter = Counter()            # (region, bbox) -> clicks on this level, whatever the object's colour was
         self.alive: Counter = Counter()                 # object key -> clicks that changed the playfield
         self.n = 0
 
@@ -125,6 +126,7 @@ class ClickStats:
             self.select[key][rec.marker_sel] += 1
         if rec.obj is not None:
             (self.dead if rec.cls != "world" else self.alive)[rec.obj.key] += 1
+            self.clicked_at[(rec.obj.region, rec.obj.bbox)] += 1
         if rec.obj is not None and rec.moved and rec.marker is None and rec.occ_before is not None:
             b = rec.obj.key; self.succ_n[b] += 1
             self.presses[b].append((rec.occ_before, rec.occ_after)); self._sigma_cache.pop(b, None)

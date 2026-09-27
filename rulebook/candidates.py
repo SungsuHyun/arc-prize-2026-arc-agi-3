@@ -126,8 +126,12 @@ def build(game: Game, ev: Evidence, tried: set, *, max_clicks: int = 24, goal: O
             p = ev.predict(act)
             lab = f"click({o.color}@{r},{c})"
             g = (o.color, o.region)
-            out.append(Candidate(lab, "click", [act], f"[#{o.id} {o.size}px" + (f" in P{o.region}" if o.region >= 0 else "") + f"] {p.text}", color=o.color,
-                                 priority=base + (0 if seen_groups[g] == 0 else 8) + min(seen_groups[g], 6) + (10 if p.kind in ("noop", "hud") else 0), pred_kind=p.kind))
+            again = ev.cs.clicked_at.get((o.region, o.bbox), 0)   # a toggle-type object already touched on this level goes last (sweep before re-toggling); buttons are exempt
+            vt = ev.cs.vanish.get((o.color, o.region))
+            toggler = bool(vt) and vt.most_common(1)[0][0] != -1
+            again = again if toggler else 0
+            out.append(Candidate(lab, "click", [act], f"[#{o.id} {o.size}px" + (f" in P{o.region}" if o.region >= 0 else "") + (f", clicked {again}x" if again else "") + f"] {p.text}", color=o.color,
+                                 priority=base + (0 if seen_groups[g] == 0 else 8) + min(seen_groups[g], 6) + (10 if p.kind in ("noop", "hud") else 0) + (20 if again else 0), pred_kind=p.kind))
             seen_groups[g] += 1
             if len([c for c in out if c.kind == "click"]) >= max_clicks:
                 break

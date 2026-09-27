@@ -44,6 +44,7 @@ class RulebookAgent:
         self.t0 = time.time()
         self._log_f = open(self.log_dir / f"{game.game_id}.log", "a")
         self.last_choice: list[str] = []
+        self.last_cell: Optional[tuple] = None   # cell of the last executed click: the fallback never clicks it again right away (toggle undo)
         self.distrust: dict = {}          # (level, click colour) -> failed board predictions; the predictor stops predicting after 2
         self.preds: dict = {}             # rulebook entry id -> goals2.Predicate (win predicates learned from completed levels)
         self.level_start_frame = None     # first board of the current attempt (goal inference compares against it)
@@ -158,9 +159,13 @@ class RulebookAgent:
                 self.book.add("env", text, level=self.g.level)
         self.save_book()
 
+    def _same_cell(self, c: Candidate) -> bool:
+        a = c.actions[0] if c.actions else None
+        return isinstance(a, dict) and self.last_cell is not None and (a["row"] // 3, a["col"] // 3) == self.last_cell
+
     def choose(self, cands: list[Candidate], budget_text: str, ev: Evidence, goal: Optional[dict] = None) -> Candidate:
         cands = [c for c in cands if c.kind != "info"] or cands
-        fallback = cands[0]   # untested first, then by priority (deterministic policy)
+        fallback = next((c for c in cands if not self._same_cell(c)), cands[0])   # untested first, then by priority; never undo the last toggle
         if self.model is None or not cands:
             return fallback
         extra = ("WIN CONDITION PROGRESS (program-evaluated on the current board):\n  " + "\n  ".join(goal["lines"])) if goal and goal.get("lines") else ""
@@ -176,7 +181,9 @@ class RulebookAgent:
         if c is not None and c.label != label:
             self.log(f"DECIDE: label {label!r} resolved to {c.label}")
         if c is None:
-            self.log(f"DECIDE: label {label!r} not a candidate -> fallback {fallback.label}"); return fallback
+            self.log(f"DECIDE: label {label!r} not a candidate -> fallback {fallback.label}")
+            self.outcomes.append(f"(program refused {label}: not a candidate — hidden objects did nothing twice on this level; ran {fallback.label} instead)")
+            return fallback
         # wandering guards: a candidate already tried in this world state that is predicted to change nothing (or only a counter)
         # is a wasted action; so is the same label three times in a row
         self.last_choice.append(c.label)
@@ -185,8 +192,8 @@ class RulebookAgent:
         no_effect = c.pred_kind in ("noop", "hud", "blocked")
         # veto only wasted repeats: a repeat that keeps changing the world (pressing a conveyor button again) is legitimate
         if (c.tested and (no_effect or repeat)) or (recent and no_effect):
-            alt = next((x for x in cands if not x.tested and x.label != c.label and x.pred_kind not in ("noop", "hud", "blocked")), None) or \
-                next((x for x in cands if not x.tested and x.label != c.label), None)
+            alt = next((x for x in cands if not x.tested and x.label != c.label and x.pred_kind not in ("noop", "hud", "blocked") and not self._same_cell(x)), None) or \
+                next((x for x in cands if not x.tested and x.label != c.label and not self._same_cell(x)), None)
             if alt:
                 self.log(f"DECIDE: {c.label} already tried here and predicted '{c.pred_kind}'{' (3x in a row)' if repeat else ''} -> {alt.label}")
                 self.outcomes.append(f"(program vetoed {c.label}: already tried here, no world change expected; ran {alt.label} instead)")
@@ -260,6 +267,10 @@ class RulebookAgent:
             if res.get("invalid"):
                 self.outcomes.append(f"{cand.label}: {action_label(act)} invalid now"); return "ok"
             t = g.transitions[-1]
+            if isinstance(act, dict):   # only a click that changed the clicked cell itself (a toggle) is protected from an immediate undo
+                self.last_cell = (act["row"] // 3, act["col"] // 3) if before.grid[act["row"]][act["col"]] != g.frame.grid[act["row"]][act["col"]] else None
+            else:
+                self.last_cell = None
             v = ev.check(pred, t, res)
             tag = "OK " if v.ok else "MISMATCH" if v.ok is False else "obs"
             line = f"{action_label(act)} [{cand.label}] predicted: {pred.text} | actual: {v.text}"
