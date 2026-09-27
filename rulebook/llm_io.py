@@ -79,7 +79,9 @@ Otherwise write the procedure as code (loops over objects, several actions per c
 an effect with check_rule before relying on it, and define the win condition with define_goal so the program can tell you when it holds.
 Every call must execute at least one action (act/click/press) unless it defines a rule or goal. Never repeat an action that changed
 nothing; candidates already tried in this state are marked. Clicks are act((row, col)) — coordinates from objects/candidates. Write ONE
-python call per turn with at most a few short comments; print little. No prose outside the tool call."""
+python call per turn. Do your reasoning by ACTING, not by writing: at most two short comment lines, no analysis essays, no plans in
+comments; a call that only prints or reads state is wasted (the board, objects and predictions are already in this message). Batch
+several actions per call when the procedure is clear. No prose outside the tool call."""
 
 
 def objects_text(frame: Frame, limit: int = 10) -> str:
@@ -203,7 +205,7 @@ class Model:
         self.calls["decide"] += 1
         msgs = [{"role": "system", "content": CODER_SYSTEM}, {"role": "user", "content": user}]
         try:
-            r = self.client.chat(msgs, tools=[PYTHON_TOOL], tool_choice="auto", override={"chat_template_kwargs": {"enable_thinking": False}, "max_tokens": 2500})
+            r = self.client.chat(msgs, tools=[PYTHON_TOOL], tool_choice="auto", override={"chat_template_kwargs": {"enable_thinking": False}, "max_tokens": 1400})
         except Exception as e:
             self.log(f"[model:code] call failed: {e!r}"); self.calls["failed"] += 1; return "", ""
         self.seconds += r.latency
