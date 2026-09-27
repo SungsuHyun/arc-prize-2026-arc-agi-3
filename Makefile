@@ -22,7 +22,7 @@ SERVE_PORT      ?= 8001
 SITE_PORT       ?= 8080
 STEPS           ?= 200
 
-.PHONY: help setup arcnav rulebook rulebook-notebook rulebook-submit play-local pull-sample notebook submit status kaggle-log wheels llm-venv smoke-local verify-local serve exp-new exp-run exp-summary bench dashboard site site-publish clean _check-kaggle
+.PHONY: help setup arcnav rulebook rulebook-bench rulebook-notebook rulebook-submit play-local pull-sample notebook submit status kaggle-log wheels llm-venv smoke-local verify-local serve exp-new exp-run exp-summary bench dashboard site site-publish clean _check-kaggle
 
 _check-kaggle:
 	@if [ ! -s .kaggle/access_token ]; then \
@@ -54,6 +54,12 @@ setup: ## One-time install: venv, arc-agi, kaggle CLI, clone framework
 
 rulebook: ## Rulebook agent (hypothesis rulebook + deterministic predictor + model choice): make rulebook [GAME=ls20,tn36] [MINUTES=12] [JOBS=2] [TAG=x] [NOMODEL=1]
 	$(VENV_PY) scripts/run_rulebook.py --games $(or $(GAME),ls20) --minutes $(or $(MINUTES),12) --jobs $(or $(JOBS),2) --tag "$(TAG)" $(if $(NOMODEL),--no-model,) $(if $(MODE),--mode $(MODE),)
+
+rulebook-bench: ## Long-budget measurement: REPEATS passes over GAME (default all 25) at MINUTES/game (default 60), JOBS concurrent, MODE coder: make rulebook-bench [REPEATS=3]
+	for i in $$(seq 1 $(or $(REPEATS),3)); do \
+	    $(VENV_PY) scripts/run_rulebook.py --games $(or $(GAME),all) --minutes $(or $(MINUTES),60) --jobs $(or $(JOBS),6) --level-actions $(or $(LEVEL_ACTIONS),400) --mode $(or $(MODE),coder) --tag "bench-$(or $(MODE),coder)-$(or $(MINUTES),60)m-pass$$i"; \
+	done
+	$(VENV_PY) scripts/rulebook_summary.py --tag bench-
 
 rulebook-notebook: ## Build notebooks/rulebook/rulebook_submission.ipynb (rulebook agent + arcnav library + in-notebook vLLM)
 	$(VENV_PY) scripts/build_rulebook_notebook.py

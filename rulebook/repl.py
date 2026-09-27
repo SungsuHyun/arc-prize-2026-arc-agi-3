@@ -47,14 +47,31 @@ class Repl:
         sc = ev.scene
         self.turn_actions = 0; self.turn_status = "ok"
 
+        import re as _re
+        labels = {c.label: c.actions for c in list(cands) + list(plans) if c.actions}
+
+        def _resolve(a):
+            """Strings may be keys, candidate/plan labels ('submit', 'plan:press(W2)', 'click(11@14,31)') or 'MOUSE(r,c)'."""
+            if isinstance(a, (tuple, list)) and len(a) == 2 and all(isinstance(v, (int, float)) for v in a):
+                return [{"action": "MOUSE", "row": int(a[0]), "col": int(a[1])}]
+            if isinstance(a, dict):
+                return [a]
+            if isinstance(a, str):
+                t = a.strip()
+                if t in labels:
+                    return list(labels[t])
+                m = _re.match(r"(?:MOUSE|click)\((?:\d+@)?(\d+),(\d+)\)$", t)
+                if m:
+                    return [{"action": "MOUSE", "row": int(m.group(1)), "col": int(m.group(2))}]
+                return [t.upper()]
+            return [a]
+
         def act(x):
-            acts = x if isinstance(x, list) else [x]
+            acts = []
+            for a in (x if isinstance(x, list) and not (len(x) == 2 and all(isinstance(v, (int, float)) for v in x)) else [x]):
+                acts.extend(_resolve(a))
             out = []
             for a in acts:
-                if isinstance(a, (tuple, list)) and len(a) == 2:
-                    a = {"action": "MOUSE", "row": int(a[0]), "col": int(a[1])}
-                if isinstance(a, str):
-                    a = a.upper()
                 if self.turn_actions >= ACTION_CAP:
                     raise StopTurn(f"action cap ({ACTION_CAP} per call) reached; look at the board and call again")
                 self.turn_actions += 1

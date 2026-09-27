@@ -49,6 +49,7 @@ class RulebookAgent:
         self.last_cell: Optional[tuple] = None   # cell of the last executed click: the fallback never clicks it again right away (toggle undo)
         self.last_verdict = None; self.last_essential: list = []; self.pending_mismatch = None
         self.custom_rules: list = []      # (name, fn, accuracy, n) model-written transition rules verified by replay
+        self.idle_turns = 0
         self.repl = None
         self.distrust: dict = {}          # (level, click colour) -> failed board predictions; the predictor stops predicting after 2
         self.preds: dict = {}             # rulebook entry id -> goals2.Predicate (win predicates learned from completed levels)
@@ -288,6 +289,16 @@ class RulebookAgent:
         self.pending_mismatch = None
         out = self.repl.run(code, ns)
         self.log("CODE OUTPUT:\n" + out[:1500])
+        # runaway guard: turns that execute nothing cost model time but no game time; after two in a row the program acts
+        self.idle_turns = (self.idle_turns + 1) if self.repl.turn_actions == 0 else 0
+        if self.idle_turns >= 2:
+            fb = next((c for c in cands if c.kind != "info" and not self._same_cell(c)), None)
+            if fb is not None:
+                self.log(f"CODE: {self.idle_turns} calls without an action -> program runs {fb.label}")
+                self.repl_outputs.append(f"--- program note: your last {self.idle_turns} calls executed no action, so the program ran {fb.label} itself ---")
+                self.idle_turns = 0
+                self.tried.add((state_key(g, ev), fb.label))
+                return self.execute(fb, level0, reviews0)
         self.repl_outputs = (self.repl_outputs + [f"--- call (actions {self.repl.turn_actions}) ---\n{code[:700]}\n>>> output:\n{out[:900]}"])[-3:]
         if self.pending_mismatch is not None and self.reviews - reviews0 < self.cfg["reviews_per_level"]:
             act, label, ptxt, vtxt, before, bbox, changes = self.pending_mismatch
