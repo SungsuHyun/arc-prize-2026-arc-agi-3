@@ -71,6 +71,13 @@ def _plan_press(ev: Evidence, sc: Scene, p: goals2.Inside, eid: str, max_depth: 
     buttons = [(key, ev.cs.sigma(key)) for key in ev.cs.presses]
     buttons = [(key, sg) for key, sg in buttons if any(q != q0 for q0, q in sg.items())]
     if not buttons:
+        # nothing learned on this level yet: press a button that moved things on an earlier level (same colour), if any
+        known_cols = {key[0] for key in ev.cs_all.presses}
+        cand = [o for o in sc.objs if o.color in known_cols and not o.hud and o.size >= 8]
+        if cand:
+            b = min(cand, key=lambda o: ev.cs.succ_n.get(o.key, 0))
+            return Candidate(f"plan:learn({eid})", "plan", [{"action": "MOUSE", "row": b.center[0], "col": b.center[1]}],
+                             f"press button #{b.id} (colour {b.color} buttons moved blocks on an earlier level) to learn its track on this level", priority=7, pred_kind="plan")
         return None
     button_objs = {}
     for key, _ in buttons:
@@ -135,7 +142,15 @@ def _plan_press(ev: Evidence, sc: Scene, p: goals2.Inside, eid: str, max_depth: 
                 return Candidate(f"plan:press({eid})", "plan", acts, f"{len(seq)} button presses ({', '.join(f'{b}x{c}' for b, c in cnt.items())}) move the colour-{p.color} blocks into the colour-{p.frame} frames on the learned tracks -> {eid} should hold",
                                  priority=5, pred_kind="plan")
             q.append((nxt, path + [key]))
-    return Candidate(f"plan:press({eid})", "info", [], f"no press sequence up to {max_depth} found on the solved tracks ({n} states searched; unsolved slots block the search)", priority=999)
+    # no sequence on what is solved: press the least-explored button-like object (same colours as known buttons) so that every track gets solved
+    known_cols = {key[0] for key in ev.cs.presses} | {key[0] for key in ev.cs_all.presses}
+    cand = [o for o in sc.objs if o.color in known_cols and not o.hud and o.size >= 8]
+    if not cand:
+        return None
+    b = min(cand, key=lambda o: (ev.cs.succ_n.get(o.key, 0), o.center))
+    return Candidate(f"plan:learn({eid})", "plan", [{"action": "MOUSE", "row": b.center[0], "col": b.center[1]}],
+                     f"press button #{b.id} ({ev.cs.succ_n.get(b.key, 0)} presses so far) to learn its track; no press sequence up to {max_depth} exists yet on the solved tracks ({n} states searched)",
+                     priority=7, pred_kind="plan")
 
 
 def _plan_marker(ev: Evidence, sc: Scene, p: goals2.Inside, eid: str) -> Optional[Candidate]:

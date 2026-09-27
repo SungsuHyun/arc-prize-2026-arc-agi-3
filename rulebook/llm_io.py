@@ -32,20 +32,27 @@ Answer with JSON only:
 At most 8 env, 10 rules, 4 win entries."""
 
 DECIDE_SYSTEM = """You choose the next action for a program playing a grid puzzle game. You see the RULEBOOK (hypotheses; [OK] confirmed,
-[?] untested, [X] refuted), the board, and the CANDIDATE actions with the program's deterministic prediction of what each will do
-('never'/'unknown' = untested). Pick ONE candidate label. Prefer: (1) an action the plan calls for that makes progress toward the win
-condition, (2) an action that tests an unverified rule or reveals an unknown effect cheaply, (3) never a candidate marked [tried here]
-or predicted to change nothing unless the rulebook explains why it would differ now. Actions cost score, so no wandering.
-Answer with JSON only: {"choice": "<exact label>", "expect": "<what you expect, one line>", "edits": [<optional rulebook edits>]}
+[?] untested, [X] refuted), the ENTITIES (areas P0.. = panels/floors; objects #id with colour, size, position, grouped by area), the
+board, the WIN CONDITION PROGRESS the program evaluates on the current board, and the CANDIDATE actions with the program's
+deterministic prediction of what each will do ('never'/'unknown' = untested). 'plan:...' candidates are multi-action programs the
+harness built to make a win condition true; 'submit' presses the submit button. Pick ONE candidate label. Prefer: (1) a plan or
+submit candidate whose prediction says a win condition will hold, (2) an action the plan calls for that makes progress, (3) an action
+that tests an unverified rule or reveals an unknown effect cheaply, (4) never a candidate marked [tried here] or predicted to change
+nothing unless the rulebook explains why it would differ now. Objects that did nothing twice are hidden. Actions cost score.
+Answer with JSON only: {"choice": "<exact label>", "expect": "<what you expect, one line>", "roles": {"<#id or 'colour c in Pk'>": "<role>"},
+"edits": [<optional rulebook edits>]}. 'roles' (optional) names what things are: button, submit, mark, template, piece, anchor, hole, frame, hud, wall.
 Edit ops: {"op":"add","section":"env|rules|win","text":..,"kind":..,"params":{}} {"op":"confirm|refute|remove","id":"R3","note":".."}
 {"op":"edit","id":"R3","text":..}. Keep edits rare and factual."""
 
 REVIEW_SYSTEM = """You maintain the RULEBOOK of a program playing a grid puzzle game. Something did not go as the rulebook predicted, or a
 level ended. Revise the rulebook so that it explains ALL recorded evidence: refute or edit wrong entries, add the rule that explains the
 surprise (machine-checkable kind when possible), update the win condition and the plan. Program-verified entries (source harness, with
-for/against counts) are facts; do not contradict them. Be concrete and short.
+for/against counts) are facts; do not contradict them. Think in terms of OBJECT ROLES, not colours: the same colour can be an editable
+mark in one area and a read-only template in another; small blobs can be anchors that move a piece; corner marks or dotted outlines are
+frames/holes that a block or piece must fill; a button whose earlier clicks did nothing may be the submit button. Be concrete and short.
 """ + SCHEMA_HELP + """
-Answer with JSON only: {"edits": [ {"op":"add","section":"rules","text":"..","kind":"..","params":{}}, {"op":"refute","id":"R2","note":".."},
+Answer with JSON only: {"roles": {"<#id or 'colour c in Pk'>": "<role>"}, "procedure": "<the steps that win a level, in terms of roles>",
+"edits": [ {"op":"add","section":"rules","text":"..","kind":"..","params":{}}, {"op":"refute","id":"R2","note":".."},
 {"op":"edit","id":"W1","text":".."}, {"op":"remove","id":"E4"} ], "plan": "<updated plan>"}"""
 
 
@@ -142,8 +149,9 @@ class Model:
     def init_rulebook(self, game, think: bool = True) -> Optional[dict]:
         f = game.frame
         user = (f"GAME: {game.levels_total or '?'} levels; level {game.level}. Valid actions now: {game.valid_actions}.\n"
-                f"OBJECTS (by colour; (row,col) centres):\n{objects_text(f)}\n\nBOARD (64x64 hex digits, row 0 at the top):\n{f.ascii}\n\n"
-                "Write the initial rulebook (hypotheses) and the plan.")
+                f"ENTITIES (areas P0.. = panels/floors/walls; objects #id colour size @(row,col), grouped by area):\n{entities_text(f)}\n\n"
+                f"BOARD (64x64 hex digits, row 0 at the top):\n{f.ascii}\n\n"
+                "Write the initial rulebook (hypotheses) and the plan. Name the role of each area and object group (env entries).")
         return self._call("init", INIT_SYSTEM, user, think=think)
 
     def decide(self, game, book: Rulebook, cands: list, outcomes: list[str], budget_text: str, extra: str = "") -> Optional[dict]:

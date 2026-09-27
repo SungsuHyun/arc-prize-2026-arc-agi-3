@@ -126,9 +126,30 @@ class RulebookAgent:
         if not obj:
             return
         done = self.book.apply_edits(obj.get("edits") or [], level=self.g.level)
+        self.apply_roles(obj.get("roles"))
+        if obj.get("procedure"):
+            proc = str(obj["procedure"])[:500]
+            old = next((e for e in self.book.section("win") if e.text.startswith("PROCEDURE:")), None)
+            if old is not None:
+                old.text = "PROCEDURE: " + proc; old.level = self.g.level
+            else:
+                self.book.add("win", "PROCEDURE: " + proc, level=self.g.level)
         if obj.get("plan"):
             self.book.plan = str(obj["plan"])[:600]
         self.log(f"REVIEW ({event[:60]}): {done}\n" + self.book.render()); self.save_book()
+
+    def apply_roles(self, roles) -> None:
+        if not isinstance(roles, dict):
+            return
+        for key, role in list(roles.items())[:12]:
+            key, role = str(key)[:40], str(role)[:60]
+            text = f"role of {key}: {role}"
+            old = next((e for e in self.book.section("env") if e.text.startswith(f"role of {key}:")), None)
+            if old is not None:
+                old.text = text; old.level = self.g.level
+            else:
+                self.book.add("env", text, level=self.g.level)
+        self.save_book()
 
     def choose(self, cands: list[Candidate], budget_text: str, ev: Evidence, goal: Optional[dict] = None) -> Candidate:
         cands = [c for c in cands if c.kind != "info"] or cands
@@ -140,6 +161,7 @@ class RulebookAgent:
         if not obj:
             return fallback
         done = self.book.apply_edits(obj.get("edits") or [], level=self.g.level)
+        self.apply_roles(obj.get("roles"))
         if done:
             self.log(f"DECIDE edits: {done}"); self.save_book()
         label = str(obj.get("choice", "")).strip()

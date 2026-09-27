@@ -47,7 +47,7 @@ class Evidence:
         self.distrust = distrust or {}     # click colour -> number of failed board predictions on this level (agent-maintained)
         self.frame: Frame = game.frame
         cur = game.attempt_transitions()
-        self.nav = NavHelper(cur, self.frame) if cur or game.has_move_keys() else None
+        self.nav = NavHelper(cur, self.frame) if game.has_move_keys() else None   # click-only games need no movement model
         try:
             self.rules = induce(game, self.nav)
         except Exception:
