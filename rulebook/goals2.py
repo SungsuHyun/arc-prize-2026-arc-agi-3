@@ -350,6 +350,14 @@ def infer(start: Frame, pre: Frame, post_board: Optional[list], final_action, ev
     submit_like = isinstance(final_action, dict) and ev is not None and (lambda o: o is not None and ev.cs.alive.get(o.key, 0) == 0)(s1.obj_around(final_action["row"], final_action["col"]))
     boards = ([("post", s2)] if s2 is not None else []) + [("pre", s1)]
     pre_frames = find_frames(s1)
+    # marker colours (the selection highlight that jumps to wherever one clicks) are never the block a frame is for
+    marker_cols = set()
+    if ev is not None:
+        for tbl in (ev.cs.cursor, ev.cs_all.cursor):
+            for key, cnt in tbl.items():
+                k, n = cnt.most_common(1)[0]
+                if k != -1 and n * 2 > sum(cnt.values()):
+                    marker_cols.add(k)
     for tag, sc in boards:
         frames = pre_frames   # frames are static drawings; a block arriving on the post board may hide some of their dots
         if not frames:
@@ -357,7 +365,7 @@ def infer(start: Frame, pre: Frame, post_board: Optional[list], final_action, ev
         dot_ids = {i for f in frames for i in f.dots}
         for fc in {f.color for f in frames}:
             fs = [f for f in frames if f.color == fc]
-            for bc in {o.color for o in sc.objs if o.size >= 4 and not o.hud and o.id not in dot_ids}:
+            for bc in {o.color for o in sc.objs if o.size >= 4 and not o.hud and o.id not in dot_ids and o.color not in marker_cols}:
                 blocks = [o for o in sc.objs if o.color == bc and o.size >= 4 and not o.hud and o.id not in dot_ids]
                 k = sum(1 for o in blocks if any(f.contains(o) for f in fs))
                 if k >= min(len(blocks), len(fs)) and k >= 1:
