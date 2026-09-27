@@ -64,7 +64,7 @@ def build() -> dict:
         from rulebook.run import run, DEFAULT_CONFIG
         # no chain-of-thought on Kaggle: the FP8 27B ran past the 12k-token budget on every thinking call in kernel v1 (INIT 362 s, review 181 s, no JSON)
         cfg = dict(DEFAULT_CONFIG, model='{base.SERVED_MODEL}', base_url='http://127.0.0.1:1234/v1', level_actions=200, max_actions=4000, max_levels=20,
-                   init_think=False, review_think='never', think_tokens=6000, mode='coder')
+                   init_think=False, review_think='never', think_tokens=6000, mode='choose')
         out_dir = Path('/kaggle/working/rulebook-results')
         if RERUN:
             os.environ['ARC_API_KEY'] = 'test-key-123'
