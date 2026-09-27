@@ -23,9 +23,12 @@ KIND_KEYS = {
     "button": ("color", "region", "bbox"), "coupled": ("marker", "color"),
     # win kinds (from goals.infer)
     "reach": ("reach",), "collect_reach": ("collect", "reach"), "collect_all": ("collect",), "click_sequence": (), "merge": (),
+    # win predicates (goals2)
+    "gone": ("color", "region"), "inside": ("color", "frame"), "equal": ("r1", "r2"), "pose": ("color", "target"), "pressed": ("color", "region"),
     # env kinds
     "avatar": (),
 }
+WIN_KINDS = ("reach", "collect_reach", "collect_all", "click_sequence", "merge", "gone", "inside", "equal", "pose", "pressed")
 
 
 @dataclass
@@ -155,7 +158,7 @@ class Rulebook:
         changes = []
         for f in facts:
             kind, params = f["kind"], f.get("params", {})
-            section = "win" if kind in ("reach", "collect_reach", "collect_all", "click_sequence", "merge") else "env" if kind in ("avatar",) else "rules"
+            section = "win" if kind in WIN_KINDS else "env" if kind in ("avatar",) else "rules"
             e = self.find(kind, params)
             support, counter = int(f.get("support", 0)), int(f.get("counter", 0))
             status = "confirmed" if counter == 0 and support >= 2 else "refuted" if counter >= 1 and counter >= support else "hypothesis"
@@ -193,6 +196,15 @@ class Rulebook:
                     self.entries.remove(e); self.version += 1; self.history.append(f"-{e.id} (superseded)")
                     changes.append(f"{e.id} removed (superseded by the verified rule)")
         return changes
+
+    def refute(self, id_: str, note: str) -> Optional[str]:
+        """Harness-decided refutation (e.g. a win predicate held but the level did not end)."""
+        e = self.get(id_)
+        if e is None or e.status == "refuted":
+            return None
+        e.status = "refuted"; e.counter += 1; e.note = note[:200]; self.version += 1
+        self.history.append(f"refute {e.id} (harness): {note[:60]}")
+        return f"{e.id} refuted: {note}"
 
     # ── text / io ─────────────────────────────────────────────────────────
     def render(self, *, include_refuted: bool = True) -> str:

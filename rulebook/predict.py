@@ -278,6 +278,43 @@ class Evidence:
         pressed = sum(1 for t in self.game.transitions if t.action == name)
         return Prediction("unknown", f"{name} never pressed" if not pressed else f"{name} pressed {pressed}x, effect not modelled", confidence="none")
 
+    # ── synthesised post-board (for goal inference) ──────────────────────
+    def synth_board(self, pred: Prediction, act) -> Optional[list]:
+        """The board a prediction implies: board kind as is; objects / cursor kinds by moving objects on a copy of the grid."""
+        if pred.kind == "board":
+            return pred.board
+        moves: dict = {}
+        if pred.kind == "objects" and pred.moves:
+            moves = dict(pred.moves)
+        elif pred.kind == "cursor" and isinstance(act, dict):
+            k = None
+            for o in self.scene.objs:
+                pass
+            markers = [o for o in self.scene.objs if not o.hud and o.size >= 4 and ("marker" in pred.text) and f"colour-{o.color} marker" in pred.text]
+            if markers:
+                mk = min(markers, key=lambda o: abs(o.center[0] - act["row"]) + abs(o.center[1] - act["col"]))
+                dr, dc = act["row"] - mk.center[0], act["col"] - mk.center[1]
+                moves[mk.id] = (mk.bbox[0] + dr, mk.bbox[1] + dc, mk.bbox[2] + dr, mk.bbox[3] + dc)
+                for oc, (pdr, pdc) in (pred.coupled or []):
+                    for o in self.scene.objs:
+                        if o.color == oc and not o.hud and o.size >= 4 and min(o.bbox[2] - o.bbox[0], o.bbox[3] - o.bbox[1]) >= 2:
+                            moves[o.id] = (o.bbox[0] + pdr, o.bbox[1] + pdc, o.bbox[2] + pdr, o.bbox[3] + pdc)
+        if not moves:
+            return None
+        grid = [row[:] for row in self.frame.grid]
+        for i, nb in moves.items():
+            o = self.scene.objs[i]
+            fill = self.scene.region_named(o.region).color if o.region >= 0 and self.scene.region_named(o.region) else self.frame.background
+            for r, c in (o.cells or []):
+                grid[r][c] = fill
+        for i, nb in moves.items():
+            o = self.scene.objs[i]
+            for r, c in (o.cells or []):
+                rr, cc = r + nb[0] - o.bbox[0], c + nb[1] - o.bbox[1]
+                if 0 <= rr < 64 and 0 <= cc < 64:
+                    grid[rr][cc] = o.color
+        return grid
+
     # ── checking ─────────────────────────────────────────────────────────
     def check(self, pred: Prediction, t: Transition, res: dict) -> Verdict:
         d = summarize_diff(t.before_frame, t.after_frame)

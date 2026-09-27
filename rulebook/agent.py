@@ -21,6 +21,9 @@ from .candidates import Candidate, build, resolve, state_key
 from .env import Game, action_label
 from .llm_io import Model
 from .predict import Evidence
+from . import goals2
+from .entities import build_scene
+from .plans import make_plans
 
 DEFAULTS = {"max_minutes": 20.0, "level_actions": 200, "max_actions": 2000, "reviews_per_level": 8, "max_levels": 10,
             "review_think": "level"}   # thinking during reviews: "level" = only after a level completion, "always", "never"
@@ -41,6 +44,8 @@ class RulebookAgent:
         self._log_f = open(self.log_dir / f"{game.game_id}.log", "a")
         self.last_choice: list[str] = []
         self.distrust: dict = {}          # (level, click colour) -> failed board predictions; the predictor stops predicting after 2
+        self.preds: dict = {}             # rulebook entry id -> goals2.Predicate (win predicates learned from completed levels)
+        self.level_start_frame = None     # first board of the current attempt (goal inference compares against it)
 
     # ── logging ───────────────────────────────────────────────────────────
     def log(self, text: str) -> None:
@@ -65,6 +70,36 @@ class RulebookAgent:
             self.log("rulebook <- evidence: " + " | ".join(changes)); self.save_book()
         return changes
 
+    # ── win predicates ───────────────────────────────────────────────────
+    def live_preds(self) -> list:
+        return [(eid, p) for eid, p in self.preds.items() if (e := self.book.get(eid)) is not None and e.status != "refuted"]
+
+    def goal_state(self, ev: Evidence) -> dict:
+        """Evaluate every live win predicate on the current board: progress lines for the model, and whether a submit is due."""
+        sc = ev.scene; lines = []; held = []; missing = []; submit = None; has_submit = False
+        for eid, p in self.live_preds():
+            if isinstance(p, goals2.Pressed):
+                has_submit = True; b = p.button(sc)
+                if b is not None:
+                    submit = b
+                lines.append(f"{eid} [submit] {p.evaluate(sc)[1]}"); continue
+            ok, txt, _ = p.evaluate(sc)
+            (held if ok else missing).append(eid)
+            lines.append(f"{eid} [{p.kind}] {'HOLDS' if ok else 'not yet'}: {txt}")
+        conds = [eid for eid, p in self.live_preds() if not isinstance(p, goals2.Pressed)]
+        return {"lines": lines, "held": held, "missing": missing, "all_hold": bool(conds) and not missing, "submit": submit if has_submit else None,
+                "has_submit": has_submit, "conds": conds}
+
+    def refute_preds(self, ids: list, note: str) -> list:
+        out = []
+        for eid in ids:
+            r = self.book.refute(eid, note)
+            if r:
+                out.append(r)
+        if out:
+            self.log("win predicates refuted: " + " | ".join(out)); self.save_book()
+        return out
+
     # ── model steps ──────────────────────────────────────────────────────
     def init_book(self) -> None:
         if self.model is None:
@@ -81,13 +116,13 @@ class RulebookAgent:
         self.book.plan = str(obj.get("plan", ""))[:600]
         self.log("INIT rulebook:\n" + self.book.render()); self.save_book()
 
-    def review(self, event: str, changes: list[str], *, before=None, bbox=None, level_event: bool = False) -> None:
+    def review(self, event: str, changes: list[str], *, before=None, bbox=None, level_event: bool = False, extra: str = "") -> None:
         if self.model is None:
             return
         self.reviews += 1
         mode = self.cfg.get("review_think", "level")
         think = mode == "always" or (mode == "level" and level_event)
-        obj = self.model.review(self.g, self.book, event, changes, self.outcomes, before=before, bbox=bbox, think=think)
+        obj = self.model.review(self.g, self.book, event, changes, self.outcomes, before=before, bbox=bbox, think=think, extra=extra)
         if not obj:
             return
         done = self.book.apply_edits(obj.get("edits") or [], level=self.g.level)
@@ -95,12 +130,13 @@ class RulebookAgent:
             self.book.plan = str(obj["plan"])[:600]
         self.log(f"REVIEW ({event[:60]}): {done}\n" + self.book.render()); self.save_book()
 
-    def choose(self, cands: list[Candidate], budget_text: str, ev: Evidence) -> Candidate:
+    def choose(self, cands: list[Candidate], budget_text: str, ev: Evidence, goal: Optional[dict] = None) -> Candidate:
         cands = [c for c in cands if c.kind != "info"] or cands
         fallback = cands[0]   # untested first, then by priority (deterministic policy)
         if self.model is None or not cands:
             return fallback
-        obj = self.model.decide(self.g, self.book, cands, self.outcomes, budget_text)
+        extra = ("WIN CONDITION PROGRESS (program-evaluated on the current board):\n  " + "\n  ".join(goal["lines"])) if goal and goal.get("lines") else ""
+        obj = self.model.decide(self.g, self.book, cands, self.outcomes, budget_text, extra=extra)
         if not obj:
             return fallback
         done = self.book.apply_edits(obj.get("edits") or [], level=self.g.level)
@@ -148,17 +184,25 @@ class RulebookAgent:
 
     def play_level(self) -> dict:
         g = self.g; level0 = g.level; a0 = g.actions_used; reviews0 = self.reviews; decisions = 0
+        self.level_start_frame = g.frame
         while g.level == level0 and g.state != "WIN":
             if self._out_of_time():
                 return self._lv(level0, a0, decisions, "time/actions budget")
             if g.actions_used - a0 >= self.cfg["level_actions"]:
                 return self._lv(level0, a0, decisions, "level action cap")
             ev = self.evidence(); self.sync(ev)
-            cands = build(g, ev, self.tried)
+            goal = self.goal_state(ev)
+            cands = build(g, ev, self.tried, goal=goal)
+            plans = make_plans(g, ev, self.live_preds())
+            for c in plans:
+                self.log(f"plan candidate: {c.label} -> {c.prediction[:160]}")
+            cands = [c for c in plans if c.kind == "plan"] + cands + [c for c in plans if c.kind != "plan"]
             if not [c for c in cands if c.kind != "info"]:
                 return self._lv(level0, a0, decisions, "no candidates")
             budget = f"actions used on this level {g.actions_used - a0} (cap {self.cfg['level_actions']}), total {g.actions_used}"
-            cand = self.choose(cands, budget, ev); decisions += 1
+            if goal["lines"]:
+                self.log("goal state: " + " | ".join(goal["lines"]))
+            cand = self.choose(cands, budget, ev, goal); decisions += 1
             self.tried.add((state_key(g, ev), cand.label))
             res = self.execute(cand, level0, reviews0)
             if res == "won":
@@ -188,20 +232,51 @@ class RulebookAgent:
             if res["level_completed"] or res["won"]:
                 ev2 = self.evidence(); changes = self.sync(ev2)
                 wins = self.book.sync(ev2.win_facts(level0), level=level0)
+                attempt = [x for x in g.level_transitions(level0) if x.attempt == t.attempt]
+                try:
+                    post = ev.synth_board(pred, act)
+                    new_preds = goals2.infer(self.level_start_frame or attempt[0].before_frame, before, post, t.action, ev)
+                except Exception as e:
+                    self.log(f"goal inference failed: {e!r}"); new_preds = []
+                pfacts = [p.fact() for p in new_preds]
+                wins += self.book.sync(pfacts, level=level0)
+                for p in new_preds:
+                    e = self.book.find(p.kind, p.fact()["params"], exact=True)
+                    if e is not None:
+                        self.preds[e.id] = p
                 if wins:
                     self.log("win facts: " + " | ".join(wins)); self.save_book()
-                seq = [action_label(x.action) for x in g.level_transitions(level0) if x.attempt == t.attempt]
+                try:
+                    essential = goals2.essential_sequence(attempt)
+                except Exception as e:
+                    essential = [f"(sequence unavailable: {e!r})"]
+                self.log("essential winning sequence: " + " ; ".join(essential))
+                seq = [action_label(x.action) for x in attempt]
                 if g.state != "WIN":
-                    self.review(f"LEVEL {level0} COMPLETED after {g.level_action_log[-1]} actions on the last attempt. Winning action sequence: {seq[-30:]}. "
-                                f"The last action was {action_label(act)} ({cand.label}). Level {g.level} starts now (new board below): state which win condition proved "
-                                f"true, mark it confirmed, and write the plan for the new level.", changes + wins, level_event=True)
+                    extra = ("ESSENTIAL WINNING SEQUENCE (program-filtered: actions that changed nothing in the playfield removed; object ids refer to the old board):\n  "
+                             + "\n  ".join(essential[-24:]) +
+                             "\nWIN PREDICATES THE PROGRAM FOUND TRUE AT COMPLETION (each is verified/refuted automatically on this level):\n  "
+                             + ("\n  ".join(f"{e.id}: {e.text}" for e in self.book.section("win") if e.id in self.preds) or "(none)"))
+                    self.review(f"LEVEL {level0} COMPLETED after {g.level_action_log[-1]} actions on the last attempt ({len(seq)} actions, {len(essential)} essential). "
+                                f"The last action was {action_label(act)} ({cand.label}). Level {g.level} starts now (new board below). Write the PROCEDURE that won, in terms of "
+                                f"object roles (which objects to click in which order and why), so that it can be repeated on the new board; state which win condition proved "
+                                f"true; and write the plan for the new level.", changes + wins, level_event=True, extra=extra)
                 return "won" if g.state == "WIN" else "level"
             if res["game_over"]:
-                g.reset()
+                g.reset(); self.level_start_frame = g.frame
                 ev2 = self.evidence(); changes = self.sync(ev2)
                 self.review(f"GAME OVER after {action_label(act)} ({cand.label}): the level was reset. Predicted: {pred.text}. Observed: {v.text}. "
                             "Add the rule that explains the game over (hazard / limit) and adjust the plan.", changes, before=before, bbox=v.diff.get("bbox"))
                 return "over"
+            # win predicates: a submit that did not end the level refutes the conditions that held and the button; a condition that
+            # holds in a game without a submit button, while the level goes on, is refuted too
+            if self.preds:
+                gs = self.goal_state(self.evidence())
+                if cand.kind == "submit":
+                    self.refute_preds(gs["held"] + [eid for eid, p in self.live_preds() if isinstance(p, goals2.Pressed)],
+                                      "the submit button was pressed while these held, but the level did not end")
+                elif not gs["has_submit"] and gs["held"]:
+                    self.refute_preds(gs["held"], "held on the board but the level did not end (and there is no submit button)")
             if v.ok is False:
                 self.mismatches += 1
                 if isinstance(act, dict) and pred.kind in ("board", "objects", "cursor"):

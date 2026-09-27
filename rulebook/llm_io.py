@@ -64,6 +64,14 @@ def objects_text(frame: Frame, limit: int = 10) -> str:
     return "\n".join(rows) or "  (no objects)"
 
 
+def entities_text(frame: Frame) -> str:
+    from .entities import build_scene, scene_text
+    try:
+        return scene_text(build_scene(frame))
+    except Exception:
+        return objects_text(frame)
+
+
 def crop(frame: Frame, bbox, pad: int = 2) -> str:
     r0, c0, r1, c1 = bbox
     r0, c0, r1, c1 = max(0, r0 - pad), max(0, c0 - pad), min(63, r1 + pad), min(63, c1 + pad)
@@ -138,23 +146,26 @@ class Model:
                 "Write the initial rulebook (hypotheses) and the plan.")
         return self._call("init", INIT_SYSTEM, user, think=think)
 
-    def decide(self, game, book: Rulebook, cands: list, outcomes: list[str], budget_text: str) -> Optional[dict]:
+    def decide(self, game, book: Rulebook, cands: list, outcomes: list[str], budget_text: str, extra: str = "") -> Optional[dict]:
         f = game.frame
         user = (f"{book.render()}\n\nGAME: level {game.level} of {game.levels_total or '?'}; {budget_text}; valid actions {game.valid_actions}.\n"
+                + (extra + "\n" if extra else "")
                 + (("RECENT ACTIONS (newest last):\n  " + "\n  ".join(outcomes[-10:]) + "\n") if outcomes else "")
-                + f"\nOBJECTS:\n{objects_text(f)}\n\nBOARD:\n{f.ascii}\n\nCANDIDATES (label -> program prediction):\n  "
+                + f"\nENTITIES (areas P0.. and the objects in each; #id colour size @(row,col)):\n{entities_text(f)}\n\nBOARD:\n{f.ascii}\n\nCANDIDATES (label -> program prediction):\n  "
                 + "\n  ".join(c.line() for c in cands[:40]) + "\n\nChoose one candidate label.")
         return self._call("decide", DECIDE_SYSTEM, user, think=False)
 
-    def review(self, game, book: Rulebook, event: str, evidence_changes: list[str], outcomes: list[str], *, before: Optional[Frame], bbox=None, think: bool = True) -> Optional[dict]:
+    def review(self, game, book: Rulebook, event: str, evidence_changes: list[str], outcomes: list[str], *, before: Optional[Frame], bbox=None, think: bool = True, extra: str = "") -> Optional[dict]:
         f = game.frame
         parts = [book.render(), f"GAME: level {game.level} of {game.levels_total or '?'}; valid actions {game.valid_actions}.", "EVENT: " + event]
+        if extra:
+            parts.append(extra)
         if evidence_changes:
             parts.append("PROGRAM-VERIFIED CHANGES TO THE RULEBOOK (facts):\n  " + "\n  ".join(evidence_changes[-12:]))
         if outcomes:
             parts.append("RECENT ACTIONS (newest last):\n  " + "\n  ".join(outcomes[-12:]))
         if before is not None and bbox is not None:
             parts.append("BEFORE (changed region):\n" + crop(before, bbox) + "\nAFTER (same region):\n" + crop(f, bbox))
-        parts.append(f"OBJECTS NOW:\n{objects_text(f)}\n\nBOARD NOW:\n{f.ascii}")
+        parts.append(f"ENTITIES NOW (areas P0.. and the objects in each):\n{entities_text(f)}\n\nBOARD NOW:\n{f.ascii}")
         parts.append("Revise the rulebook (edits) and the plan.")
         return self._call("review", REVIEW_SYSTEM, "\n\n".join(parts), think=think)

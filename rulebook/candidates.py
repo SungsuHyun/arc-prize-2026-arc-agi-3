@@ -43,8 +43,17 @@ def state_key(game: Game, ev: Optional[Evidence] = None) -> str:
     return f"L{game.level}:{hash((tuple(sorted(items)), av))}"
 
 
-def build(game: Game, ev: Evidence, tried: set, *, max_clicks: int = 24) -> list[Candidate]:
+def build(game: Game, ev: Evidence, tried: set, *, max_clicks: int = 24, goal: Optional[dict] = None) -> list[Candidate]:
     valid = list(game.valid_actions); out: list[Candidate] = []
+    if goal and goal.get("submit") is not None and "MOUSE" in valid:
+        b = goal["submit"]; r, c = b.center
+        if game.frame.grid[r][c] != b.color:
+            r, c = (b.cells or [(r, c)])[0]
+        held = goal.get("held", [])
+        out.append(Candidate("submit", "submit", [{"action": "MOUSE", "row": r, "col": c}],
+                             (f"click the submit button #{b.id}: LEVEL COMPLETES if the win conditions {held} are right (they hold now)" if goal.get("all_hold")
+                              else f"click the submit button #{b.id}: the win conditions do not hold yet ({goal.get('missing', '')}), so probably nothing"),
+                             color=b.color, priority=0 if goal.get("all_hold") else 90, pred_kind="level" if goal.get("all_hold") else "hud"))
     st = state_key(game, ev)
     keys = [a for a in MOVE_KEYS if a in valid]; inter = [a for a in INTERACT_KEYS if a in valid]
     nav = ev.nav
