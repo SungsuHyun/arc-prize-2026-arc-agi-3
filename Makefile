@@ -22,7 +22,7 @@ SERVE_PORT      ?= 8001
 SITE_PORT       ?= 8080
 STEPS           ?= 200
 
-.PHONY: help setup arcnav rulebook play-local pull-sample notebook submit status kaggle-log wheels llm-venv smoke-local verify-local serve exp-new exp-run exp-summary bench dashboard site site-publish clean _check-kaggle
+.PHONY: help setup arcnav rulebook rulebook-notebook rulebook-submit play-local pull-sample notebook submit status kaggle-log wheels llm-venv smoke-local verify-local serve exp-new exp-run exp-summary bench dashboard site site-publish clean _check-kaggle
 
 _check-kaggle:
 	@if [ ! -s .kaggle/access_token ]; then \
@@ -54,6 +54,12 @@ setup: ## One-time install: venv, arc-agi, kaggle CLI, clone framework
 
 rulebook: ## Rulebook agent (hypothesis rulebook + deterministic predictor + model choice): make rulebook [GAME=ls20,tn36] [MINUTES=12] [JOBS=2] [TAG=x] [NOMODEL=1]
 	$(VENV_PY) scripts/run_rulebook.py --games $(or $(GAME),ls20) --minutes $(or $(MINUTES),12) --jobs $(or $(JOBS),2) --tag "$(TAG)" $(if $(NOMODEL),--no-model,)
+
+rulebook-notebook: ## Build notebooks/rulebook/rulebook_submission.ipynb (rulebook agent + arcnav library + in-notebook vLLM)
+	$(VENV_PY) scripts/build_rulebook_notebook.py
+
+rulebook-submit: rulebook-notebook _check-kaggle ## Build and push the rulebook kernel (commit = 2-game smoke; leaderboard submit is manual on the web)
+	$(KAGGLE) kernels push -p notebooks/rulebook/
 
 arcnav: ## Play games with our arcnav agent against the local vLLM server: make arcnav [GAME=ls20,vc33] [MINUTES=20] [JOBS=2] [TAG=x]
 	$(VENV_PY) scripts/run_arcnav.py --games $(or $(GAME),ls20) --minutes $(or $(MINUTES),20) --jobs $(or $(JOBS),2) --tag "$(TAG)"
