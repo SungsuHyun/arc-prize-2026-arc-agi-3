@@ -126,7 +126,7 @@ class Gone(Predicate):
         return {"kind": "gone", "params": {"color": self.color, "region": list(self.region)}, "support": 1, "counter": 0,
                 "text": f"no colour-{self.color} object is left in the colour-{self.region[0]} area"}
 
-    def evaluate(self, sc: Scene) -> tuple:
+    def evaluate(self, sc: Scene, ev=None) -> tuple:
         rid = _region_by_spec(sc, self.region)
         n = sum(1 for o in sc.objs if o.color == self.color and not o.hud and (rid is None or o.region == rid))
         return n == 0, (f"holds (no colour-{self.color} objects left)" if n == 0 else f"{n} colour-{self.color} objects still there"), 1.0 if n == 0 else 1.0 / (1 + n)
@@ -140,19 +140,37 @@ class Inside(Predicate):
     kind = "inside"
 
     def fact(self) -> dict:
+        same = self.color == self.frame
         return {"kind": "inside", "params": {"color": self.color, "frame": self.frame}, "support": 1, "counter": 0,
-                "text": f"every colour-{self.color} block sits inside a frame drawn in colour {self.frame} ({'corner marks' if self.fkind == 'corners' else 'dotted outline'})"}
+                "text": (f"every block sits inside the frame of its own colour ({'corner marks' if self.fkind == 'corners' else 'dotted outline'}; seen with colour {self.color})" if same
+                         else f"every colour-{self.color} block sits inside a frame drawn in colour {self.frame} ({'corner marks' if self.fkind == 'corners' else 'dotted outline'})")}
 
-    def evaluate(self, sc: Scene, frames: Optional[list] = None) -> tuple:
-        frames = [f for f in (frames if frames is not None else find_frames(sc)) if f.color == self.frame]
-        dot_ids = {i for f in frames for i in f.dots}
-        blocks = [o for o in sc.objs if o.color == self.color and not o.hud and o.size >= 4 and o.id not in dot_ids]
-        if not frames or not blocks:
-            return False, f"no colour-{self.frame} frame / colour-{self.color} block on this board", 0.0
-        inside = [o for o in blocks if any(f.contains(o) for f in frames)]
-        k, n = len(inside), min(len(blocks), len(frames))
-        holds = k >= n
-        return holds, (f"holds ({k} block(s) in frames)" if holds else f"{k}/{n} blocks in frames; " + ", ".join(f"#{o.id}@({o.center[0]},{o.center[1]})" for o in blocks if o not in inside) + " outside; frames at " + ", ".join(f"({f.inner[0]},{f.inner[1]})" for f in frames)), k / n
+    def pairs(self, sc: Scene, frames: Optional[list] = None) -> list:
+        """[(colour of blocks, colour of frames)] this predicate covers on the board: one pair, or every same-colour pair."""
+        allf = frames if frames is not None else find_frames(sc)
+        if self.color != self.frame:
+            return [(self.color, self.frame)]
+        return sorted({f.color for f in allf})
+
+    def evaluate(self, sc: Scene, ev=None, frames: Optional[list] = None) -> tuple:
+        allf = frames if frames is not None else find_frames(sc)
+        same = self.color == self.frame
+        pairs = [(c, c) for c in sorted({f.color for f in allf})] if same else [(self.color, self.frame)]
+        tot_k = tot_n = 0; notes = []
+        for bc, fc in pairs:
+            frames_c = [f for f in allf if f.color == fc]
+            dot_ids = {i for f in frames_c for i in f.dots}
+            blocks = [o for o in sc.objs if o.color == bc and not o.hud and o.size >= 4 and o.id not in dot_ids]
+            if not frames_c or not blocks:
+                continue
+            inside = [o for o in blocks if any(f.contains(o) for f in frames_c)]
+            k, n = len(inside), min(len(blocks), len(frames_c)); tot_k += k; tot_n += n
+            if k < n:
+                notes.append(f"colour {bc}: {k}/{n} in frames; " + ", ".join(f"#{o.id}@({o.center[0]},{o.center[1]})" for o in blocks if o not in inside) + " outside, frames at " + ", ".join(f"({f.inner[0]},{f.inner[1]})" for f in frames_c))
+        if tot_n == 0:
+            return False, f"no colour-{self.frame} frame / colour-{self.color} block on this board" if not same else "no frame with same-colour blocks on this board", 0.0
+        holds = tot_k >= tot_n
+        return holds, (f"holds ({tot_k} block(s) in frames)" if holds else "; ".join(notes)), tot_k / tot_n
 
 
 @dataclass
@@ -165,7 +183,7 @@ class Equal(Predicate):
         return {"kind": "equal", "params": {"r1": list(self.r1), "r2": list(self.r2)}, "support": 1, "counter": 0,
                 "text": f"the marks in the colour-{self.r1[0]} area match the marks in the colour-{self.r2[0]} area (same pattern)"}
 
-    def evaluate(self, sc: Scene) -> tuple:
+    def evaluate(self, sc: Scene, ev=None) -> tuple:
         a, b = _region_by_spec(sc, self.r1), _region_by_spec(sc, self.r2)
         if a is None or b is None:
             return False, "one of the areas is missing on this board", 0.0
@@ -185,7 +203,7 @@ class Pose(Predicate):
         return {"kind": "pose", "params": {"color": self.color, "target": self.target}, "support": 1, "counter": 0,
                 "text": f"a colour-{self.color} object has exactly the shape of a colour-{self.target} object (the target shape)"}
 
-    def evaluate(self, sc: Scene) -> tuple:
+    def evaluate(self, sc: Scene, ev=None) -> tuple:
         a = [o for o in sc.objs if o.color == self.color and not o.hud and o.size >= 6]
         t = [o for o in sc.objs if o.color == self.target and not o.hud and o.size >= 6]
         ok = any(x.shape == y.shape for x in a for y in t)
@@ -208,13 +226,99 @@ class Pressed(Predicate):
         cands = [o for o in sc.objs if o.color == self.color and not o.hud and o.size >= 8 and (rid is None or o.region == rid)]
         return min(cands, key=lambda o: abs(o.size - self.size)) if cands else None
 
-    def evaluate(self, sc: Scene) -> tuple:
+    def evaluate(self, sc: Scene, ev=None) -> tuple:
         b = self.button(sc)
         return b is not None, (f"submit button = #{b.id} at ({b.center[0]},{b.center[1]})" if b else "no such button on this board"), 1.0 if b else 0.0
 
     @property
     def needs_submit(self) -> bool:
         return True
+
+
+# ── movement-game predicates (built from rulebook entries: model-written or harness win facts) ──────────
+
+def _avatar_box(ev):
+    av = getattr(ev, "avatar", None) if ev is not None else None
+    if not av:
+        return None
+    x0, y0, x1, y1 = av["bbox_xyxy"]
+    return (y0, x0, y1, x1)
+
+
+def _touching(box, o: Obj, gap: int = 1) -> bool:
+    r0, c0, r1, c1 = box
+    return not (o.bbox[0] > r1 + gap or o.bbox[2] < r0 - gap or o.bbox[1] > c1 + gap or o.bbox[3] < c0 - gap)
+
+
+@dataclass
+class CollectAll(Predicate):
+    color: int
+    kind = "collect_all"
+
+    def fact(self) -> dict:
+        return {"kind": "collect_all", "params": {"collect": self.color}, "support": 1, "counter": 0, "text": f"every colour-{self.color} object has been collected"}
+
+    def evaluate(self, sc: Scene, ev=None) -> tuple:
+        box = _avatar_box(ev)
+        left = [o for o in sc.objs if o.color == self.color and not o.hud and o.size <= 80 and not (box and _touching(box, o, 0))]
+        n = len(left)
+        return n == 0, (f"holds (no colour-{self.color} objects left)" if n == 0 else f"{n} colour-{self.color} objects left: " + ", ".join(f"#{o.id}@({o.center[0]},{o.center[1]})" for o in left[:5])), 1.0 / (1 + n)
+
+
+@dataclass
+class Reach(Predicate):
+    color: int
+    kind = "reach"
+
+    def fact(self) -> dict:
+        return {"kind": "reach", "params": {"reach": self.color}, "support": 1, "counter": 0, "text": f"the avatar stands on / touches a colour-{self.color} object"}
+
+    def evaluate(self, sc: Scene, ev=None) -> tuple:
+        box = _avatar_box(ev)
+        targets = [o for o in sc.objs if o.color == self.color and not o.hud]
+        if box is None:
+            return False, "avatar not identified yet", 0.0
+        if not targets:
+            return False, f"no colour-{self.color} object on the board", 0.0
+        hit = [o for o in targets if _touching(box, o)]
+        return bool(hit), (f"holds (avatar touches #{hit[0].id})" if hit else f"avatar at ({box[0]},{box[1]}); nearest colour-{self.color} object at " + ", ".join(f"#{o.id}@({o.center[0]},{o.center[1]})" for o in targets[:3])), 1.0 if hit else 0.0
+
+
+@dataclass
+class CollectReach(Predicate):
+    color: int
+    reach: int
+    kind = "collect_reach"
+
+    def fact(self) -> dict:
+        return {"kind": "collect_reach", "params": {"collect": self.color, "reach": self.reach}, "support": 1, "counter": 0,
+                "text": f"collect every colour-{self.color} object, then touch a colour-{self.reach} object"}
+
+    def evaluate(self, sc: Scene, ev=None) -> tuple:
+        ok1, t1, p1 = CollectAll(self.color).evaluate(sc, ev)
+        ok2, t2, p2 = Reach(self.reach).evaluate(sc, ev)
+        return ok1 and ok2, ("holds" if ok1 and ok2 else ("collected; " + t2 if ok1 else t1)), (p1 + (p2 if ok1 else 0)) / 2
+
+
+def from_entry(entry) -> Optional[Predicate]:
+    """A predicate object for a rulebook win entry of a known kind (model-written or harness-written), else None."""
+    k, p = entry.kind, entry.params or {}
+    try:
+        if k == "collect_all" and p.get("collect") is not None:
+            return CollectAll(int(p["collect"]))
+        if k == "reach" and p.get("reach") is not None:
+            return Reach(int(p["reach"]))
+        if k == "collect_reach" and p.get("collect") is not None and p.get("reach") is not None:
+            return CollectReach(int(p["collect"]), int(p["reach"]))
+        if k == "gone" and p.get("color") is not None and p.get("region"):
+            return Gone(int(p["color"]), tuple(p["region"]))
+        if k == "inside" and p.get("color") is not None and p.get("frame") is not None:
+            return Inside(int(p["color"]), int(p["frame"]), "corners")
+        if k == "pressed" and p.get("color") is not None and p.get("region"):
+            return Pressed(int(p["color"]), tuple(p["region"]), int(p.get("size", 20)))
+    except (TypeError, ValueError):
+        return None
+    return None
 
 
 def _mask(sc: Scene, rid: int) -> dict:
@@ -258,7 +362,7 @@ def infer(start: Frame, pre: Frame, post_board: Optional[list], final_action, ev
                 k = sum(1 for o in blocks if any(f.contains(o) for f in fs))
                 if k >= min(len(blocks), len(fs)) and k >= 1:
                     p = Inside(bc, fc, fs[0].kind)
-                    if tag == "post" and p.evaluate(s1, pre_frames)[0] and not submit_like:
+                    if tag == "post" and p.evaluate(s1, None, pre_frames)[0] and not submit_like:
                         continue   # already true before the final action, which was not a submit: not what the action achieved
                     if tag == "pre" and s2 is not None and not submit_like:
                         continue   # the final action changed the board: judge on the post board only

@@ -25,6 +25,8 @@ def make_plans(game, ev: Evidence, preds: list, *, max_depth: int = 24, max_stat
                 c = _plan_match(ev, sc, p, eid)
             elif isinstance(p, goals2.Inside):
                 c = _plan_press(ev, sc, p, eid, max_depth, max_states) or _plan_marker(ev, sc, p, eid)
+            elif isinstance(p, (goals2.CollectAll, goals2.Reach, goals2.CollectReach)):
+                c = _plan_move(ev, sc, p, eid)
             else:
                 c = None
         except Exception as e:  # a planner bug must never stop play
@@ -63,9 +65,11 @@ def _plan_match(ev: Evidence, sc: Scene, p: goals2.Equal, eid: str) -> Optional[
 
 
 def _plan_press(ev: Evidence, sc: Scene, p: goals2.Inside, eid: str, max_depth: int, max_states: int) -> Optional[Candidate]:
-    frames = [f for f in goals2.find_frames(sc) if f.color == p.frame]
+    allf = goals2.find_frames(sc)
+    pairs = [(c, c) for c in sorted({f.color for f in allf})] if p.color == p.frame else [(p.color, p.frame)]
+    frames = [f for f in allf if any(f.color == fc for _, fc in pairs)]
     dot_ids = {i for f in frames for i in f.dots}
-    blocks = [o for o in sc.objs if o.color == p.color and not o.hud and o.size >= 4 and o.id not in dot_ids]
+    blocks = [o for o in sc.objs if any(o.color == bc for bc, _ in pairs) and not o.hud and o.size >= 4 and o.id not in dot_ids]
     if not frames or not blocks:
         return None
     buttons = [(key, ev.cs.sigma(key)) for key in ev.cs.presses]
@@ -96,11 +100,13 @@ def _plan_press(ev: Evidence, sc: Scene, p: goals2.Inside, eid: str, max_depth: 
     start = frozenset((o.bbox, o.color, o.shape) for o in sc.objs if not o.hud and o.bbox in movable)
     need = min(len(blocks), len(frames))
 
+    fcol = {bc: fc for bc, fc in pairs}
+
     def goal(state) -> bool:
         k = 0
         for bbox, col, sh in state:
-            if col == p.color and any(f.inner[0] - 2 <= bbox[0] and f.inner[1] - 2 <= bbox[1] and bbox[2] <= f.inner[2] + 2 and bbox[3] <= f.inner[3] + 2
-                                      and abs((bbox[0] + bbox[2]) / 2 - (f.inner[0] + f.inner[2]) / 2) <= 2 and abs((bbox[1] + bbox[3]) / 2 - (f.inner[1] + f.inner[3]) / 2) <= 2 for f in frames):
+            if col in fcol and any(f.color == fcol[col] and f.inner[0] - 2 <= bbox[0] and f.inner[1] - 2 <= bbox[1] and bbox[2] <= f.inner[2] + 2 and bbox[3] <= f.inner[3] + 2
+                                   and abs((bbox[0] + bbox[2]) / 2 - (f.inner[0] + f.inner[2]) / 2) <= 2 and abs((bbox[1] + bbox[3]) / 2 - (f.inner[1] + f.inner[3]) / 2) <= 2 for f in frames):
                 k += 1
         return k >= need
 
@@ -154,9 +160,19 @@ def _plan_press(ev: Evidence, sc: Scene, p: goals2.Inside, eid: str, max_depth: 
 
 
 def _plan_marker(ev: Evidence, sc: Scene, p: goals2.Inside, eid: str) -> Optional[Candidate]:
-    frames = [f for f in goals2.find_frames(sc) if f.color == p.frame]
+    allf = goals2.find_frames(sc)
+    for bc, fc in ([(c, c) for c in sorted({f.color for f in allf})] if p.color == p.frame else [(p.color, p.frame)]):
+        c = _plan_marker_pair(ev, sc, p, eid, bc, fc, allf)
+        if c is not None and c.kind == "plan":
+            return c
+    return None
+
+
+def _plan_marker_pair(ev: Evidence, sc: Scene, p: goals2.Inside, eid: str, bc: int, fc: int, allf: list) -> Optional[Candidate]:
+    frames = [f for f in allf if f.color == fc]
     dot_ids = {i for f in frames for i in f.dots}
-    pieces = [o for o in sc.objs if o.color == p.color and not o.hud and o.size >= 4 and o.id not in dot_ids and min(o.bbox[2] - o.bbox[0], o.bbox[3] - o.bbox[1]) >= 2]
+    pieces = [o for o in sc.objs if o.color == bc and not o.hud and o.size >= 4 and o.id not in dot_ids and min(o.bbox[2] - o.bbox[0], o.bbox[3] - o.bbox[1]) >= 2
+              and not any(f.contains(o) for f in frames)]
     if not frames or not pieces:
         return None
     # the marker colour that moves on clicks (cursor rule) and its coupling with the piece colour
@@ -165,27 +181,67 @@ def _plan_marker(ev: Evidence, sc: Scene, p: goals2.Inside, eid: str) -> Optiona
         k, n = cnt.most_common(1)[0]
         if k != -1 and n * 2 > sum(cnt.values()):
             markers.append(k)
+    # objects whose click makes the marker jump onto them (selection): the other anchors
+    selectable = []
+    for (col, rg), cnt in ev.cs.select.items():
+        if cnt.get(True, 0) > cnt.get(False, 0):
+            selectable.extend(o for o in sc.objs if o.color == col and o.region == rg and not o.hud and o.size >= 4)
     for k in set(markers):
-        cp = ev.cs.coupling(k, p.color)
+        cp = ev.cs.coupling(k, bc)
         if not cp:
             continue
         (rr, rc), _ = cp
         if float(rr) == 0 or float(rc) == 0:
             continue
-        mk = [o for o in sc.objs if o.color == k and not o.hud and o.size >= 4]
-        if not mk:
+        mks = [o for o in sc.objs if o.color == k and not o.hud and o.size >= 4]
+        if not mks:
             continue
-        mk = mk[0]
+        mk = mks[0]
         piece = min(pieces, key=lambda o: min(abs(o.center[0] - (f.inner[0] + f.inner[2]) / 2) + abs(o.center[1] - (f.inner[1] + f.inner[3]) / 2) for f in frames))
         f = min(frames, key=lambda f: abs(piece.center[0] - (f.inner[0] + f.inner[2]) / 2) + abs(piece.center[1] - (f.inner[1] + f.inner[3]) / 2))
         need_r = (f.inner[0] + f.inner[2]) / 2 - piece.center[0]; need_c = (f.inner[1] + f.inner[3]) / 2 - piece.center[1]
-        tr, tc = int(round(mk.center[0] + need_r / float(rr))), int(round(mk.center[1] + need_c / float(rc)))
-        if not (0 <= tr < 64 and 0 <= tc < 64):
-            continue
         floor = sc.region_at(mk.center[0], mk.center[1])
-        if sc.region_at(tr, tc) != floor:
-            return Candidate(f"plan:marker({eid})", "info", [], f"the marker would have to go to ({tr},{tc}) to put piece #{piece.id} in the frame, but that cell is not on the marker's floor (wall?)", priority=999)
-        act = {"action": "MOUSE", "row": tr, "col": tc}
-        return Candidate(f"plan:marker({eid})", "plan", [act], f"click ({tr},{tc}): the colour-{k} marker goes there and piece #{piece.id} (coupled x{rr}) lands in the colour-{p.frame} frame at ({f.inner[0]},{f.inner[1]}) -> {eid} should hold",
-                         priority=5, pred_kind="plan")
+        # option 1: move the selected marker itself; option 2: select another anchor first, then move it
+        options = [(None, mk)] + [(a, a) for a in selectable if a.id != mk.id]
+        blocked = []
+        for sel, anchor in options:
+            tr, tc = int(round(anchor.center[0] + need_r / float(rr))), int(round(anchor.center[1] + need_c / float(rc)))
+            if not (0 <= tr < 64 and 0 <= tc < 64) or sc.region_at(tr, tc) != floor or sc.obj_at(tr, tc) is not None:
+                blocked.append((anchor.id, tr, tc)); continue
+            acts = ([{"action": "MOUSE", "row": sel.center[0], "col": sel.center[1]}] if sel is not None else []) + [{"action": "MOUSE", "row": tr, "col": tc}]
+            how = f"select anchor #{sel.id} then click ({tr},{tc})" if sel is not None else f"click ({tr},{tc})"
+            return Candidate(f"plan:marker({eid})", "plan", acts, f"{how}: the colour-{k} marker goes to ({tr},{tc}) and piece #{piece.id} (coupled x{rr}) lands in the colour-{fc} frame at ({f.inner[0]},{f.inner[1]}) -> {eid} should hold",
+                             priority=5, pred_kind="plan")
+        if blocked:
+            return Candidate(f"plan:marker({eid})", "info", [], f"to put piece #{piece.id} in the frame an anchor would have to reach " + ", ".join(f"({r},{c})" for _, r, c in blocked[:3]) + " — not on the floor (wall or occupied)", priority=999)
     return None
+
+
+def _plan_move(ev: Evidence, sc: Scene, p, eid: str) -> Optional[Candidate]:
+    """Walk to the nearest object of the colour the predicate needs (collect first, then reach), on the learned floor map."""
+    nav = ev.nav
+    if nav is None or not ev.moves or not ev.avatar:
+        return None
+    if isinstance(p, goals2.CollectReach):
+        ok1 = goals2.CollectAll(p.color).evaluate(sc, ev)[0]
+        colour, what = (p.reach, "reach") if ok1 else (p.color, "collect")
+    elif isinstance(p, goals2.CollectAll):
+        colour, what = p.color, "collect"
+    else:
+        colour, what = p.color, "reach"
+    box = goals2._avatar_box(ev)
+    targets = [o for o in sc.objs if o.color == colour and not o.hud and o.size <= 400 and not (box and goals2._touching(box, o, 0))]
+    if not targets:
+        return None
+    best = None
+    for o in sorted(targets, key=lambda o: abs(o.center[0] - box[0]) + abs(o.center[1] - box[1]))[:8]:
+        path = nav.path_to(o.center[0], o.center[1], ignore_wall_target=True)
+        if path:
+            if best is None or len(path) < len(best[1]):
+                best = (o, path)
+    if best is None:
+        return Candidate(f"plan:{what}({eid})", "info", [], f"no known path from the avatar to a colour-{colour} object yet (explore the floor first)", priority=999)
+    o, path = best
+    gauge = f"; gauge {ev.gauge['per_action'] * len(path):+}" if ev.gauge else ""
+    return Candidate(f"plan:{what}({eid})", "plan", list(path), f"walk {len(path)} steps ({''.join(a[0] for a in path)}) to colour-{colour} object #{o.id} at ({o.center[0]},{o.center[1]}){gauge} -> {eid}: {'it should vanish' if what == 'collect' else 'the avatar touches it'}",
+                     priority=6, pred_kind="plan")

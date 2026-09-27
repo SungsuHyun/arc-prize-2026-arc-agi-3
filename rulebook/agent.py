@@ -72,6 +72,12 @@ class RulebookAgent:
 
     # ── win predicates ───────────────────────────────────────────────────
     def live_preds(self) -> list:
+        # win entries of known kinds written by the model (or by the old goal inference) get predicate objects too
+        for e in self.book.section("win"):
+            if e.id not in self.preds and e.status != "refuted":
+                p = goals2.from_entry(e)
+                if p is not None:
+                    self.preds[e.id] = p
         return [(eid, p) for eid, p in self.preds.items() if (e := self.book.get(eid)) is not None and e.status != "refuted"]
 
     def goal_state(self, ev: Evidence) -> dict:
@@ -82,8 +88,8 @@ class RulebookAgent:
                 has_submit = True; b = p.button(sc)
                 if b is not None:
                     submit = b
-                lines.append(f"{eid} [submit] {p.evaluate(sc)[1]}"); continue
-            ok, txt, _ = p.evaluate(sc)
+                lines.append(f"{eid} [submit] {p.evaluate(sc, ev)[1]}"); continue
+            ok, txt, _ = p.evaluate(sc, ev)
             (held if ok else missing).append(eid)
             lines.append(f"{eid} [{p.kind}] {'HOLDS' if ok else 'not yet'}: {txt}")
         conds = [eid for eid, p in self.live_preds() if not isinstance(p, goals2.Pressed)]
