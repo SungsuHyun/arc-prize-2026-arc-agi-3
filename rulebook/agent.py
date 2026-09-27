@@ -50,6 +50,10 @@ class RulebookAgent:
         self.last_verdict = None; self.last_essential: list = []; self.pending_mismatch = None
         self.custom_rules: list = []      # (name, fn, accuracy, n) model-written transition rules verified by replay
         self.idle_turns = 0
+        from collections import Counter as _C
+        self.metrics = _C()               # counters for the evaluation report (prediction kinds, verdicts, plans, fallbacks ...)
+        from collections import Counter as _C
+        self.metrics = _C()               # counters for the evaluation report (prediction kinds, verdicts, plans, fallbacks ...)
         self.repl = None
         self.distrust: dict = {}          # (level, click colour) -> failed board predictions; the predictor stops predicting after 2
         self.preds: dict = {}             # rulebook entry id -> goals2.Predicate (win predicates learned from completed levels)
@@ -187,6 +191,7 @@ class RulebookAgent:
         if c is not None and c.label != label:
             self.log(f"DECIDE: label {label!r} resolved to {c.label}")
         if c is None:
+            self.metrics["fallback"] += 1
             self.log(f"DECIDE: label {label!r} not a candidate -> fallback {fallback.label}")
             self.outcomes.append(f"(program refused {label}: not a candidate — hidden objects did nothing twice on this level; ran {fallback.label} instead)")
             return fallback
@@ -205,6 +210,7 @@ class RulebookAgent:
                 self.outcomes.append(f"(program vetoed {c.label}: already tried here, no world change expected; ran {alt.label} instead)")
                 return alt
         self.log(f"DECIDE: {c.label} (expect: {str(obj.get('expect', ''))[:120]})")
+        self.metrics["chosen_" + ("plan" if c.kind == "plan" else c.kind)] += 1
         return c
 
     # ── main loop ────────────────────────────────────────────────────────
@@ -224,7 +230,8 @@ class RulebookAgent:
                "actions": g.actions_used, "level_action_log": g.level_action_log, "stop_reason": stop, "seconds": round(time.time() - self.t0, 1),
                "mismatches": self.mismatches, "reviews": self.reviews, "observations": self.observations, "rulebook": self.book.stats(),
                "rulebook_version": self.book.version, "levels": self.level_stats,
-               "model_calls": self.model.calls if self.model else {}, "model_seconds": round(self.model.seconds, 1) if self.model else 0}
+               "model_calls": self.model.calls if self.model else {}, "model_seconds": round(self.model.seconds, 1) if self.model else 0,
+               "metrics": dict(self.metrics)}
         self.log("result: " + json.dumps(res)); self.save_book(); self._log_f.close()
         return res
 
@@ -240,6 +247,7 @@ class RulebookAgent:
             goal = self.goal_state(ev)
             cands = build(g, ev, self.tried, goal=goal)
             plans = make_plans(g, ev, self.live_preds())
+            self.metrics["plans_offered"] += sum(1 for c in plans if c.kind == "plan")
             for c in plans:
                 if c.kind == "plan" and c.actions:
                     k = ev.predict(c.actions[0]).kind
@@ -339,6 +347,7 @@ class RulebookAgent:
             self.last_cell = None
         v = ev.check(pred, t, res)
         self.last_verdict = (pred, v, res)
+        self.metrics[f"pred_{pred.kind}"] += 1; self.metrics["verdict_ok" if v.ok else "verdict_mismatch" if v.ok is False else "verdict_obs"] += 1
         tag = "OK " if v.ok else "MISMATCH" if v.ok is False else "obs"
         self.log(f"{tag}: {action_label(act)} [{label}] predicted: {pred.text} | actual: {v.text}")
         self.outcomes.append(f"a{g.actions_used} {action_label(act)} ({label}): predicted '{pred.text[:70]}' -> {v.text[:110]}")
