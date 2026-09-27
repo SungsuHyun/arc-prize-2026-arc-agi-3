@@ -75,9 +75,11 @@ verified rule the predictor uses), define_goal(name, fn(objects, board)->bool, n
 evaluates and refutes automatically, note(text, section, kind, params) adds a rulebook entry, refute(id, why), set_plan(text), remember(text).
 
 How to work: read book/goal/candidates/plans first. If a plan candidate says a win condition will hold, run it: act(plan_actions[label]).
-Otherwise write the procedure as code (loops over objects, not one click at a time), verify a hypothesis about an effect with check_rule
-before relying on it, and define the win condition with define_goal so the program can tell you when it holds. Never repeat an action
-that changed nothing. Write ONE python call per turn; print little. No prose outside the tool call."""
+Otherwise write the procedure as code (loops over objects, several actions per call, not one click at a time), verify a hypothesis about
+an effect with check_rule before relying on it, and define the win condition with define_goal so the program can tell you when it holds.
+Every call must execute at least one action (act/click/press) unless it defines a rule or goal. Never repeat an action that changed
+nothing; candidates already tried in this state are marked. Clicks are act((row, col)) — coordinates from objects/candidates. Write ONE
+python call per turn with at most a few short comments; print little. No prose outside the tool call."""
 
 
 def objects_text(frame: Frame, limit: int = 10) -> str:

@@ -60,9 +60,11 @@ class Repl:
                 t = a.strip()
                 if t in labels:
                     return list(labels[t])
-                m = _re.match(r"(?:MOUSE|click)\((?:\d+@)?(\d+),(\d+)\)$", t)
+                m = _re.match(r"(?:MOUSE|mouse|click|CLICK)\s*\(\s*(?:\d+\s*@\s*)?(\d+)\s*,\s*(\d+)\s*\)\s*$", t)
                 if m:
                     return [{"action": "MOUSE", "row": int(m.group(1)), "col": int(m.group(2))}]
+                if t.upper() == "MOUSE":
+                    raise StopTurn("a click needs coordinates: act((row, col)) or click(row, col)")
                 return [t.upper()]
             return [a]
 
