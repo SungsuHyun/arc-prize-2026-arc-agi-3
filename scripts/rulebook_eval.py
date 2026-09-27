@@ -195,9 +195,25 @@ def markdown(ev: dict, name: str) -> str:
     return "\n".join(lines)
 
 
+def compare(tags: list) -> str:
+    """One row per tag: overall numbers side by side (for the evaluation matrix)."""
+    lines = ["| tag | runs | games | score mean | L1 rate | L2 rate | ok/unk/mis | top taxonomy |", "|---|---|---|---|---|---|---|---|"]
+    for t in tags:
+        runs = load_runs(t, [])
+        if not runs:
+            continue
+        o = evaluate(runs)["overall"]
+        top = ", ".join(f"{k} {v}" for k, v in list(o["taxonomy"].items())[:3])
+        lines.append(f"| {t} | {o['runs']} | {o['games']} | {o['score_mean']} | {o['level1_rate']} | {o['level2_rate']} | {o['ok_rate']}/{o['unknown_rate']}/{o['mismatch_rate']} | {top} |")
+    return "\n".join(lines)
+
+
 def main():
     ap = argparse.ArgumentParser(); ap.add_argument("--tag", default=""); ap.add_argument("--run", action="append", default=[]); ap.add_argument("--name", default="")
+    ap.add_argument("--compare", default="", help="comma-separated tags: side-by-side overall table")
     a = ap.parse_args()
+    if a.compare:
+        print(compare(a.compare.split(","))); return
     runs = load_runs(a.tag, a.run)
     if not runs:
         print("no runs"); return
