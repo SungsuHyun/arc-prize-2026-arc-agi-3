@@ -14,9 +14,9 @@ from pbg.tests.unit.synthetic import board, frame
 def test_stable_frames_picks_last_repeated():
     a, b, c = board(agent=(20, 20)), board(agent=(24, 20)), board(agent=(28, 20))
     after, inter = stable_frames([a, b, c, c])
-    assert np.array_equal(after, c) and len(inter) == 2
-    after, inter = stable_frames([a, b])
-    assert np.array_equal(after, b) and len(inter) == 1
+    assert np.array_equal(after, c) and len(inter) == 3
+    after, inter = stable_frames([a, a, b])
+    assert np.array_equal(after, b) and len(inter) == 2
 
 
 def test_replay_env_serves_log_and_rejects_other_actions(tmp_path: Path):

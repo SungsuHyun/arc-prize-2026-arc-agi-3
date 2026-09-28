@@ -25,6 +25,8 @@ def foreground_mask(grid: np.ndarray, regions: list[Region], global_bg: int, reg
         r0, c0, r1, c1 = reg.bbox
         sub = grid[r0:r1, c0:c1]
         fg[r0:r1, c0:c1] &= sub != reg.bg_color
+        if reg.bg_color == global_bg:
+            continue          # nested floor of the background colour: its pixels are already background
         holes = sub == global_bg
         if holes.any():
             labels, n = label_components(sub, holes)

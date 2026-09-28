@@ -93,10 +93,27 @@ def find_regions(grid: np.ndarray, *, min_area_ratio: float = 0.05, ui_strip_max
         if fill < 0.25:
             continue  # sparse (a frame/outline, not a block): treat as an object instead
         kind = "board" if (r1 - r0) * (c1 - c0) >= 0.5 * h * w else "panel"
-        reg = Region(f"R{rid}", color, (r0, c0, r1, c1), kind)
         m = np.zeros((r1 - r0, c1 - c0), dtype=bool); m[s["rows"] - r0, s["cols"] - c0] = True
+        m |= grid[r0:r1, c0:c1] == color            # small same-colour gaps inside the bbox belong to the region too
+        reg = Region(f"R{rid}", color, (r0, c0, r1, c1), kind, None if fill >= 0.98 else m)
         masks[reg.id] = ((r0, c0, r1, c1), m, fill)
         regions.append(reg); rid += 1
+    # nested boards: a large area of the global background colour enclosed inside a region (the floor inside a framed
+    # panel) is a region of its own, so rendering and floor rules see the floor colour there
+    nested = []
+    for s in stats:
+        color = int(grid[s["rows"][0], s["cols"][0]])
+        if color != global_bg or s["area"] < min_area:
+            continue
+        r0, c0, r1, c1 = s["bbox"]
+        if r0 == 0 or c0 == 0 or r1 == h or c1 == w:
+            continue          # touches the grid border: this is the outer background itself
+        m = np.zeros((r1 - r0, c1 - c0), dtype=bool); m[s["rows"] - r0, s["cols"] - c0] = True
+        fill = s["area"] / ((r1 - r0) * (c1 - c0))
+        reg = Region(f"R{rid}", global_bg, (r0, c0, r1, c1), "board", None if fill >= 0.98 else m)
+        masks[reg.id] = ((r0, c0, r1, c1), m, fill)
+        nested.append(reg); rid += 1
+    regions += nested
     # ui strips: thin, long components with a periodic pattern along their axis (any colour but the containing bg)
     for s in stats:
         r0, c0, r1, c1 = s["bbox"]
@@ -174,15 +191,15 @@ def stabilize_regions(cur: list[Region], prev: list[Region]) -> list[Region]:
                 best = q; break
         if best is not None:
             used.add(best.id)
-            r = Region(r.id, r.bg_color, (min(r.bbox[0], best.bbox[0]), min(r.bbox[1], best.bbox[1]), max(r.bbox[2], best.bbox[2]), max(r.bbox[3], best.bbox[3])),
-                       "board" if best.kind_hint == "board" else r.kind_hint)
+            bb = (min(r.bbox[0], best.bbox[0]), min(r.bbox[1], best.bbox[1]), max(r.bbox[2], best.bbox[2]), max(r.bbox[3], best.bbox[3]))
+            r = Region(r.id, r.bg_color, bb, "board" if best.kind_hint == "board" else r.kind_hint, _union_mask(bb, r, best))
         out.append(r)
     # previous regions with no counterpart this frame (fully occluded / split into small parts) are kept
     for q in prev:
         if q.id == "R0" or q.kind_hint == "ui_strip" or q.id in used:
             continue
         if not any(o.bg_color == q.bg_color and _bands_overlap(o.bbox, q.bbox) for o in out if o.id != "R0"):
-            out.append(Region(q.id, q.bg_color, q.bbox, q.kind_hint))
+            out.append(Region(q.id, q.bg_color, q.bbox, q.kind_hint, q.mask))
     # re-number non-strip regions by size, strips last (ids must be stable-ish: sort by bbox for determinism)
     strips = [r for r in out if r.kind_hint == "ui_strip"]; rest = [r for r in out if r.kind_hint != "ui_strip" and r.id != "R0"]
     rest.sort(key=lambda r: (-r.area, r.bbox))
@@ -190,3 +207,15 @@ def stabilize_regions(cur: list[Region], prev: list[Region]) -> list[Region]:
     for i, r in enumerate(final):
         r.id = f"R{i}"
     return final
+
+
+def _union_mask(bb, a: Region, b: Region):
+    """Union of two regions' pixel masks inside the union bbox (None when both are full rectangles and equal to bb)."""
+    if a.mask is None and b.mask is None and a.bbox == bb and b.bbox == bb:
+        return None
+    m = np.zeros((bb[2] - bb[0], bb[3] - bb[1]), dtype=bool)
+    for reg in (a, b):
+        r0, c0, r1, c1 = reg.bbox
+        sub = m[r0 - bb[0]:r1 - bb[0], c0 - bb[1]:c1 - bb[1]]
+        sub |= True if reg.mask is None else reg.mask
+    return m

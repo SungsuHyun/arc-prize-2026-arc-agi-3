@@ -70,11 +70,12 @@ class Planner:
         plans = []
         info = PlanInfo([], algorithm="", reason="")
         t0 = time.perf_counter()
-        for h in H[:3]:
+        ranked = sorted(H, key=lambda h: -h.plan_weight())[:3]
+        for h in ranked:
             for g in G[:3]:
                 p, alg = self._search_one(scene, h.model, g, available, semantics, depth, visited or set())
                 if p:
-                    plans.append((max(h.score, 0.05) * max(g.confidence, 0.05), p, h, g, alg))
+                    plans.append((h.plan_weight() * max(g.confidence, 0.05), p, h, g, alg))
         info.scored = [(round(s, 3), len(p), h.name, g.name, alg) for s, p, h, g, alg in plans]
         if not plans:
             info.reason = "no plan under any (hypothesis, goal) pair"
@@ -97,7 +98,8 @@ class Planner:
     def execute(self, plan: list[Action], H: list[Hypothesis], session, G=None, *, kind: str = "plan") -> ExecResult:
         """Run a plan step by step; stop immediately on level change, game over, prediction mismatch or stuck (spec §10)."""
         current = session.scene
-        model = H[0].model if H else None
+        chosen = self.last_info.hypothesis if self.last_info and self.last_info.hypothesis in H else (H[0] if H else None)
+        model = chosen.model if chosen else None
         top_goal = G[0] if G else None
         for i, a in enumerate(plan):
             pred = None
@@ -116,6 +118,8 @@ class Planner:
             if t.status_change == "GAME_OVER":
                 return ExecResult("FAILED", t.after, t, i + 1)
             if pred is not None and not _equal_ignoring_ui(pred, t.after, model):
+                if chosen is not None:
+                    chosen.recent_mismatches += 1
                 return ExecResult("MISMATCH", t.after, t, i + 1, {"mismatch": scene_mismatch(pred, t.after)})
             if pred is None and model is not None:
                 return ExecResult("MISMATCH", t.after, t, i + 1, {"mismatch": "unknown prediction"})

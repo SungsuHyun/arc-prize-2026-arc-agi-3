@@ -51,6 +51,7 @@ class RuleModel:
         self.default = default
         self.name = name
         self.verified = False
+        self.level_scoped = False      # True: positional rules learned for the current level -> verified on that level's log only
 
     def assign_roles(self, scene: Scene) -> dict[int, str]:
         if self._role_fn is None:
@@ -109,9 +110,14 @@ class Hypothesis:
     verified: bool = False
     prediction_key: str = ""    # hash of all predictions on the log (dedupe)
     origin: str = "llm"         # llm | induced | transferred | prior
+    recent_mismatches: int = 0  # mispredictions during execution since the last re-verification that changed the model
 
     def sort_key(self) -> tuple:
         return (self.score, self.coverage)
+
+    def plan_weight(self) -> float:
+        """Weight used when choosing plans: verified log accuracy, penalised for live mispredictions."""
+        return max(0.05, self.score - 0.15 * self.recent_mismatches)
 
 
 def scene_equal(a: Optional[Scene], b: Optional[Scene], *, ignore_roles: bool = True) -> bool:

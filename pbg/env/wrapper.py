@@ -55,15 +55,11 @@ def _state_name(raw_state) -> str:
 
 
 def stable_frames(grids: list[np.ndarray]) -> tuple[np.ndarray, list[np.ndarray]]:
-    """Return (stable_after, intermediates). Stable = the last of two consecutive identical frames if any; else the last frame."""
+    """Return (after, intermediates): the LAST frame of a multi-frame response is the state after the action; every earlier
+    frame is animation. (Picking an earlier pair of identical frames chose a flash frame in ls20's death animation.)"""
     if not grids:
         raise ValueError("empty frame list")
-    if len(grids) == 1:
-        return grids[0], []
-    for i in range(len(grids) - 1, 0, -1):
-        if np.array_equal(grids[i], grids[i - 1]):
-            return grids[i], grids[:i - 1]
-    return grids[-1], grids[:-1]
+    return grids[-1], list(grids[:-1])
 
 
 class EnvWrapper:

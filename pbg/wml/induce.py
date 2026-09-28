@@ -100,6 +100,109 @@ def _role_fn_factory(agent_keys: set, wall_colors: set, collectible_colors: set,
     return role_fn
 
 
+def _panel_color(scene: Scene, o) -> int:
+    """Background colour of the smallest region containing the object whose colour differs from the global background
+    (the panel a body lives in); the global background when there is none."""
+    gb = scene.aux.get("_global_bg", scene.regions[0].bg_color if scene.regions else -1)
+    best = None
+    r, c = o.center
+    for reg in scene.regions:
+        if reg.id == "R0" or reg.kind_hint == "ui_strip" or reg.bg_color == gb:
+            continue
+        r0, c0, r1, c1 = reg.bbox
+        if r0 <= r < r1 and c0 <= c < c1 and (best is None or reg.area < best.area):
+            best = reg
+    return best.bg_color if best is not None else gb
+
+
+def induce_multi_agent(log: list[Transition], semantics: dict, available: list[Action]) -> list[tuple[str, RuleModel]]:
+    """Several bodies that respond to the same buttons with different displacements (mirrored twin in m0r0/ar25):
+    group movers by (colours, shape, region); each group gets its own direction table and role agent / agent2 / ..."""
+    groups: dict[tuple, dict[int, Counter]] = {}
+    keys_of: dict[tuple, set] = {}
+    for t in log:
+        if t.action.type != "BUTTON":
+            continue
+        reshaped = {x[0] for x in t.diff.reshaped}
+        for i, (dr, dc) in t.diff.moved:
+            o = t.before.get(i)
+            if o is None or i in reshaped:
+                continue
+            reg = t.before.region(o.region)
+            if reg is None or reg.kind_hint == "ui_strip":
+                continue
+            gk = (o.colors, o.shape_sig, i)      # identical twins are told apart only by their tracking id
+            groups.setdefault(gk, {}).setdefault(t.action.id, Counter())[(dr, dc)] += 1
+    # keep groups that move under >= 2 buttons; direction = modal displacement per button
+    tables = {}
+    for gk, per_button in groups.items():
+        tab = {b: c.most_common(1)[0][0] for b, c in per_button.items() if c.most_common(1)[0][1] >= 1}
+        if len(tab) >= 2:
+            tables[gk] = tab
+    if len(tables) < 2:
+        return []
+    # merge groups whose direction tables agree (the same body under a re-assigned id); keep at most 4 distinct bodies
+    merged: list[tuple[dict, list]] = []
+    for gk in sorted(tables, key=lambda k: k[2]):
+        tab = tables[gk]
+        for mtab, ids in merged:
+            if all(mtab.get(b) == d for b, d in tab.items() if b in mtab) and any(b in mtab for b in tab):
+                mtab.update({b: d for b, d in tab.items() if b not in mtab}); ids.append(gk[2]); break
+        else:
+            merged.append((dict(tab), [gk[2]]))
+    if len(merged) < 2:
+        return []
+    merged = merged[:4]
+    tables = {i: tab for i, (tab, _) in enumerate(merged)}
+    id_to_group = {oid: i for i, (_, ids) in enumerate(merged) for oid in ids}
+    appearance = {(gk[0], gk[1]) for gk in groups}
+    roles = {i: ("agent" if i == 0 else f"agent{i + 1}") for i in tables}
+    hints = infer_roles_static(log, semantics)
+    wall_colors = set(); collectible_colors = set()
+    buttons = sorted({a.id for a in available if a.type == "BUTTON"})
+    used = set().union(*[set(t) for t in tables.values()])
+    other = tuple(b for b in buttons if b not in used)
+
+    def role_fn(scene: Scene) -> dict[int, str]:
+        out = {}
+        strips = {r.id for r in scene.regions if r.kind_hint == "ui_strip"}
+        bodies = [o for o in scene.objects if (o.colors, o.shape_sig) in appearance and o.region not in strips]
+        taken = set()
+        for o in bodies:                                   # known tracking ids first
+            if o.id in id_to_group and id_to_group[o.id] not in taken:
+                out[o.id] = roles[id_to_group[o.id]]; taken.add(id_to_group[o.id])
+        for o in sorted(bodies, key=lambda o: o.center[1]):   # unknown ids: left-to-right into the free groups
+            if o.id not in out:
+                free = [i for i in tables if i not in taken]
+                if free:
+                    out[o.id] = roles[free[0]]; taken.add(free[0])
+        for o in scene.objects:
+            if o.id in out:
+                continue
+            out[o.id] = "indicator" if (o.region in strips or tuple(o.bbox) in {b for _, b in hints["indicator_boxes"]}) else "unknown"
+        return out
+
+    floor = tuple(sorted(hints["floor_colors"]))
+
+    def build(with_floor: bool) -> RuleModel:
+        rules = []
+        for gi, tab in tables.items():
+            step = max(abs(dr) + abs(dc) for dr, dc in tab.values()) or 1
+            unit = {b: (int(np.sign(dr)), int(np.sign(dc))) for b, (dr, dc) in tab.items()}
+            role = roles[gi]
+            rules.append(Rule(f"move_{role}", lambda s, a, tab=tab: a.type == "BUTTON" and a.id in tab, move_role(role, unit, step), source="induced"))
+            if with_floor and floor:
+                rules.append(Rule(f"{role}_on_floor", lambda s, a, tab=tab: a.type == "BUTTON" and a.id in tab, cancel_move_if_off_floor(role, floor), source="induced"))
+            else:
+                rules.append(Rule(f"{role}_stays_inside", lambda s, a, tab=tab: a.type == "BUTTON" and a.id in tab, cancel_move_if_outside(role), source="induced"))
+        if other:
+            rules.append(Rule("unknown_buttons", lambda s, a: a.type == "BUTTON" and a.id in other, unknown_for(other), source="induced"))
+        name = "induced:multi_agent" + ("+floor" if with_floor else "")
+        return RuleModel(rules, role_fn, default="unknown", name=name)
+
+    return [("induced:multi_agent+floor", build(True)), ("induced:multi_agent", build(False))]
+
+
 def induce_hypotheses(log: list[Transition], semantics: dict, available: list[Action]) -> list[tuple[str, RuleModel]]:
     """Return (name, model) candidates built from priors. Several variants so evaluate() can pick the best."""
     if not log:
@@ -112,6 +215,7 @@ def induce_hypotheses(log: list[Transition], semantics: dict, available: list[Ac
     dirs = {int(k.replace("ACTION", "")): d for k, d in moves.items() if k.startswith("ACTION")}
     if not dirs:
         return induce_click_hypotheses(log, semantics, available)
+    multi = induce_multi_agent(log, semantics, available)
     buttons = sorted({a.id for a in available if a.type == "BUTTON"})
     noop_buttons = tuple(b for b in buttons if f"ACTION{b}" in semantics and semantics[f"ACTION{b}"].get("class") == "NOOP")
     other_buttons = tuple(b for b in buttons if b not in dirs and b not in noop_buttons)
@@ -183,7 +287,7 @@ def induce_hypotheses(log: list[Transition], semantics: dict, available: list[Ac
         if assumed:
             m2 = RuleModel(base_rules(w, f, c, p, use_assumed=True), role_fn, default="unknown", name=name + "+assumed_dirs")
             out.append((name + "+assumed_dirs", m2))
-    return out
+    return out + multi
 
 
 def induce_click_hypotheses(log: list[Transition], semantics: dict, available: list[Action]) -> list[tuple[str, RuleModel]]:
@@ -323,7 +427,9 @@ def induce_click_hypotheses(log: list[Transition], semantics: dict, available: l
         rules.append(Rule("unknown_buttons", lambda s, a: a.type == "BUTTON", unknown_for(buttons), source="induced"))
     if not rules:
         return []
-    return [("induced:click", RuleModel(rules, role_fn, default="noop", name="induced:click"))]
+    model = RuleModel(rules, role_fn, default="noop", name="induced:click")
+    model.level_scoped = bool(perms)      # learned position permutations only hold for the level they were seen on
+    return [("induced:click", model)]
 
 
 def induced_code(name: str) -> str:

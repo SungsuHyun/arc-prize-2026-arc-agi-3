@@ -86,7 +86,15 @@ class Orchestrator:
         touched: set = set(); exploring = False
         last_refine_n = -1; resets_without_progress = 0; game_overs = 0
         tried_experiments: set = set()
+        idle_iters = 0; last_used = -1
         while not s.finished():
+            if budget.used() == last_used:
+                idle_iters += 1
+                if idle_iters >= 8 and state in ("PLAN", "HYPOTHESIZE") and not wml.job_running():
+                    events.emit(state, "PROBE", "no action for 8 loop iterations -> walk probe (liveness)", budget_used=budget.used())
+                    state = "PROBE"; idle_iters = 0
+            else:
+                idle_iters = 0; last_used = budget.used()
             if s.env.status().state == "GAME_OVER":
                 game_overs += 1
                 if game_overs > 20:
@@ -187,9 +195,8 @@ class Orchestrator:
                                             roles_fn=(lambda sc, m=H[0].model: m.with_roles(sc)) if H and isinstance(H[0].model, RuleModel) else None)
                         if not G:
                             no_plan_rounds += 1
-                            events.emit("PLAN", "HYPOTHESIZE", "no goal candidates", budget_used=budget.used()); state = "HYPOTHESIZE"
-                            if no_plan_rounds > 3:
-                                state = "PROBE"
+                            state = "PROBE" if no_plan_rounds > 1 else "HYPOTHESIZE"
+                            events.emit("PLAN", state, "no goal candidates", budget_used=budget.used())
                             continue
                 plan = planner.search(s.scene, H, G, available=s.available_actions(), semantics=semantics, visited=planner.stuck.visited)
                 if plan is None and H and not H[0].verified:

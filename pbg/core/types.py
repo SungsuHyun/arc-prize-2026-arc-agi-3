@@ -105,6 +105,7 @@ class Region:
     bg_color: int
     bbox: tuple[int, int, int, int]   # r0, c0, r1, c1 (exclusive)
     kind_hint: Literal["board", "panel", "ui_strip", "unknown"] = "unknown"
+    mask: Optional[np.ndarray] = None # bbox-sized bool: the region's real pixels when it is not a full rectangle (corridors)
 
     @property
     def area(self) -> int:
@@ -118,14 +119,21 @@ class Region:
 
     def contains(self, r: int, c: int) -> bool:
         r0, c0, r1, c1 = self.bbox
-        return r0 <= r < r1 and c0 <= c < c1
+        if not (r0 <= r < r1 and c0 <= c < c1):
+            return False
+        return True if self.mask is None else bool(self.mask[r - r0, c - c0])
 
     def to_json(self) -> dict:
-        return {"id": self.id, "bg_color": self.bg_color, "bbox": list(self.bbox), "kind_hint": self.kind_hint}
+        d = {"id": self.id, "bg_color": self.bg_color, "bbox": list(self.bbox), "kind_hint": self.kind_hint}
+        if self.mask is not None:
+            d["mask"] = mask_to_rle(self.mask)
+        return d
 
     @staticmethod
     def from_json(d: dict) -> "Region":
-        return Region(d["id"], int(d["bg_color"]), tuple(d["bbox"]), d.get("kind_hint", "unknown"))
+        bbox = tuple(d["bbox"])
+        m = rle_to_mask(d["mask"], (bbox[2] - bbox[0], bbox[3] - bbox[1])) if d.get("mask") else None
+        return Region(d["id"], int(d["bg_color"]), bbox, d.get("kind_hint", "unknown"), m)
 
 
 def mask_to_rle(mask: np.ndarray) -> str:
@@ -298,7 +306,11 @@ class Scene:
         g = np.full((h, w), self.aux.get("_global_bg", 0), dtype=np.int8)
         for reg in sorted(self.regions, key=lambda r: -r.area):
             r0, c0, r1, c1 = reg.bbox
-            g[r0:r1, c0:c1] = reg.bg_color
+            if reg.mask is not None:
+                sub = g[r0:r1, c0:c1]
+                sub[reg.mask] = reg.bg_color
+            else:
+                g[r0:r1, c0:c1] = reg.bg_color
         for o in self.objects:
             r0, c0, r1, c1 = o.bbox
             rr0, cc0, rr1, cc1 = max(r0, 0), max(c0, 0), min(r1, h), min(c1, w)

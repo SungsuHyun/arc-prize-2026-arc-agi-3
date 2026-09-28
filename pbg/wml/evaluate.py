@@ -40,6 +40,9 @@ def _applied_rules(model: WorldModel, t: Transition) -> list[str]:
 
 def evaluate(model: WorldModel, log: Iterable[Transition], *, skip_reset: bool = True, ignore_ui: bool = True) -> EvalResult:
     log = [t for t in log if not (skip_reset and t.action.type == "RESET")]
+    if log and getattr(model, "level_scoped", False):
+        last = max(t.level for t in log)
+        log = [t for t in log if t.level == last]
     if not log:
         return EvalResult(0.0, 0.0, n=0)
     correct = covered = 0
@@ -106,8 +109,8 @@ def promotable(res: EvalResult, min_transitions: int = 20, min_per_class: int = 
     return all(tot >= min_per_class for _, tot in res.per_class.values())
 
 
-def make_hypothesis(model: WorldModel, res: EvalResult, code: str = "", name: str = "", origin: str = "llm") -> Hypothesis:
-    return Hypothesis(model, res.score, res.coverage, list(res.violations), code, name, promotable(res), res.prediction_key, origin)
+def make_hypothesis(model: WorldModel, res: EvalResult, code: str = "", name: str = "", origin: str = "llm", recent_mismatches: int = 0) -> Hypothesis:
+    return Hypothesis(model, res.score, res.coverage, list(res.violations), code, name, promotable(res), res.prediction_key, origin, recent_mismatches)
 
 
 def dedupe(H: list[Hypothesis]) -> list[Hypothesis]:

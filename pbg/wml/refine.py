@@ -41,7 +41,7 @@ class WorldModelLab:
         # 1. re-verify what we already have on the (grown) log
         for h in current:
             res = evaluate(h.model, log)
-            H.append(make_hypothesis(h.model, res, h.code, h.name, h.origin))
+            H.append(make_hypothesis(h.model, res, h.code, h.name, h.origin, recent_mismatches=max(0, h.recent_mismatches - 1)))
         # 2. deterministic induction from semantics + priors
         for name, model in induce_hypotheses(log, semantics, available):
             res = evaluate(model, log)
