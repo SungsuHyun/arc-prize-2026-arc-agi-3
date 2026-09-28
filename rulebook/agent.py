@@ -216,6 +216,15 @@ class RulebookAgent:
         repeat = len(self.last_choice) >= 3 and len(set(self.last_choice[-3:])) == 1
         recent = self.last_choice[-3:-1].count(c.label) >= 1
         no_effect = c.pred_kind in ("noop", "hud", "blocked")
+        rl = getattr(self, "recent_labels", [])
+        monotone = len(rl) >= 12 and rl.count(c.label) >= 8 and c.kind != "submit"
+        if monotone:
+            alt = next((x for x in cands if not x.tested and x.label != c.label and x.pred_kind not in ("noop", "hud", "blocked") and not self._same_cell(x)), None)
+            if alt:
+                self.log(f"DECIDE: {c.label} chosen {rl.count(c.label)} of the last 12 decisions without finishing the level -> {alt.label}")
+                self.outcomes.append(f"(program vetoed {c.label}: {rl.count(c.label)}/12 recent decisions, no level progress; ran {alt.label} instead)")
+                self.metrics["veto_monotone"] += 1
+                return alt
         # veto only wasted repeats: a repeat that keeps changing the world (pressing a conveyor button again) is legitimate
         if (c.tested and (no_effect or repeat)) or (recent and no_effect):
             alt = next((x for x in cands if not x.tested and x.label != c.label and x.pred_kind not in ("noop", "hud", "blocked") and not self._same_cell(x)), None) or \
@@ -289,7 +298,9 @@ class RulebookAgent:
                     return self._lv(level0, a0, decisions, "completed")
                 continue
             cand = self.choose(cands, budget, ev, goal); decisions += 1
-            live_plans = [c for c in plans if c.kind == "plan" and self.plan_fail.get((g.level, c.label), 0) < 2 and c.pred_kind not in ("noop", "hud", "blocked")]
+            sk = state_key(g, ev)
+            live_plans = [c for c in plans if c.kind == "plan" and self.plan_fail.get((g.level, c.label), 0) < 2 and c.pred_kind not in ("noop", "hud", "blocked")
+                          and (sk, c.label) not in self.tried]
             if live_plans and cand.kind != "plan":
                 self.plan_ignored += 1
                 if self.plan_ignored >= 3:   # the model keeps ignoring a program-made plan for a live win condition: the program runs it
@@ -299,9 +310,15 @@ class RulebookAgent:
             elif cand.kind == "plan":
                 self.plan_ignored = 0
             self.tried.add((state_key(g, ev), cand.label))
+            progress0 = self._progress_score(ev) if cand.kind == "plan" else None
             res = self.execute(cand, level0, reviews0)
-            if cand.kind == "plan" and res in ("mismatch", "over"):
-                self.plan_fail[(g.level, cand.label)] = self.plan_fail.get((g.level, cand.label), 0) + 1
+            if cand.kind == "plan" and res not in ("won", "level"):
+                progress1 = self._progress_score(self.evidence())
+                if res in ("mismatch", "over") or progress1 <= progress0:   # a plan that ran without moving any win condition forward failed
+                    self.plan_fail[(g.level, cand.label)] = self.plan_fail.get((g.level, cand.label), 0) + 1
+                    self.log(f"plan {cand.label}: no progress ({progress0:.2f} -> {progress1:.2f}), failures {self.plan_fail[(g.level, cand.label)]}")
+            # monotony guard: one label for most of the last 12 decisions without progress -> next decision must differ
+            self.recent_labels = (getattr(self, "recent_labels", []) + [cand.label])[-12:]
             if res == "won":
                 return self._lv(level0, a0, decisions, "completed")
         return self._lv(level0, a0, decisions, "completed" if g.level > level0 else "left")
@@ -349,6 +366,16 @@ class RulebookAgent:
         if self.repl.turn_status in ("won", "level", "over"):
             return self.repl.turn_status
         return "ok"
+
+    def _progress_score(self, ev) -> float:
+        """Sum of the live win predicates' progress numbers (0..1 each) on the current board."""
+        sc = ev.scene; tot = 0.0
+        for eid, p_ in self.live_preds():
+            try:
+                tot += float(p_.evaluate(sc, ev)[2])
+            except Exception:
+                pass
+        return tot
 
     def attempt_limit(self) -> Optional[int]:
         """If game overs on this level happened at (nearly) the same action count, that count is the attempt's action limit."""
