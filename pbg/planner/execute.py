@@ -101,12 +101,19 @@ class Planner:
         plans = []
         info = PlanInfo([], algorithm="", reason="")
         t0 = time.perf_counter()
-        ranked = sorted(H, key=lambda h: -h.plan_weight())[:3]
-        for h in ranked:
+        ranked = sorted(H, key=lambda h: -h.plan_weight())
+        for h in ranked[:3]:
             for g in G[:3]:
                 p, alg = self._search_one(scene, h.model, g, available, semantics, depth, visited or set())
                 if p:
                     plans.append((h.plan_weight() * max(g.confidence, 0.05), p, h, g, alg))
+        if not plans:
+            # a verified model can still be useless for planning (UNKNOWN outside the observed states): try the rest
+            for h in ranked[3:]:
+                for g in G[:2]:
+                    p, alg = self._search_one(scene, h.model, g, available, semantics, depth, visited or set())
+                    if p:
+                        plans.append((h.plan_weight() * max(g.confidence, 0.05) * 0.5, p, h, g, alg))
         info.scored = [(round(s, 3), len(p), h.name, g.name, alg) for s, p, h, g, alg in plans]
         if not plans:
             info.reason = "no plan under any (hypothesis, goal) pair"
