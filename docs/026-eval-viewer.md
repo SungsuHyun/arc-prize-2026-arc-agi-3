@@ -11,7 +11,7 @@
 (experiments/site, GitHub Pages)와 분리되며 공개하지 않는다.
 
 ```bash
-make eval-site            # http://127.0.0.1:8090/  (EVAL_PORT=로 변경)
+make eval-site            # http://0.0.0.0:8090/  (모든 인터페이스, EVAL_PORT=로 포트 변경, --host로 제한 가능)
 ```
 
 ## 데이터가 어디서 오는가

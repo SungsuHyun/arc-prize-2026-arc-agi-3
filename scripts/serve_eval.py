@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 """Local evaluation viewer: browse recorded rulebook runs game by game and level by level, replaying every board.
 
-    make eval-site            # http://127.0.0.1:8090/
-    .venv/bin/python scripts/serve_eval.py [--port 8090] [--host 127.0.0.1]
+    make eval-site            # http://0.0.0.0:8090/ (all interfaces)
+    .venv/bin/python scripts/serve_eval.py [--port 8090] [--host 0.0.0.0]
 
 Data: experiments/rulebook/results/run-*.json + logs/<run>/<game>.log (+ <game>.actions.jsonl for newer runs).
 Boards are rebuilt by replaying the recorded actions against the offline engine (scripts/eval_viewer/replay.py)
@@ -93,7 +93,7 @@ class Handler(BaseHTTPRequestHandler):
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--port", type=int, default=8090)
-    p.add_argument("--host", default="127.0.0.1")
+    p.add_argument("--host", default="0.0.0.0")
     args = p.parse_args()
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     print(f"평가 뷰어: http://{args.host}:{args.port}/   (종료: Ctrl+C)")
