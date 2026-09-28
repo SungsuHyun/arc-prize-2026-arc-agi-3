@@ -6,10 +6,9 @@ set -u
 cd "$(dirname "$0")/.."
 GAMES=${1:-all}; JOBS=${2:-4}
 CONFIGS=(
-  "mx-choose-15m|choose|15|300|{}"
-  "mx-choose-think-15m|choose|15|300|{\"review_think\":\"always\"}"
-  "mx-coder-15m|coder|15|300|{}"
   "mx-choose-nothink-15m|choose|15|300|{\"init_think\":false}"
+  "mx-coder-15m|coder|15|300|{}"
+  "mx-choose-think-15m|choose|15|300|{\"review_think\":\"always\"}"
 )
 for c in "${CONFIGS[@]}"; do
     IFS='|' read -r tag mode minutes la extra <<< "$c"
