@@ -259,3 +259,6 @@ plans_ignored와 game_over_loop는 줄었고 stuck_repeating·hypotheses_refuted
 로컬 25게임 0.7–1.06(15분), 캐글 스모크 5.95였던 v8이 숨겨진 세트에서 0.10. 우리 자체 실행기 계열(v006 0.15, v009 0.10, arcnav v6/v7
 0.39/0.16, v8 0.10)은 모두 0.1–0.4이고 Duck 실행기 계열(v012d 0.91, 순수 Duck 0.98)만 1 근처다. 공통 인자는 **재실행 게이트웨이를 상대하는
 우리 실행 경로**(arc_agi 경쟁 모드 Arcade + Game 래퍼 + 스코어카드)다. 로컬 게이트웨이(`make serve`, 공식 API 동일)로 재현 시험을 한다.
+- 로컬 게이트웨이 시험(`make serve --competition-mode`, `run_rulebook.py --gateway`): 경쟁 모드 규칙(게임당 make 1회, 첫 RESET은 무동작, 이후 RESET은
+  레벨 재시작)에서 우리 경로는 정상 동작(모델 없이 lp85 L4, tn36 L1). 프로토콜 문제는 아님 → 캐글 커널 v9로 "재실행 복제 스모크"
+  (노트북 안 경쟁 모드 게이트웨이 + 전체 id + 12게임 동시)를 돌려 처리량·예외를 본다.
