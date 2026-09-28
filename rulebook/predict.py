@@ -17,7 +17,7 @@ from arcnav import goals as goal_inference
 
 from .env import Game, Transition, MOVE_KEYS, action_label
 from .entities import Obj, Scene, build_scene, match
-from .clicks import ClickStats, change_class, record, _edge_only_diff
+from .clicks import effect_summary, effect_text, key_effect, ClickStats, change_class, record, _edge_only_diff
 
 
 @dataclass
@@ -30,6 +30,7 @@ class Prediction:
     confidence: str = "hypothesis"         # confirmed | hypothesis | none
     moves: Optional[dict] = None           # objects kind: before-object id -> predicted new bbox
     coupled: Optional[list] = None         # cursor kind: [(colour, predicted (dr, dc))] for objects coupled to the marker
+    effect: Optional[tuple] = None         # effects kind: coarse per-colour summary (clicks.effect_summary)
 
 
 @dataclass
@@ -76,6 +77,19 @@ class Evidence:
             if isinstance(t.action, dict):
                 rec = record(t)
                 (self.cs if t.level == game.level else self.cs_all).add(rec)
+        # keys that move several objects at once (rotations, scrolls, conveyors driven by a key) are learned like buttons
+        for t in game.level_transitions():
+            if isinstance(t.action, str) and t.action not in self.moves:
+                eff = key_effect(t)
+                self.cs.add_effect(("KEY", t.action), eff if eff is not None else ())
+                if eff is None or sum(1 for k, sg, mv in eff if mv) < 1:
+                    continue
+                sa, sb = build_scene(t.before_frame), build_scene(t.after_frame)
+                m = match(sa, sb)
+                if len(m["moved"]) >= 2:
+                    occ_b = {o.bbox: (o.color, o.shape) for o in sa.objs if not o.hud and o.size >= 2 and 1 < o.center[0] < 62 and 1 < o.center[1] < 62}
+                    occ_a = {o.bbox: (o.color, o.shape) for o in sb.objs if not o.hud and o.size >= 2 and 1 < o.center[0] < 62 and 1 < o.center[1] < 62}
+                    self.cs.add_key_press(t.action, occ_b, occ_a)
         if game.level_transitions():   # the offset click-effect model too: refit on this level once it has clicks
             lvl_clicks = [t for t in game.level_transitions() if isinstance(t.action, dict)]
             if lvl_clicks:
@@ -188,6 +202,9 @@ class Evidence:
                                   rules=[rule], confidence="confirmed" if n >= 2 else "hypothesis")
             if obj is not None and self.cs.is_dead(obj.key):
                 return Prediction("hud", f"this object was clicked {self.cs.dead[obj.key]}x on this level with no effect in the playfield", rules=[rule], confidence="confirmed")
+            ep = self._effect_pred(("BTN", obj.bbox) if obj is not None else ("CELL", colour, region), f"colour {colour}{where}" + (f" button at ({obj.bbox[0]},{obj.bbox[1]})" if obj is not None else ""), rule)
+            if ep is not None and self.distrust.get((colour, region), 0) >= 2:
+                return ep
             if self.distrust.get((colour, region), 0) >= 2:
                 return Prediction("unknown", f"colour {colour}{where}: the effect model was wrong {self.distrust[(colour, region)]}x on this level; effect not predictable yet (clicked {n}x)", rules=[rule], confidence="none")
             # button with learned slot successors (conveyor / permutation)
@@ -234,6 +251,16 @@ class Evidence:
                     txt += f" (other cells may change too: {h.get('world', 0) if h else 0} world changes seen)"
                 return Prediction("cursor", txt, rules=[rule], confidence="confirmed" if sum(cu.values()) >= 2 else "hypothesis", avatar_to=(r, c), coupled=coupled or None)
             vt, _, _ = self._stat("vanish_of", colour, region)
+            shifts = self.cs.shifts_of(colour, region)
+            if shifts:
+                moves = {}
+                for o in self.scene.objs:
+                    for (k, dr, dc) in shifts:
+                        if o.color == k and not o.hud and o.size >= 4:
+                            moves[o.id] = (o.bbox[0] + dr, o.bbox[1] + dc, o.bbox[2] + dr, o.bbox[3] + dc)
+                if moves:
+                    return Prediction("objects", f"colour {colour}{where} click: " + ", ".join(f"colour-{k} objects move ({dr:+},{dc:+})" for k, dr, dc in shifts) + f" ({len(moves)} objects)",
+                                      moves=moves, rules=[rule], confidence="confirmed" if self.cs.shift_n[(colour, region)] >= 3 else "hypothesis")
             hit = self.scene.obj_at(r, c)
             if vt and vt.most_common(1)[0][0] != -1 and vt.most_common(1)[0][1] * 2 > sum(vt.values()) and hit is not None and hit.cells:
                 k = vt.most_common(1)[0][0]
@@ -249,13 +276,35 @@ class Evidence:
                 conf = "confirmed" if self.click.clicks[colour] >= 2 else "hypothesis"
                 return Prediction("board", f"changes {changed} cells near ({r},{c}): " + ", ".join(f"{b}->{a}x{n}" for (b, a), n in pairs.most_common(3)),
                                   board=board, rules=[rule], confidence=conf)
+            if ep is not None:
+                return ep
             if h:
                 return Prediction("unknown", f"colour {colour}{where} clicked {n}x before with no consistent effect model", rules=[rule], confidence="none")
             return Prediction("unknown", f"colour {colour}{where} never clicked" + ("" if this_level else " on this level"), confidence="none")
         name = act
+        bkey = ("KEY", name)
+        if self.cs.succ_n.get(bkey) and name not in self.moves:
+            sg = self.cs.sigma(bkey); slots = self.cs.slots(bkey)
+            moves = {}; unknown = 0
+            for o in self.scene.objs:
+                if o.hud:
+                    continue
+                nb = sg.get(o.bbox)
+                if nb is not None and nb != o.bbox:
+                    moves[o.id] = nb
+                elif nb is None and o.bbox in slots:
+                    unknown += 1
+            if moves and len(moves) * 2 >= len(moves) + unknown:
+                return Prediction("objects", f"{name}: {len(moves)} objects move along fixed tracks (learned from {self.cs.succ_n[bkey]} presses)" + (f"; {unknown} on unsolved slots" if unknown else ""),
+                                  moves=moves, rules=[("button", {"color": -1, "region": -1})], confidence="confirmed" if self.cs.succ_n[bkey] >= 2 else "hypothesis")
+            return Prediction("unknown", f"{name}: moves several objects at once ({self.cs.succ_n[bkey]} presses); tracks not solved yet", confidence="none")
         if name in self.conditional_keys and name not in self.moves:
             n0, n1 = self.conditional_keys[name]
-            return Prediction("unknown", f"{name}: changed nothing {n0}x but changed the board {n1}x — the effect depends on a condition (state) not yet known", confidence="none")
+            ep = self._effect_pred(("KEY", name), name, None)
+            if n0 >= 5 and n0 >= 4 * n1:
+                return Prediction("noop", f"{name}: changed nothing {n0}x, changed the board only {n1}x — treat as a no-op in the current state (some unknown condition enables it)" + (f"; when it works: {ep.text}" if ep else ""),
+                                  rules=[("noop", {"action": name})], confidence="hypothesis")
+            return Prediction("unknown", f"{name}: changed nothing {n0}x but changed the board {n1}x — the effect depends on a condition (state) not yet known" + (f"; when it works: {ep.text}" if ep else ""), confidence="none")
         if name in self.flaky_moves:
             n0, n1 = self.flaky_moves[name]
             return Prediction("unknown", f"{name}: the learned move delta fit {n0}x but failed {n1}x — the avatar or step size is not identified reliably", confidence="none")
@@ -294,7 +343,28 @@ class Evidence:
         if name in self.moves:
             return Prediction("unknown", f"{name}: moves something by {self.moves[name]} (avatar not identified)", confidence="none")
         pressed = sum(1 for t in self.game.transitions if t.action == name)
+        ep = self._effect_pred(("KEY", name), name, None)
+        if ep is not None:
+            return ep
         return Prediction("unknown", f"{name} never pressed" if not pressed else f"{name} pressed {pressed}x, effect not modelled", confidence="none")
+
+    def _key_of_bbox(self, bbox):
+        o = next((o for o in self.scene.objs if o.bbox == bbox), None)
+        return (o.color, o.region) if o is not None else None
+
+    def _effect_pred(self, ek, label: str, rule) -> Optional[Prediction]:
+        got = self.cs.effect_of(ek)
+        if got is None:
+            return None
+        eff, m, n = got
+        if not eff or (any(mv for k, sg, mv in eff) and m < 3):
+            return None            # empty summaries and weakly supported movement summaries are left to the other models
+        if ek[0] != "KEY":
+            cur = self.cs.cursor.get((ek[2], ek[3]) if ek[0] == "CELL" else self._key_of_bbox(ek[1]))
+            if cur and any(k != -1 for k in cur):
+                return None        # marker/cursor games: the click position decides, not the button
+        txt = f"{label}: {effect_text(eff)} ({m}/{n} times so far)"
+        return Prediction("effects" if eff else "hud", txt, effect=eff, rules=[rule] if rule else [], confidence="confirmed" if m >= 3 and m == n else "hypothesis")
 
     # ── synthesised post-board (for goal inference) ──────────────────────
     def synth_board(self, pred: Prediction, act) -> Optional[list]:
@@ -370,6 +440,23 @@ class Evidence:
                     elif not any(abs(dr - pdr) <= 1 and abs(dc - pdc) <= 1 for dr, dc in got):
                         ok = False; note += f"; colour {oc} moved {got[0]} (predicted ({pdr:+},{pdc:+}))"
             return Verdict(ok, ("as predicted (marker moved to the click" + ("; coupled objects as predicted" if pred.coupled else "") + "); " if ok else "MISMATCH: " + ("no marker moved to the click; " if rec.marker is None else "marker moved but" + note + "; ")) + summary, d)
+        if pred.kind == "effects":
+            got = effect_summary(build_scene(t.before_frame), build_scene(t.after_frame)) if world else ()
+            want = {k: (sg, mv) for k, sg, mv in pred.effect}; have = {k: (sg, mv) for k, sg, mv in got}
+            bad = []
+            for k in set(want) | set(have):
+                w, h_ = want.get(k), have.get(k)
+                if w is None:
+                    bad.append(f"colour {k} changed unexpectedly")
+                elif h_ is None:
+                    bad.append(f"colour {k} did not change")
+                elif w[0] != h_[0] and w[0] and h_[0]:
+                    bad.append(f"colour {k} " + ("grew" if h_[0] > 0 else "shrank") + " instead")
+                elif w[1] and h_[1] and (abs(w[1][0] - h_[1][0]) > 1 or abs(w[1][1] - h_[1][1]) > 1):
+                    bad.append(f"colour {k} moved {h_[1]} not {w[1]}")
+            if not bad:
+                return Verdict(True, "as predicted (" + effect_text(got) + "); " + summary, d)
+            return Verdict(False, "MISMATCH: " + "; ".join(bad[:3]) + "; " + summary, d)
         if pred.kind == "objects":
             sb, sa_ = build_scene(t.before_frame), build_scene(t.after_frame)
             occ_after = {o.bbox: (o.color, o.shape) for o in sa_.objs if not o.hud}

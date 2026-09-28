@@ -222,7 +222,9 @@ class RulebookAgent:
         rl = getattr(self, "recent_labels", [])
         monotone = len(rl) >= 12 and rl.count(c.label) >= 8 and c.kind != "submit"
         if monotone:
-            alt = next((x for x in cands if not x.tested and x.label != c.label and x.pred_kind not in ("noop", "hud", "blocked") and not self._same_cell(x)), None)
+            alt = next((x for x in cands if not x.tested and x.label != c.label and x.pred_kind not in ("noop", "hud", "blocked") and not self._same_cell(x)), None) or \
+                next((x for x in cands if x.label != c.label and x.label not in rl and x.pred_kind not in ("noop", "hud", "blocked") and x.kind != "submit" and not self._same_cell(x)), None) or \
+                min((x for x in cands if x.label != c.label and x.kind != "submit" and x.pred_kind not in ("noop", "hud", "blocked") and not self._same_cell(x)), key=lambda x: rl.count(x.label), default=None)
             if alt:
                 self.log(f"DECIDE: {c.label} chosen {rl.count(c.label)} of the last 12 decisions without finishing the level -> {alt.label}")
                 self.outcomes.append(f"(program vetoed {c.label}: {rl.count(c.label)}/12 recent decisions, no level progress; ran {alt.label} instead)")

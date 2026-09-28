@@ -51,8 +51,58 @@ class ClickRecord:
     moved: list = field(default_factory=list)      # [(oa, ob, dr, dc)]
     appeared: list = field(default_factory=list)
     disappeared: list = field(default_factory=list)
+    scene_before: object = None                    # before scene (for whole-colour shift rules)
+    effect: Optional[tuple] = None                 # effect summary (see effect_summary), world clicks only
     occ_before: Optional[dict] = None              # bbox -> (colour, shape) of every non-HUD object (buttons only)
     occ_after: Optional[dict] = None
+
+
+def effect_summary(sa: Scene, sb: Scene, m: Optional[dict] = None) -> tuple:
+    """Coarse, position-free summary of what a transition did to the playfield: per colour, whether its
+    total non-HUD pixel count grew/shrank and the dominant displacement of its matched objects.
+    Tuple of (colour, sign, (dr, dc) | None), sorted. Empty tuple = nothing changed outside the HUD."""
+    if m is None:
+        m = match(sa, sb)
+    px_b = Counter(); px_a = Counter()
+    for o in sa.objs:
+        if not o.hud and o.size >= 2:
+            px_b[o.color] += o.size
+    for o in sb.objs:
+        if not o.hud and o.size >= 2:
+            px_a[o.color] += o.size
+    mv = defaultdict(Counter)
+    for oa, ob, dr, dc in m["moved"]:
+        if oa.size >= 2 and not oa.hud:
+            mv[oa.color][(dr, dc)] += 1
+    out = []
+    for k in set(px_b) | set(px_a) | set(mv):
+        d = px_a.get(k, 0) - px_b.get(k, 0)
+        sign = 1 if d > 0 else -1 if d < 0 else 0
+        move = mv[k].most_common(1)[0][0] if mv.get(k) else None
+        if sign or move:
+            out.append((k, sign, move))
+    return tuple(sorted(out, key=lambda x: (x[0], x[1], x[2] or (0, 0))))
+
+
+def effect_text(eff: tuple) -> str:
+    parts = []
+    for k, sign, move in eff:
+        p = f"colour {k} " + ("grows" if sign > 0 else "shrinks" if sign < 0 else "")
+        if move:
+            p = (p + " and " if sign else p) + f"moves ({move[0]:+},{move[1]:+})"
+        parts.append(p.strip())
+    return ", ".join(parts) if parts else "nothing in the playfield changes"
+
+
+def key_effect(t) -> Optional[tuple]:
+    """Effect summary of a key transition (cached on the transition); None when it changed nothing / HUD only."""
+    if hasattr(t, "_eff"):
+        return t._eff
+    eff = None
+    if change_class(t.before_frame, t.after_frame) == "world":
+        eff = effect_summary(build_scene(t.before_frame), build_scene(t.after_frame))
+    t._eff = eff
+    return eff
 
 
 def record(t) -> ClickRecord:
@@ -86,7 +136,8 @@ def record(t) -> ClickRecord:
                 if not o.hud and o.id != skip and o.size >= 2 and 1 < o.center[0] < 62 and 1 < o.center[1] < 62}
     if cls == "world" and obj is not None and obj.size >= 4 and marker is None and m["moved"]:
         occ_b = _occ(sa, obj.id); occ_a = _occ(sb)
-    rec = ClickRecord(r, c, colour, region, obj, cls, vanish, marker, marker_to, sel, m["moved"], m["appeared"], m["disappeared"], occ_b, occ_a)
+    eff = effect_summary(sa, sb, m) if cls == "world" else None
+    rec = ClickRecord(r, c, colour, region, obj, cls, vanish, marker, marker_to, sel, m["moved"], m["appeared"], m["disappeared"], sa, eff, occ_b, occ_a)
     try:
         t._rec = rec
     except Exception:
@@ -111,6 +162,10 @@ class ClickStats:
         self._sigma_cache: dict = {}
         self.coupled: dict = defaultdict(Counter)       # (marker colour, other colour) -> Counter((ratio_r, ratio_c))
         self.coupled_obs: dict = defaultdict(list)      # (marker colour, other colour) -> [((marker dr, dc), (other dr, dc))]
+        self.shift: dict = defaultdict(Counter)         # (colour, region) -> Counter((moved colour, dr, dc)) for clicks that moved things (not marker clicks)
+        self.shift_n: Counter = Counter()               # (colour, region) -> world-changing clicks observed
+        self.effects: dict = defaultdict(Counter)       # effect key -> Counter(effect summary); keys: ("BTN", bbox) / ("CELL", colour, region) / ("KEY", name)
+        self.effects_n: Counter = Counter()             # effect key -> observations (world-changing or not)
         self.dead: Counter = Counter()                  # object key -> none/hud clicks
         self.clicked_at: Counter = Counter()            # (region, bbox) -> clicks on this level, whatever the object's colour was
         self.alive: Counter = Counter()                 # object key -> clicks that changed the playfield
@@ -127,6 +182,20 @@ class ClickStats:
         if rec.obj is not None:
             (self.dead if rec.cls != "world" else self.alive)[rec.obj.key] += 1
             self.clicked_at[(rec.obj.region, rec.obj.bbox)] += 1
+        ek = ("BTN", rec.obj.bbox) if rec.obj is not None else ("CELL", rec.color, rec.region)
+        self.add_effect(ek, rec.effect if rec.cls == "world" else ())
+        if rec.cls == "world" and rec.marker is None and rec.obj is not None:
+            # a "shift" click: EVERY non-HUD object of colour k (>= 4 px) moved by the same (dr, dc)
+            self.shift_n[key] += 1
+            present = Counter(o.color for o in rec.scene_before.objs if not o.hud and o.size >= 4) if rec.scene_before is not None else Counter()
+            per = defaultdict(Counter)
+            for oa, ob, dr, dc in rec.moved:
+                if oa.size >= 4:
+                    per[oa.color][(dr, dc)] += 1
+            for k, cnt in per.items():
+                (dr, dc), m = cnt.most_common(1)[0]
+                if m == present.get(k, 0) and m >= 1:
+                    self.shift[key][(k, dr, dc)] += 1
         if rec.obj is not None and rec.moved and rec.marker is None and rec.occ_before is not None:
             b = rec.obj.key; self.succ_n[b] += 1
             self.presses[b].append((rec.occ_before, rec.occ_after)); self._sigma_cache.pop(b, None)
@@ -224,6 +293,34 @@ class ClickStats:
     def tentative(self, button_key) -> dict:
         self.sigma(button_key)
         return self._tentative.get(button_key, {})
+
+    def shifts_of(self, colour: int, region: int) -> list:
+        """[(moved colour, dr, dc)] that happened in at least 60% of the world-changing clicks on (colour, region), >= 2 clicks."""
+        n = self.shift_n.get((colour, region), 0)
+        if n < 2:
+            return []
+        return [(k, dr, dc) for (k, dr, dc), m in self.shift[(colour, region)].items() if m * 10 >= 6 * n]
+
+    def add_effect(self, ek, eff: Optional[tuple]) -> None:
+        self.effects_n[ek] += 1
+        if eff is not None:
+            self.effects[ek][eff] += 1
+
+    def effect_of(self, ek):
+        """(effect summary, support, observations) when one summary explains >= 60% of >= 2 observations, else None."""
+        n = self.effects_n.get(ek, 0)
+        if n < 2 or not self.effects.get(ek):
+            return None
+        eff, m = self.effects[ek].most_common(1)[0]
+        if m >= 2 and m * 10 >= 6 * n:
+            return eff, m, n
+        return None
+
+    # (2) keys as buttons: a key that moves several objects (no avatar) gets the same occupancy/permutation treatment as a button
+    def add_key_press(self, name: str, occ_b: dict, occ_a: dict) -> None:
+        b = ("KEY", name)
+        self.succ_n[b] += 1
+        self.presses[b].append((occ_b, occ_a)); self._sigma_cache.pop(b, None)
 
     def is_dead(self, key) -> bool:
         return self.dead.get(key, 0) >= 2 and self.alive.get(key, 0) == 0
