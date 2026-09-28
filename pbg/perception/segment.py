@@ -65,10 +65,16 @@ def segment_objects(grid: np.ndarray, regions: list[Region], global_bg: int, reg
     tex_labels, tn = label_components(np.zeros_like(grid), tex, 8)
     tex_stats = component_stats(tex_labels, tn) if tn else []
     tex_used = np.zeros((h, w), dtype=bool)
+    a_, b_, c_, d_ = grid[:-1, :-1], grid[:-1, 1:], grid[1:, :-1], grid[1:, 1:]
+    blk = (a_ == d_) & (b_ == c_) & (a_ != b_)
     for s in tex_stats:
         r0, c0, r1, c1 = s["bbox"]
-        # a real texture is dense and at least 3x3: a piece diagonal to a corner mark also forms one 2x2 checker block
+        # a real texture is dense, at least 3x3, and MOST of its 2x2 windows are checker blocks (a piece inside four
+        # corner marks only has checker blocks at the corners)
         if s["area"] < 12 or (r1 - r0) < 3 or (c1 - c0) < 3 or s["area"] < 0.75 * (r1 - r0) * (c1 - c0):
+            continue
+        windows = blk[r0:r1 - 1, c0:c1 - 1]
+        if windows.size == 0 or windows.mean() < 0.6:
             continue
         m = np.zeros((r1 - r0, c1 - c0), dtype=bool); m[s["rows"] - r0, s["cols"] - c0] = True
         cm = np.where(m, grid[r0:r1, c0:c1], -1).astype(np.int8)

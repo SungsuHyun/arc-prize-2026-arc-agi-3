@@ -60,7 +60,13 @@ class WorldModelLab:
         self._detect_hidden_state(log)
         for h in H:
             h.verified = promotable(evaluate(h.model, log)) if h.score >= 1.0 else False
-        return H[:self.N]
+        # keep the hypothesis set diverse: the best prior-composed model stays even when LLM candidates outscore it
+        # (a high-scoring LLM model can still be useless for planning; the composed one rarely is)
+        top = H[:self.N]
+        best_induced = next((h for h in H if h.origin == "induced"), None)
+        if best_induced is not None and best_induced not in top:
+            top = top[:self.N - 1] + [best_induced]
+        return top
 
     # ── background generation ──
     def job_running(self) -> bool:
