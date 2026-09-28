@@ -67,6 +67,8 @@ def parse_log(path: Path) -> dict:
             c["idle_guard"] += 1
         elif rest.startswith("plan candidate: plan:"):
             c["plan_offered"] += 1
+        elif rest.startswith("plan info:"):
+            c["plan_unusable"] += 1
         elif rest.startswith("goal state:"):
             c["goal_lines"] += 1
             if "HOLDS" in rest:
@@ -118,6 +120,8 @@ def taxonomy(lv_stats: dict, completed: bool, reason: str) -> str:
         return "mismatch_heavy"
     if lv_stats.get("plan_offered", 0) > 0 and lv_stats.get("plan_chosen", 0) == 0:
         return "plans_ignored"
+    if lv_stats.get("plan_unusable", 0) >= 5 and lv_stats.get("plan_offered", 0) == 0:
+        return "plan_unusable"
     return "budget_" + (reason or "unknown").replace(" ", "_")[:20]
 
 

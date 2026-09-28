@@ -272,17 +272,22 @@ class RulebookAgent:
             goal = self.goal_state(ev)
             cands = build(g, ev, self.tried, goal=goal)
             plans = make_plans(g, ev, self.live_preds())
+            kept = []
             for c in plans:
                 nf = self.plan_fail.get((g.level, c.label), 0)
-                if c.kind == "plan" and nf >= 2:
+                if c.kind == "plan" and nf >= 3:   # three failures on this level: the plan is wrong for this board, stop offering it
+                    c = Candidate(c.label, "info", [], f"withdrawn after {nf} failed runs on this level: {c.prediction[:120]}", priority=999)
+                elif c.kind == "plan" and nf >= 2:
                     c.priority = 40; c.prediction = f"[failed {nf}x on this level] " + c.prediction
+                kept.append(c)
+            plans = kept
             self.metrics["plans_offered"] += sum(1 for c in plans if c.kind == "plan")
             for c in plans:
                 if c.kind == "plan" and c.actions:
                     k = ev.predict(c.actions[0]).kind
                     if k in ("noop", "hud", "blocked"):
                         c.pred_kind = k; c.prediction = f"[first step predicted {k}] " + c.prediction
-                self.log(f"plan candidate: {c.label} -> {c.prediction[:160]}")
+                self.log(f"{'plan candidate' if c.kind == 'plan' else 'plan info'}: {c.label} -> {c.prediction[:160]}")
             cands = [c for c in plans if c.kind == "plan"] + cands + [c for c in plans if c.kind != "plan"]
             if not [c for c in cands if c.kind != "info"]:
                 return self._lv(level0, a0, decisions, "no candidates")
