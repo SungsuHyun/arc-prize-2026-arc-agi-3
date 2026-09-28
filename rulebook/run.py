@@ -23,7 +23,7 @@ from .llm_io import Model
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = {"base_url": "http://127.0.0.1:1234/v1", "model": "local-qwen", "temperature": 0.6, "top_p": 0.95,
                   "think_tokens": 12000, "review_tokens": 6000, "decide_tokens": 1500, "max_minutes": 20, "level_actions": 200, "max_actions": 2000,
-                  "reviews_per_level": 8, "max_levels": 10, "review_think": "level", "mode": "choose", "jobs": 2}
+                  "reviews_per_level": 8, "max_levels": 10, "review_think": "level", "mode": "choose", "compact": False, "jobs": 2}
 
 
 def _git() -> dict:
@@ -44,7 +44,8 @@ def play_game(arc, game_id: str, cfg: dict, log_dir: Path, *, lock: threading.Lo
     agent = RulebookAgent(game, None, log_dir=log_dir, cfg=cfg, deadline=deadline)
     if not cfg.get("no_model"):
         client = ChatClient(cfg["base_url"], cfg["model"], temperature=cfg["temperature"], top_p=cfg["top_p"], max_tokens=cfg["decide_tokens"])
-        agent.model = Model(client, think_tokens=cfg["think_tokens"], decide_tokens=cfg["decide_tokens"], review_tokens=cfg.get("review_tokens", 6000), log=agent.log)
+        agent.model = Model(client, think_tokens=cfg["think_tokens"], decide_tokens=cfg["decide_tokens"], review_tokens=cfg.get("review_tokens", 6000), log=agent.log,
+                            compact=bool(cfg.get("compact", False)))
     try:
         return agent.play()
     except Exception as e:

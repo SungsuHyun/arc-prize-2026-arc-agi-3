@@ -207,12 +207,27 @@ class Rulebook:
         return f"{e.id} refuted: {note}"
 
     # ── text / io ─────────────────────────────────────────────────────────
-    def render(self, *, include_refuted: bool = True) -> str:
+    def render(self, *, include_refuted: bool = True, compact: bool = False) -> str:
+        """compact: refuted entries only as a one-line list, at most 14 entries per section (newest first beyond the confirmed ones),
+        notes shortened — for the per-decision prompt on a busy GPU."""
         out = []
         titles = {"env": "ENVIRONMENT (what is on the board)", "rules": "RULES (what actions do)", "win": "WIN CONDITIONS (how a level is completed)"}
         for s in SECTIONS:
             es = [e for e in self.section(s) if include_refuted or e.status != "refuted"]
             out.append(titles[s] + ":")
+            if compact:
+                live = [e for e in es if e.status != "refuted"]; dead = [e for e in es if e.status == "refuted"]
+                if len(live) > 14:
+                    conf = [e for e in live if e.status == "confirmed"]; hyp = [e for e in live if e.status != "confirmed"]
+                    live = (conf[-8:] if len(conf) > 8 else conf) + hyp[-(14 - min(8, len(conf))):]
+                for e in live:
+                    ln = e.line()
+                    out.append("  " + (ln[:220] if len(ln) > 220 else ln))
+                if dead:
+                    out.append("  refuted: " + ", ".join(f"{e.id} ({e.text[:40]})" for e in dead[-6:]) + (f" +{len(dead) - 6} more" if len(dead) > 6 else ""))
+                if not live and not dead:
+                    out.append("  (none)")
+                continue
             out.extend("  " + e.line() for e in es) if es else out.append("  (none)")
         out.append("PLAN: " + (self.plan or "(none)"))
         return "\n".join(out)

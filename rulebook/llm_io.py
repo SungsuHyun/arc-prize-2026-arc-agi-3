@@ -143,8 +143,10 @@ def parse_json(text: str) -> Optional[dict]:
 
 
 class Model:
-    def __init__(self, client: ChatClient, *, think_tokens: int = 12000, decide_tokens: int = 1500, review_tokens: int = 6000, log=print):
+    def __init__(self, client: ChatClient, *, think_tokens: int = 12000, decide_tokens: int = 1500, review_tokens: int = 6000, log=print, compact: bool = False):
         self.client, self.think_tokens, self.decide_tokens, self.review_tokens, self.log = client, think_tokens, decide_tokens, review_tokens, log
+        self.compact = compact            # shorter prompts: board only when asked, abridged rulebook, fewer candidates/outcomes, short answers
+        self.last_board = None; self.last_board_actions = -1
         self.calls = {"init": 0, "decide": 0, "review": 0, "failed": 0}
         self.seconds = 0.0
 
@@ -152,7 +154,7 @@ class Model:
         self.calls[kind] += 1
         msgs = [{"role": "system", "content": system}, {"role": "user", "content": user}]
         for attempt, th in enumerate([think, False] if think else [False, False]):
-            budget = (self.think_tokens if kind == "init" else self.review_tokens) if th else (self.decide_tokens if kind == "decide" else 4000)
+            budget = (self.think_tokens if kind == "init" else self.review_tokens) if th else (self.decide_tokens if kind == "decide" else (2000 if self.compact else 4000))
             override = {"chat_template_kwargs": {"enable_thinking": th}, "max_tokens": budget}
             if attempt == 1 and not think:   # the first no-think answer rambled past the budget: demand the bare object
                 msgs = msgs[:2] + [{"role": "user", "content": "Reply with ONLY the JSON object on one line. No explanation."}]
@@ -237,13 +239,33 @@ class Model:
             self.calls["failed"] += 1
         return code, content
 
-    def decide(self, game, book: Rulebook, cands: list, outcomes: list[str], budget_text: str, extra: str = "") -> Optional[dict]:
+    def board_block(self, game, force: bool = False) -> str:
+        """Full board when asked (level start, after a review, every 8th decision), else a diff against the last full board shown."""
         f = game.frame
-        user = (f"{book.render()}\n\nGAME: level {game.level} of {game.levels_total or '?'}; {budget_text}; valid actions {game.valid_actions}.\n"
+        if not self.compact or force or self.last_board is None or self.last_board.level != f.level or game.actions_used - self.last_board_actions >= 8:
+            self.last_board = f; self.last_board_actions = game.actions_used
+            return f"BOARD (64x64):\n{f.ascii}"
+        from arcnav.frame import summarize_diff
+        d = summarize_diff(self.last_board, f, max_items=6)
+        if not d.get("changed_cells"):
+            return "BOARD: unchanged since the last full board shown."
+        parts = [f"{d['changed_cells']} cells changed since the last full board (rows {d['bbox'][0]}-{d['bbox'][2]}, cols {d['bbox'][1]}-{d['bbox'][3]})"]
+        if d.get("moved"):
+            parts.append("moved " + ", ".join(f"colour {m['color']} {m['from']}->{m['to']}" for m in d["moved"][:4]))
+        if d.get("disappeared"):
+            parts.append("vanished " + ", ".join(f"colour {x['color']}@{x['center']}" for x in d["disappeared"][:4]))
+        if d.get("appeared"):
+            parts.append("appeared " + ", ".join(f"colour {x['color']}@{x['center']}" for x in d["appeared"][:4]))
+        return "BOARD: " + "; ".join(parts) + " (the ENTITIES table below is current)."
+
+    def decide(self, game, book: Rulebook, cands: list, outcomes: list[str], budget_text: str, extra: str = "", force_board: bool = False) -> Optional[dict]:
+        f = game.frame
+        nc, no = (24, 6) if self.compact else (40, 10)
+        user = (f"{book.render(compact=self.compact)}\n\nGAME: level {game.level} of {game.levels_total or '?'}; {budget_text}; valid actions {game.valid_actions}.\n"
                 + (extra + "\n" if extra else "")
-                + (("RECENT ACTIONS (newest last):\n  " + "\n  ".join(outcomes[-10:]) + "\n") if outcomes else "")
-                + f"\nENTITIES (areas P0.. and the objects in each; #id colour size @(row,col)):\n{entities_text(f)}\n\nBOARD:\n{f.ascii}\n\nCANDIDATES (label -> program prediction):\n  "
-                + "\n  ".join(c.line() for c in cands[:40]) + "\n\nChoose one candidate label.")
+                + (("RECENT ACTIONS (newest last):\n  " + "\n  ".join(outcomes[-no:]) + "\n") if outcomes else "")
+                + f"\nENTITIES (areas P0.. and the objects in each; #id colour size @(row,col)):\n{entities_text(f)}\n\n{self.board_block(game, force_board)}\n\nCANDIDATES (label -> program prediction):\n  "
+                + "\n  ".join(c.line() for c in cands[:nc]) + "\n\nChoose one candidate label.")
         return self._call("decide", DECIDE_SYSTEM, user, think=False)
 
     def review(self, game, book: Rulebook, event: str, evidence_changes: list[str], outcomes: list[str], *, before: Optional[Frame], bbox=None, think: bool = True, extra: str = "") -> Optional[dict]:
@@ -257,6 +279,11 @@ class Model:
             parts.append("RECENT ACTIONS (newest last):\n  " + "\n  ".join(outcomes[-12:]))
         if before is not None and bbox is not None:
             parts.append("BEFORE (changed region):\n" + crop(before, bbox) + "\nAFTER (same region):\n" + crop(f, bbox))
-        parts.append(f"ENTITIES NOW (areas P0.. and the objects in each):\n{entities_text(f)}\n\nBOARD NOW:\n{f.ascii}")
+        if self.compact and before is not None and bbox is not None:
+            parts.append(f"ENTITIES NOW (areas P0.. and the objects in each):\n{entities_text(f)}")   # the crop above shows the change; the full board is skipped
+        else:
+            parts.append(f"ENTITIES NOW (areas P0.. and the objects in each):\n{entities_text(f)}\n\nBOARD NOW:\n{f.ascii}")
+        if self.compact:
+            self.last_board = None   # the next decision shows the full board again
         parts.append("Revise the rulebook (edits) and the plan.")
         return self._call("review", REVIEW_SYSTEM, "\n\n".join(parts), think=think)
