@@ -262,3 +262,9 @@ plans_ignored와 game_over_loop는 줄었고 stuck_repeating·hypotheses_refuted
 - 로컬 게이트웨이 시험(`make serve --competition-mode`, `run_rulebook.py --gateway`): 경쟁 모드 규칙(게임당 make 1회, 첫 RESET은 무동작, 이후 RESET은
   레벨 재시작)에서 우리 경로는 정상 동작(모델 없이 lp85 L4, tn36 L1). 프로토콜 문제는 아님 → 캐글 커널 v9로 "재실행 복제 스모크"
   (노트북 안 경쟁 모드 게이트웨이 + 전체 id + 12게임 동시)를 돌려 처리량·예외를 본다.
+| 3 | b51b8f2 (+진전 없는 계획 실패 처리, 단조 반복 거부) | 0.767 | **6/25** | 1/25 | budget 8, no_win_hypothesis 4, stuck_repeating 3 |
+| 매트릭스: 코더 모드 | 5f90ea4 | 0.551 | 5/25 | 1/25 | plans_ignored 5, predictor_blind 5 |
+| 매트릭스: 검토 thinking 항상 | 5f90ea4 | 0.714 | 3/25 | 1/25 | budget 8, no_win_hypothesis 5, mismatch_heavy 4 |
+
+레벨 1 통과율은 1→3회차에 8% → 12% → 24%로 올랐고, 설정 중에는 "선택 모드 + INIT thinking 없음"이 1.06으로 가장 높다(레벨 3까지 간 lp85의
+기여가 큼). 다음 회차는 선택 모드·INIT thinking 없음·최신 코드로 돌린다.
