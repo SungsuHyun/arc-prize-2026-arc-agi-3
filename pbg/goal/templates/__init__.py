@@ -504,13 +504,12 @@ def t_same_cell(scene: Scene, ctx: dict) -> list[GoalInstance]:
         return (o.bbox[0] - r0, o.bbox[1] - c0)
     def is_goal(s):
         a = _agents(s)
-        return len(a) == 2 and (a[0].overlaps(a[1]) or rel(a[0], s) == rel(a[1], s))
+        return len(a) == 2 and (a[0].overlaps(a[1]) or _adjacent(a[0], a[1]))
     def progress(s):
         a = _agents(s)
         if len(a) != 2:
             return 0.0
-        d = min(_dist(a[0].center, a[1].center), _dist(rel(a[0], s), rel(a[1], s)))
-        return 1.0 - d / _max_dist(s)
+        return 1.0 - _dist(a[0].center, a[1].center) / _max_dist(s)
     return [GoalInstance("same_cell(agents)", "same_cell", {}, is_goal, progress, clue=0.1)]
 
 

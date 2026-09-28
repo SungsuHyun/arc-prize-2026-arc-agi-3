@@ -56,7 +56,10 @@ class RuleModel:
     def assign_roles(self, scene: Scene) -> dict[int, str]:
         if self._role_fn is None:
             return {o.id: (o.role or "unknown") for o in scene.objects}
-        return dict(self._role_fn(scene))
+        try:
+            return dict(self._role_fn(scene))
+        except Exception:      # an LLM-written role function that fails on an unexpected scene = no roles, never a crash
+            return {o.id: "unknown" for o in scene.objects}
 
     def with_roles(self, scene: Scene) -> Scene:
         roles = self.assign_roles(scene)

@@ -99,9 +99,14 @@ def _equal(pred, obs, ignore_ui: bool, t: Transition, model=None) -> bool:
         r0, c0, r1, c1 = o.bbox
         return any(b[0] <= r0 and b[1] <= c0 and r1 <= b[2] and c1 <= b[3] for b in bands)
 
-    def strict(o):
-        return not in_band(o) and o.id not in loose_ids and o.area > 2    # 1-2 px marks/ticks are display elements
-    a = sorted(o.identity() for o in pred.objects if strict(o)); b = sorted(o.identity() for o in obs.objects if strict(o))
+    def covered(o, scene) -> bool:      # fully under another (larger) object: unobservable in the frame
+        r0, c0, r1, c1 = o.bbox
+        return any(p.id != o.id and p.area > o.area and p.bbox[0] <= r0 and p.bbox[1] <= c0 and r1 <= p.bbox[2] and c1 <= p.bbox[3]
+                   for p in scene.objects)
+
+    def strict(o, scene):
+        return not in_band(o) and o.id not in loose_ids and o.area > 2 and not covered(o, scene)   # 1-2 px marks/ticks are display elements
+    a = sorted(o.identity() for o in pred.objects if strict(o, pred)); b = sorted(o.identity() for o in obs.objects if strict(o, obs))
     return a == b
 
 
