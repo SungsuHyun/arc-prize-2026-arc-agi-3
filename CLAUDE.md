@@ -34,6 +34,7 @@ make bench NAME=vNNN [GAME=..] [STEPS=..]  # 지정 버전 벤치마크 + Pages 
 make site-publish                         # 벤치마크 사이트를 GitHub Pages로 수동 배포
 make site                                 # 로컬 미리보기 (localhost:8080, 자동 재생성)
 make eval-site                            # 로컬 평가 뷰어 (localhost:8090): run→게임→레벨→스텝 보드 재생 (docs/026)
+make eval-site-install                    # 위 뷰어를 systemd user 서비스로 등록 (부팅 시 자동 시작, 이미 등록됨)
 make dashboard                            # experiments/site/ 정적 파일만 재생성
 make serve                                # 로컬 REST 서버 (:8001, 공식 API 동일)
 make submit && make status                # Kaggle 푸시 (리더보드 제출은 웹에서 수동)

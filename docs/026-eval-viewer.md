@@ -48,6 +48,15 @@ make eval-site            # http://0.0.0.0:8090/  (모든 인터페이스, EVAL_
 스스로 새로고침하고 URL 해시로 같은 스텝으로 돌아온다. 디스크 재생 캐시는 유지되고 플레이 세션은 사라진다.
 단일 프로세스로 띄우려면 `--no-reload`.
 
+## 부팅 시 자동 시작 (systemd user service)
+
+`make eval-site-install`은 `scripts/systemd/arc-eval-site.service`를 `~/.config/systemd/user/`에 설치하고
+`systemctl --user enable --now`로 바로 띄운다(포트는 `EVAL_PORT=`, 기본 8090). 사용자에게
+`loginctl enable-linger`가 켜져 있으면 로그인 없이 서버 부팅 직후 시작되고, 죽으면 5초 뒤 재시작된다.
+서비스도 위의 감시 프로세스를 그대로 쓰므로 소스를 고치면 자동 반영된다. 로그는
+`journalctl --user -u arc-eval-site -f`, 제거는 `make eval-site-uninstall`. 같은 포트에 `make eval-site`를
+따로 띄우면 바인드 충돌이 나므로 서비스가 있을 때는 수동 실행 대신 `systemctl --user restart arc-eval-site`.
+
 ## 직접 플레이 모드
 
 헤더의 "직접 플레이"를 누르면 왼쪽에 environment_files의 25개 게임이 뜨고, 고르면 오프라인 엔진으로

@@ -23,7 +23,7 @@ SITE_PORT       ?= 8080
 EVAL_PORT       ?= 8090
 STEPS           ?= 200
 
-.PHONY: help setup arcnav rulebook rulebook-bench rulebook-notebook rulebook-submit play-local pull-sample notebook submit status kaggle-log wheels llm-venv smoke-local verify-local serve exp-new exp-run exp-summary bench dashboard site site-publish clean _check-kaggle
+.PHONY: help setup arcnav rulebook rulebook-bench rulebook-notebook rulebook-submit play-local pull-sample notebook submit status kaggle-log wheels llm-venv smoke-local verify-local serve exp-new exp-run exp-summary bench dashboard site site-publish eval-site eval-site-install eval-site-uninstall clean _check-kaggle
 
 _check-kaggle:
 	@if [ ! -s .kaggle/access_token ]; then \
@@ -145,6 +145,22 @@ site: ## Serve the benchmark site at http://localhost:8080, auto-rebuilding on r
 
 eval-site: ## Local evaluation viewer (rulebook runs, game -> level -> step replay) at http://localhost:8090 (EVAL_PORT=)
 	$(VENV_PY) scripts/serve_eval.py --port $(EVAL_PORT)
+
+EVAL_UNIT       := arc-eval-site.service
+EVAL_UNIT_DIR   := $(HOME)/.config/systemd/user
+
+eval-site-install: ## Install + enable the eval viewer as a systemd user service (starts at boot, EVAL_PORT=)
+	mkdir -p $(EVAL_UNIT_DIR)
+	sed -e 's|__ROOT__|$(CURDIR)|g' -e 's|__PORT__|$(EVAL_PORT)|g' scripts/systemd/$(EVAL_UNIT) > $(EVAL_UNIT_DIR)/$(EVAL_UNIT)
+	systemctl --user daemon-reload
+	systemctl --user enable --now $(EVAL_UNIT)
+	@loginctl show-user $(USER) -p Linger | grep -q 'Linger=yes' || echo "NOTE: run 'loginctl enable-linger $(USER)' so the service starts at boot without a login"
+	systemctl --user --no-pager status $(EVAL_UNIT) | head -5
+
+eval-site-uninstall: ## Stop, disable and remove the eval viewer systemd user service
+	-systemctl --user disable --now $(EVAL_UNIT)
+	rm -f $(EVAL_UNIT_DIR)/$(EVAL_UNIT)
+	systemctl --user daemon-reload
 
 
 site-publish: ## Publish the benchmark site to GitHub Pages (gh-pages branch)
