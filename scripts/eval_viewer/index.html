@@ -163,8 +163,14 @@ const esc = s => String(s ?? "").replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;"
 function readHash() { const h = location.hash.slice(1).split("/"); return { run: h[0] || null, game: h[1] || null, level: h[2] ? +h[2] : null, step: h[3] ? +h[3] : null }; }
 function writeHash() { if (state.mode === "play") return; const parts = [state.run, state.game, state.level, state.i].filter(x => x != null); history.replaceState(null, "", "#" + parts.join("/")); }
 
+// run ids and started_at are UTC (the runners use datetime.now(timezone.utc)); show the browser's local time
+function localTime(iso) {
+  const d = iso ? new Date(iso) : null; if (!d || isNaN(d)) return (iso || "").slice(0, 16).replace("T", " ");
+  const p = n => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
 function runLabel(r) {
-  const d = (r.started_at || "").slice(0, 16).replace("T", " ");
+  const d = localTime(r.started_at);
   const st = r.status === "running" ? "● 진행 중  " : r.status === "aborted" ? "✕ 중단  " : "";
   const score = r.status === "finished" ? fmt(r.aggregate?.score) : `${r.aggregate?.levels_completed ?? 0} lv / ${r.aggregate?.actions ?? 0}a`;
   return `${st}${d}  ${r.tag || "(no tag)"}  · ${r.experiment}${r.mode ? "/" + r.mode : ""}${r.no_model ? "/nomodel" : ""} · ${r.games}g · ${score}${r.logged_games.length ? "" : "  (no logs)"}`;
@@ -174,7 +180,7 @@ async function loadRuns() {
   state.runs = await api("/api/runs");
   const sel = $("runsel"); sel.innerHTML = "";
   for (const r of state.runs) {
-    const o = document.createElement("option"); o.value = r.run_id; o.textContent = runLabel(r);
+    const o = document.createElement("option"); o.value = r.run_id; o.textContent = runLabel(r); o.title = `run ${r.run_id} (UTC id)`;
     sel.appendChild(o);
   }
   const h = readHash();
@@ -198,7 +204,7 @@ const d = () => state.detail;
 function renderRunInfo() {
   const a = d().aggregate || {};
   const score = d().status === "finished" ? `score ${fmt(a.score, 3)} · ` : "";
-  $("runinfo").innerHTML = `${STATUS[d().status] || ""} ${score}levels ${a.levels_completed ?? "?"} · L2+ ${a.games_level2plus ?? "?"}/${a.games_played ?? "?"} · ${esc(d().git?.commit || "")}${d().git?.dirty ? "*" : ""}`;
+  $("runinfo").innerHTML = `${STATUS[d().status] || ""} ${localTime(d().started_at)} 시작 · ${score}levels ${a.levels_completed ?? "?"} · L2+ ${a.games_level2plus ?? "?"}/${a.games_played ?? "?"} · ${esc(d().git?.commit || "")}${d().git?.dirty ? "*" : ""}`;
 }
 
 // a run in progress: re-read its summary every few seconds and, when the open game grew, extend the replay in place
@@ -222,7 +228,7 @@ function watchRun() {
 async function loadRunList() {   // refresh the labels (a run just finished) without losing the selection
   const cur = state.run; const runs = await api("/api/runs"); state.runs = runs;
   const sel = $("runsel"); const keep = sel.value; sel.innerHTML = "";
-  for (const r of runs) { const o = document.createElement("option"); o.value = r.run_id; o.textContent = runLabel(r); sel.appendChild(o); }
+  for (const r of runs) { const o = document.createElement("option"); o.value = r.run_id; o.textContent = runLabel(r); o.title = `run ${r.run_id} (UTC id)`; sel.appendChild(o); }
   sel.value = keep || cur;
 }
 
