@@ -21,6 +21,8 @@ def beam_search(start: Scene, successors: Callable[[Scene], Iterable[tuple[Actio
         cand = []
         for _, scene, path in beam:
             for a, nxt in successors(scene):
+                if time.perf_counter() - t0 > time_limit:
+                    return None
                 k = plan_key(nxt)
                 if k in seen:
                     continue

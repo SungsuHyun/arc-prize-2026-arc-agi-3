@@ -125,11 +125,14 @@ class Probe:
         res.stochastic = self.s.status().stochasticity_score > 0.0
         return res
 
-    def run_walk(self, budget_cap: int, *, max_per_dir: int = 12) -> ProbeResult:
-        """Re-exploration after STUCK / no plan (spec §7 budget row 'reprobe'): press each move button repeatedly until the
-        board stops changing, then the other buttons once, then untried clicks. Reveals walls, reach and side effects."""
+    def run_walk(self, budget_cap: int, *, max_per_dir: int = 12, agent_ids: set = frozenset(), dirs: Optional[dict] = None,
+                 bumped: Optional[set] = None) -> ProbeResult:
+        """Re-exploration after STUCK / no plan (spec §7 budget row 'reprobe'): first bump every object adjacent to the agent
+        once (passability may have changed: doors, keys), then press each move button repeatedly until the board stops
+        changing, then untried clicks. Reveals walls, reach and side effects."""
         res = ProbeResult()
         level = self.s.level
+        bumped = bumped if bumped is not None else set()
 
         def act(a: Action) -> Optional[Transition]:
             if res.actions_used >= budget_cap or self.s.level != level or self.s.finished():
@@ -143,6 +146,25 @@ class Probe:
             return t
 
         buttons = self._buttons()
+        # 1. bump: step once toward each adjacent object not bumped before on this level (a door that opened, a key)
+        if agent_ids and dirs:
+            scene = self.s.scene
+            agents = [o for o in scene.objects if o.id in agent_ids]
+            for a in buttons:
+                if a.id not in dirs:
+                    continue
+                dr, dc = dirs[a.id]
+                for ag in agents:
+                    ghost = ag.moved(dr, dc)
+                    for o in scene.objects:
+                        if o.id == ag.id or o.id in agent_ids or not ghost.overlaps(o):
+                            continue
+                        key = (level, o.identity())
+                        if key in bumped:
+                            continue
+                        bumped.add(key)
+                        if act(a) is None:
+                            break
         for a in buttons:
             for _ in range(max_per_dir):
                 t = act(a)

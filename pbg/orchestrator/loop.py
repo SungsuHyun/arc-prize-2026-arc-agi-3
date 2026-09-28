@@ -86,7 +86,7 @@ class Orchestrator:
         plan: Optional[list[Action]] = None
         touched: set = set(); exploring = False
         last_refine_n = -1; resets_without_progress = 0; game_overs = 0
-        tried_experiments: set = set()
+        tried_experiments: set = set(); bumped: set = set()
         idle_iters = 0; last_used = -1
         while not s.finished():
             if budget.used() == last_used:
@@ -141,7 +141,17 @@ class Orchestrator:
                             s.act(Action.reset(), "reprobe"); planner.stuck.reset(); resets_without_progress += 1
                             budget.reset_level(s.level, "reprobe"); touched.clear(); state = "HYPOTHESIZE"; continue
                         stop = "UNRESOLVED"; events.emit(state, "END", f"no progress after {self.max_resets} resets", budget_used=budget.used()); break
-                res = probe.run_initial(cap, do_reset_probe=False) if kind == "initial" else probe.run_walk(cap)
+                if kind == "initial":
+                    res = probe.run_initial(cap, do_reset_probe=False)
+                else:
+                    agent_ids = set()
+                    if H and isinstance(H[0].model, RuleModel):
+                        agent_ids = {o.id for o in H[0].model.with_roles(s.scene).objects if o.role and "agent" in o.role}
+                    dirs = {int(k[6:]): (int(v["displacement"][0]) and (v["displacement"][0] > 0) - (v["displacement"][0] < 0), (v["displacement"][1] > 0) - (v["displacement"][1] < 0))
+                            for k, v in semantics.items() if k.startswith("ACTION") and isinstance(v, dict) and v.get("class") == "MOVE" and v.get("displacement")}
+                    step = max([abs(v["displacement"][0]) + abs(v["displacement"][1]) for k, v in semantics.items() if k.startswith("ACTION") and isinstance(v, dict) and v.get("displacement")] or [1])
+                    dirs = {k: (d[0] * step, d[1] * step) for k, d in dirs.items()}
+                    res = probe.run_walk(cap, agent_ids=agent_ids, dirs=dirs, bumped=bumped)
                 semantics = classify_actions(s.transitions, semantics)
                 self.memory.save_semantics(game_id, semantics.to_json())
                 events.emit("PROBE", "HYPOTHESIZE", f"{kind} probe done: {res.actions_used} actions, steps {res.steps_done}", budget_used=budget.used())

@@ -22,12 +22,18 @@ def astar(start: Scene, successors: Callable[[Scene], Iterable[tuple[Action, Sce
     if is_goal(start):
         return []
 
+    h_cache: dict = {}
+
     def h_of(s: Scene) -> float:
+        k = plan_key(s)
+        if k in h_cache:
+            return h_cache[k]
         if heuristic is not None:
             e = heuristic(s)
             if e is not None:
-                return float(e)
-        return weight * (1.0 - progress(s))
+                h_cache[k] = float(e); return h_cache[k]
+        h_cache[k] = weight * (1.0 - progress(s))
+        return h_cache[k]
     open_heap = [(h_of(start), next(counter), 0.0, 0, start_key)]
     nodes = {start_key: (start, None, None, 0.0)}   # key -> (scene, parent_key, action, g)
     closed: set = set()
@@ -43,9 +49,11 @@ def astar(start: Scene, successors: Callable[[Scene], Iterable[tuple[Action, Sce
         if d >= depth:
             continue
         expanded += 1
-        if expanded > max_nodes or (expanded % 200 == 0 and time.perf_counter() - t0 > time_limit):
+        if expanded > max_nodes or time.perf_counter() - t0 > time_limit:
             return None
         for a, nxt in successors(scene):
+            if time.perf_counter() - t0 > time_limit:
+                return None
             k = plan_key(nxt)
             if k in closed:
                 continue

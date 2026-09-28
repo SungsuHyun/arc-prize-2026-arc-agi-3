@@ -86,8 +86,19 @@ def run(game_ids: list[str], cfg: dict, *, out_dir: Path = DEFAULT_OUT, memory_r
             llm_cfg.update(cfg["llm"])
         llm = LLMGateway(llm_cfg, cache_dir=memory_root / "llm_cache", max_calls=int(load_budget_config().get("llm_calls_max", 60)) * len(game_ids))
     lock = threading.Lock(); started = dt.datetime.now(dt.timezone.utc)
-    with ThreadPoolExecutor(max_workers=int(cfg.get("jobs", 2))) as ex:
-        games = list(ex.map(lambda g: play_game(arc, g, cfg, log_dir, memory, llm, lock), game_ids))
+    import faulthandler
+    faulthandler.enable()
+    hard_limit = cfg["max_minutes"] * 60 + 300          # a game that is still computing this long after its deadline is reported as hung
+    games = []
+    ex = ThreadPoolExecutor(max_workers=int(cfg.get("jobs", 2)))
+    futures = [ex.submit(play_game, arc, g, cfg, log_dir, memory, llm, lock) for g in game_ids]
+    for g, fut in zip(game_ids, futures):
+        try:
+            games.append(fut.result(timeout=hard_limit))
+        except Exception as e:      # TimeoutError -> hung game; the thread is abandoned (daemon-like) and the run still writes results
+            faulthandler.dump_traceback(all_threads=True)
+            games.append({"game_id": g, "error": f"hung: {type(e).__name__}", "actions": 0, "levels_completed": 0, "stop_reason": "hung"})
+    ex.shutdown(wait=False, cancel_futures=True)
     try:
         sc = arc.get_scorecard(); scd = sc.model_dump() if hasattr(sc, "model_dump") else {}
     except Exception as e:
