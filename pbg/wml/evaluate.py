@@ -120,6 +120,10 @@ def dedupe(H: list[Hypothesis]) -> list[Hypothesis]:
     seen: dict[str, Hypothesis] = {}
     for h in H:
         key = h.prediction_key or h.name
-        if key not in seen or h.sort_key() > seen[key].sort_key():
+        if key in seen:
+            keep = h if h.sort_key() > seen[key].sort_key() else seen[key]
+            keep.recent_mismatches = max(h.recent_mismatches, seen[key].recent_mismatches)   # live mispredictions are not forgotten
+            seen[key] = keep
+        else:
             seen[key] = h
     return list(seen.values())

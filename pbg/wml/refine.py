@@ -52,7 +52,8 @@ class WorldModelLab:
         if use_llm and self.llm is not None and (best is None or best.score < 1.0 or best.coverage < 1.0):
             H += self._llm_candidates(log, best, priors, scene=scene, semantics=semantics, level_note=level_note, K=K or self.K)
             H = dedupe(H); H.sort(key=lambda h: h.sort_key(), reverse=True)
-        # merge candidates a finished background job produced (re-verified on the current, larger log)
+        # merge candidates a finished background job produced (re-verified on the current, larger log); a candidate whose
+        # predictions equal an already-penalised hypothesis inherits its live mispredictions (dedupe keeps the max)
         for h in self.collect_job():
             res = evaluate(h.model, log)
             H.append(make_hypothesis(h.model, res, h.code, h.name, h.origin))

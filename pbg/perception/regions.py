@@ -225,7 +225,12 @@ def stabilize_regions(cur: list[Region], prev: list[Region]) -> list[Region]:
         out.append(r)
     # previous regions with no counterpart this frame (fully occluded / split into small parts) are kept
     for q in prev:
-        if q.id == "R0" or q.kind_hint == "ui_strip" or q.id in used:
+        if q.id == "R0" or q.id in used:
+            continue
+        if q.kind_hint == "ui_strip":
+            # a gauge that shrank below the detection length is still a gauge: strip bands persist within a level
+            if not any(o.kind_hint == "ui_strip" and _bands_overlap(o.bbox, q.bbox) for o in out):
+                out.append(Region(q.id, q.bg_color, q.bbox, "ui_strip"))
             continue
         if not any(o.bg_color == q.bg_color and _bands_overlap(o.bbox, q.bbox) for o in out if o.id != "R0"):
             out.append(Region(q.id, q.bg_color, q.bbox, q.kind_hint, q.mask))
