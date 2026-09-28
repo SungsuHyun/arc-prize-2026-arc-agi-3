@@ -39,8 +39,10 @@ harness built to make a win condition true; 'submit' presses the submit button. 
 submit candidate whose prediction says a win condition will hold, (2) an action the plan calls for that makes progress, (3) an action
 that tests an unverified rule or reveals an unknown effect cheaply, (4) never a candidate marked [tried here] or predicted to change
 nothing unless the rulebook explains why it would differ now. Objects that did nothing twice are hidden. Actions cost score.
-Answer with JSON only: {"choice": "<exact label>", "expect": "<what you expect, one line>", "roles": {"<#id or 'colour c in Pk'>": "<role>"},
-"edits": [<optional rulebook edits>]}. 'roles' (optional) names what things are: button, submit, mark, template, piece, anchor, hole, frame, hud, wall.
+Answer with JSON only: {"choice": "<exact label>", "then": ["<label>", "<label>"], "expect": "<what you expect, one line>",
+"roles": {"<#id or 'colour c in Pk'>": "<role>"}, "edits": [<optional rulebook edits>]}. "then" (optional, up to 3 labels) lists further
+candidates to run right after the first one when the procedure is clear (e.g. the next marks to toggle); the program stops the batch at the
+first surprise. Batching saves model calls, which are the scarce resource. 'roles' (optional) names what things are: button, submit, mark, template, piece, anchor, hole, frame, hud, wall.
 Edit ops: {"op":"add","section":"env|rules|win","text":..,"kind":..,"params":{}} {"op":"confirm|refute|remove","id":"R3","note":".."}
 {"op":"edit","id":"R3","text":..}. Keep edits rare and factual."""
 

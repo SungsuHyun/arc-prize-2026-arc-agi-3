@@ -55,6 +55,7 @@ class RulebookAgent:
         self.metrics = _C()               # counters for the evaluation report (prediction kinds, verdicts, plans, fallbacks ...)
         self.attempt_start_actions = 0    # actions_used when the current attempt (level or reset) began
         self.plan_ignored = 0             # consecutive decisions in which the model ignored an offered plan
+        self.pending_then: list = []      # follow-up labels from the last decision's "then" list
         self.plan_fail: dict = {}         # (level, plan label) -> executions that ended in a mismatch / game over
         self.refused: dict = {}           # (level, label) -> times the model asked for a label that is not a candidate
         self.game_over_at: dict = {}      # level -> [actions into the attempt at which a game over happened]
@@ -62,6 +63,7 @@ class RulebookAgent:
         self.metrics = _C()               # counters for the evaluation report (prediction kinds, verdicts, plans, fallbacks ...)
         self.attempt_start_actions = 0    # actions_used when the current attempt (level or reset) began
         self.plan_ignored = 0             # consecutive decisions in which the model ignored an offered plan
+        self.pending_then: list = []      # follow-up labels from the last decision's "then" list
         self.plan_fail: dict = {}         # (level, plan label) -> executions that ended in a mismatch / game over
         self.refused: dict = {}           # (level, label) -> times the model asked for a label that is not a candidate
         self.game_over_at: dict = {}      # level -> [actions into the attempt at which a game over happened]
@@ -236,6 +238,8 @@ class RulebookAgent:
                 return alt
         self.log(f"DECIDE: {c.label} (expect: {str(obj.get('expect', ''))[:120]})")
         self.metrics["chosen_" + ("plan" if c.kind == "plan" else c.kind)] += 1
+        then = obj.get("then")
+        self.pending_then = [str(x) for x in then][:3] if isinstance(then, list) else []
         return c
 
     # ── main loop ────────────────────────────────────────────────────────
@@ -318,6 +322,18 @@ class RulebookAgent:
             self.tried.add((state_key(g, ev), cand.label))
             progress0 = self._progress_score(ev) if cand.kind == "plan" else None
             res = self.execute(cand, level0, reviews0)
+            # batched follow-ups the model listed in "then": run while nothing surprising happens (labels re-resolved on the fresh board)
+            for lab in list(getattr(self, "pending_then", []) or []):
+                if res != "ok" or g.level != level0 or self._out_of_time():
+                    break
+                ev2 = self.evidence(); cands2 = build(g, ev2, self.tried, goal=self.goal_state(ev2))
+                c2 = resolve(lab, cands2, g, ev2)
+                if c2 is None or c2.kind in ("info", "submit") or c2.pred_kind in ("noop", "hud", "blocked") or (state_key(g, ev2), c2.label) in self.tried:
+                    self.log(f"THEN: {lab!r} skipped"); continue
+                self.log(f"THEN: {c2.label}"); self.metrics["then_run"] += 1
+                self.tried.add((state_key(g, ev2), c2.label))
+                res = self.execute(c2, level0, reviews0)
+            self.pending_then = []
             if cand.kind == "plan" and res not in ("won", "level"):
                 progress1 = self._progress_score(self.evidence())
                 if res in ("mismatch", "over") or progress1 <= progress0:   # a plan that ran without moving any win condition forward failed
