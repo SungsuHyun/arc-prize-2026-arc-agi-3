@@ -23,7 +23,7 @@ SITE_PORT       ?= 8080
 EVAL_PORT       ?= 8090
 STEPS           ?= 200
 
-.PHONY: help setup arcnav rulebook rulebook-bench rulebook-notebook rulebook-submit play-local pull-sample notebook submit status kaggle-log wheels llm-venv smoke-local verify-local serve exp-new exp-run exp-summary bench dashboard site site-publish eval-site eval-site-install eval-site-uninstall clean _check-kaggle
+.PHONY: help setup pbg pbg-replay pbg-test pbg-lint pbg-import-logs pbg-human-log pbg-metrics arcnav rulebook rulebook-bench rulebook-notebook rulebook-submit play-local pull-sample notebook submit status kaggle-log wheels llm-venv smoke-local verify-local serve exp-new exp-run exp-summary bench dashboard site site-publish eval-site eval-site-install eval-site-uninstall clean _check-kaggle
 
 _check-kaggle:
 	@if [ ! -s .kaggle/access_token ]; then \
@@ -67,6 +67,28 @@ rulebook-notebook: ## Build notebooks/rulebook/rulebook_submission.ipynb (rulebo
 
 rulebook-submit: rulebook-notebook _check-kaggle ## Build and push the rulebook kernel (commit = 2-game smoke; leaderboard submit is manual on the web)
 	$(KAGGLE) kernels push -p notebooks/rulebook/
+
+pbg: ## pbg system (perception -> probe -> world-model lab -> goal -> planner, docs/027): make pbg [GAME=ls20,tn36] [MINUTES=10] [JOBS=2] [TAG=x] [NOLLM=1] [BUDGET=2000] [FRESH=1]
+	$(VENV_PY) -m pbg.harness.online_runner --games $(or $(GAME),ls20) --minutes $(or $(MINUTES),10) --jobs $(or $(JOBS),2) --tag "$(TAG)" $(if $(NOLLM),--no-llm,) $(if $(BUDGET),--budget $(BUDGET),) $(if $(FRESH),--fresh,)
+
+pbg-replay: ## Replay harness over recorded logs (perception/semantics/induction/goals/plans, no live env): make pbg-replay [LOG=pbg/data/human_logs/agent/ls20/raw.jsonl] [LLM=1]
+	$(VENV_PY) -m pbg.harness.replay_runner $(or $(LOG),pbg/data/human_logs/agent/ls20/raw.jsonl) $(if $(LLM),--llm,)
+
+pbg-test: pbg-lint ## Unit tests (+ integration tests when environment_files/ exists)
+	$(VENV_PY) -m pytest pbg/tests -q
+
+pbg-lint: ## no-game-id-branch lint (spec §13): fails when any module branches on a game id string
+	$(VENV_PY) pbg/tools/lint_no_game_id.py
+
+pbg-import-logs: ## Re-execute a recorded rulebook run into pbg/data/human_logs/agent/<game>/raw.jsonl: make pbg-import-logs RUN=<run id> [GAME=ls20,tn36]
+	$(VENV_PY) pbg/tools/import_run_logs.py --run $(RUN) $(if $(GAME),--games $(GAME),)
+
+pbg-human-log: ## Record a human play log in the terminal: make pbg-human-log GAME=ls20 [PLAYER=me]
+	$(VENV_PY) pbg/tools/collect_human_log.py $(or $(GAME),ls20) --player $(or $(PLAYER),human)
+
+pbg-metrics: ## Metrics + bottleneck attribution of a pbg run JSON: make pbg-metrics RUN=experiments/pbg/results/run-....json
+	$(VENV_PY) -m pbg.harness.metrics $(RUN)
+
 
 arcnav: ## Play games with our arcnav agent against the local vLLM server: make arcnav [GAME=ls20,vc33] [MINUTES=20] [JOBS=2] [TAG=x]
 	$(VENV_PY) scripts/run_arcnav.py --games $(or $(GAME),ls20) --minutes $(or $(MINUTES),20) --jobs $(or $(JOBS),2) --tag "$(TAG)"

@@ -1,0 +1,18 @@
+# CI for the pbg system (spec §16): unit tests + no-game-id-branch lint on every push / PR touching pbg/.
+# Integration tests need environment_files/ (not in the repo) and run locally via `make pbg-test`.
+name: pbg-ci
+on:
+  push:
+    paths: ["pbg/**", ".github/workflows/pbg-ci.yml"]
+  pull_request:
+    paths: ["pbg/**"]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: pip install numpy pyyaml pytest
+      - run: python pbg/tools/lint_no_game_id.py
+      - run: python -m pytest pbg/tests/unit -q

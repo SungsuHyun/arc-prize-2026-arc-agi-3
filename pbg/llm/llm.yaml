@@ -1,0 +1,26 @@
+# LLM Gateway configuration (spec §14). Vendor-neutral OpenAI-compatible chat endpoint.
+base_url: http://127.0.0.1:1234/v1
+api_key: x
+timeout: 300           # seconds per call (spec default 60; the local 27B reasoning model needs ~2-4 min with thinking)
+retries: 1
+cache_dir: null        # null -> <memory_root>/llm_cache
+tiers:
+  reasoning:           # world-model code generation, goal template proposals, violation diagnosis
+    model: local-qwen
+    temperature: 0.6
+    top_p: 0.95
+    max_tokens: 5000
+    # thinking OFF by default: with thinking on, the local 27B spent the whole 6000-token budget in reasoning and
+    # returned empty content (164 s per call). Turn it on together with max_tokens >= 16000 and timeout >= 600.
+    extra_body: {chat_template_kwargs: {enable_thinking: false}}
+  small:               # diff summary compression when the context is too long
+    model: local-qwen
+    temperature: 0.2
+    top_p: 0.9
+    max_tokens: 800
+    extra_body: {chat_template_kwargs: {enable_thinking: false}}
+purposes:
+  world_model: reasoning
+  goal_template: reasoning
+  diagnose: reasoning
+  compress: small
