@@ -1,8 +1,11 @@
 """Thin environment wrapper: step, reset, frames and the transition record. No model, no sandbox."""
 from __future__ import annotations
 
+import hashlib
+import json
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional, Union
 
 from arcengine import GameAction
@@ -44,6 +47,15 @@ class Game:
         self.transitions: list[Transition] = []
         self.level_action_log: list[int] = []
         self.t0 = time.time()
+        self.record_path: Optional[Path] = None   # set by the agent: every reset/step is appended here as one JSON line (eval viewer replay)
+
+    def _record(self, rec: dict) -> None:
+        if self.record_path is None:
+            return
+        rec["t"] = round(time.time() - self.t0, 2)
+        rec["hash"] = hashlib.sha1(self.frame.ascii.encode()).hexdigest()[:12] if self.frame else None
+        with open(self.record_path, "a") as f:
+            f.write(json.dumps(rec) + "\n")
 
     # ── engine ────────────────────────────────────────────────────────────
     def _apply(self, raw) -> None:
@@ -59,6 +71,7 @@ class Game:
         self._apply(self.env.step(GameAction.RESET))
         self.attempt += 1
         self.level_actions = 0
+        self._record({"kind": "reset", "step": self.step_no, "level": self.level, "attempt": self.attempt})
 
     def step(self, act: Action) -> dict:
         """Execute one action. Returns {changed, level_completed, game_over, won}. Never resets by itself."""
@@ -78,6 +91,8 @@ class Game:
         completed = self.level > prev_level or self.state == "WIN"
         if completed:
             self.level_action_log.append(self.level_actions); self.level_actions = 0; self.attempt += 1
+        self._record({"kind": "step", "step": self.step_no, "action": label, "level": prev_level, "attempt": self.transitions[-1].attempt,
+                      "changed": before.ascii != self.frame.ascii, "level_completed": completed, "game_over": self.state == "GAME_OVER", "won": self.state == "WIN"})
         return {"changed": before.ascii != self.frame.ascii, "level_completed": completed, "game_over": self.state == "GAME_OVER",
                 "won": self.state == "WIN", "invalid": False}
 

@@ -45,6 +45,7 @@ class RulebookAgent:
         self.deadline = deadline
         self.t0 = time.time()
         self._log_f = open(self.log_dir / f"{game.game_id}.log", "a")
+        game.record_path = self.log_dir / f"{game.game_id}.actions.jsonl"
         self.last_choice: list[str] = []
         self.last_cell: Optional[tuple] = None   # cell of the last executed click: the fallback never clicks it again right away (toggle undo)
         self.last_verdict = None; self.last_essential: list = []; self.pending_mismatch = None

@@ -20,6 +20,7 @@ COMP_SLUG       := arc-prize-2026-arc-agi-3
 GAME            ?=
 SERVE_PORT      ?= 8001
 SITE_PORT       ?= 8080
+EVAL_PORT       ?= 8090
 STEPS           ?= 200
 
 .PHONY: help setup arcnav rulebook rulebook-bench rulebook-notebook rulebook-submit play-local pull-sample notebook submit status kaggle-log wheels llm-venv smoke-local verify-local serve exp-new exp-run exp-summary bench dashboard site site-publish clean _check-kaggle
@@ -140,6 +141,10 @@ dashboard: ## Rebuild the benchmark site (experiments/site/: index + page per be
 
 site: ## Serve the benchmark site at http://localhost:8080, auto-rebuilding on refresh (SITE_PORT=)
 	$(VENV_PY) scripts/serve_site.py --port $(SITE_PORT)
+
+
+eval-site: ## Local evaluation viewer (rulebook runs, game -> level -> step replay) at http://localhost:8090 (EVAL_PORT=)
+	$(VENV_PY) scripts/serve_eval.py --port $(EVAL_PORT)
 
 
 site-publish: ## Publish the benchmark site to GitHub Pages (gh-pages branch)

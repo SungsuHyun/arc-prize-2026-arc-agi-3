@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rulebook Eval Viewer</title>
+<style>
+  :root {
+    --bg: #14161a; --panel: #1c1f25; --panel-2: #242830; --border: #2f343d; --text: #e6e8ec; --muted: #9aa1ad;
+    --accent: #5aa9ff; --ok: #3ccf7a; --bad: #ff5c5c; --obs: #9aa1ad; --warn: #f5b942; --reset: #c98cff;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  body { display: grid; grid-template-rows: auto 1fr; height: 100vh; }
+  header { display: flex; align-items: center; gap: 12px; padding: 8px 14px; background: var(--panel); border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+  header h1 { font-size: 15px; margin: 0 8px 0 0; font-weight: 600; }
+  select, button { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; font: inherit; }
+  button { cursor: pointer; } button:hover { border-color: var(--accent); } button:disabled { opacity: .4; cursor: default; }
+  #runinfo { color: var(--muted); }
+  main { display: grid; grid-template-columns: 300px minmax(560px, 1fr) minmax(380px, 520px); min-height: 0; }
+  aside, section { min-height: 0; overflow: auto; }
+  aside { background: var(--panel); border-right: 1px solid var(--border); padding: 8px; }
+  #detail { background: var(--panel); border-left: 1px solid var(--border); padding: 10px 12px; }
+  #board { padding: 12px 16px; display: flex; flex-direction: column; gap: 10px; }
+  .game { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 6px; background: var(--panel-2); }
+  .game > .head { display: flex; justify-content: space-between; align-items: center; padding: 6px 8px; cursor: pointer; }
+  .game > .head b { font-family: ui-monospace, Menlo, Consolas, monospace; }
+  .game .meta { color: var(--muted); font-size: 12px; }
+  .game.nolog > .head { opacity: .5; cursor: default; }
+  .levels { display: none; flex-wrap: wrap; gap: 4px; padding: 0 8px 8px; }
+  .game.open .levels { display: flex; }
+  .lv { border: 1px solid var(--border); border-radius: 5px; padding: 2px 7px; cursor: pointer; font-size: 12px; background: var(--panel); }
+  .lv.done { border-color: var(--ok); color: var(--ok); }
+  .lv.fail { border-color: var(--bad); color: var(--bad); }
+  .lv.none { opacity: .45; cursor: default; }
+  .lv.active { background: var(--accent); color: #0b0b0b; border-color: var(--accent); }
+  #boardwrap { position: relative; width: 512px; height: 512px; background: #000; border: 1px solid var(--border); border-radius: 4px; }
+  canvas { position: absolute; left: 0; top: 0; width: 512px; height: 512px; image-rendering: pixelated; }
+  #overlay { pointer-events: none; }
+  #boardwrap.big, #boardwrap.big canvas { width: 704px; height: 704px; }
+  .controls { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; width: 512px; }
+  #boardwrap.big ~ .controls, #boardwrap.big ~ #timeline { width: 704px; }
+  input[type=range] { flex: 1; min-width: 120px; }
+  #stepinfo { font-family: ui-monospace, Menlo, Consolas, monospace; color: var(--muted); white-space: nowrap; }
+  #timeline { display: flex; height: 18px; width: 512px; gap: 1px; border: 1px solid var(--border); border-radius: 4px; overflow: hidden; background: var(--panel); }
+  #timeline i { flex: 1; min-width: 1px; cursor: pointer; opacity: .8; }
+  #timeline i.cur { outline: 2px solid #fff; outline-offset: -2px; opacity: 1; }
+  .k-OK { background: var(--ok); } .k-MISMATCH { background: var(--bad); } .k-obs { background: #5b6270; } .k-reset { background: var(--reset); } .k-start { background: var(--accent); }
+  .k-over { background: var(--warn); }
+  .legend { color: var(--muted); font-size: 12px; display: flex; gap: 12px; flex-wrap: wrap; }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+  .badge { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 11px; font-weight: 600; color: #0b0b0b; }
+  .b-OK { background: var(--ok); } .b-MISMATCH { background: var(--bad); } .b-obs { background: var(--obs); } .b-reset { background: var(--reset); } .b-start { background: var(--accent); }
+  #detail h2 { font-size: 13px; margin: 0 0 6px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+  #detail .row { margin-bottom: 8px; }
+  #detail .lbl { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+  #detail .val { white-space: pre-wrap; word-break: break-word; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; }
+  details { border: 1px solid var(--border); border-radius: 6px; margin-bottom: 5px; background: var(--panel-2); }
+  summary { cursor: pointer; padding: 4px 8px; font-size: 12px; }
+  summary .kind { color: var(--accent); font-weight: 600; margin-right: 6px; }
+  details pre { margin: 0; padding: 6px 8px; border-top: 1px solid var(--border); white-space: pre-wrap; word-break: break-word; font-size: 11.5px; max-height: 360px; overflow: auto; }
+  .lvsum { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-bottom: 10px; }
+  .lvsum div { background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; padding: 5px 8px; }
+  .lvsum .n { font-size: 16px; font-weight: 600; } .lvsum .l { color: var(--muted); font-size: 11px; }
+  .note { color: var(--warn); font-size: 12px; }
+  .empty { color: var(--muted); padding: 30px; text-align: center; }
+  a { color: var(--accent); }
+  label.chk { color: var(--muted); user-select: none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Rulebook Eval Viewer</h1>
+  <select id="runsel"></select>
+  <span id="runinfo"></span>
+  <span style="flex:1"></span>
+  <span class="legend">
+    <span><i class="k-OK"></i>OK</span><span><i class="k-MISMATCH"></i>MISMATCH</span><span><i class="k-obs"></i>obs</span>
+    <span><i class="k-over"></i>game over</span><span><i class="k-reset"></i>reset</span><span><i class="k-start"></i>level start</span>
+  </span>
+</header>
+<main>
+  <aside id="games"><div class="empty">run을 고르세요</div></aside>
+  <section id="board">
+    <div id="boardwrap"><canvas id="grid" width="64" height="64"></canvas><canvas id="overlay" width="512" height="512"></canvas></div>
+    <div class="controls">
+      <button id="first" title="Home">⏮</button><button id="prev" title="←">◀</button><button id="play" title="Space">▶</button><button id="next" title="→">▶|</button><button id="last" title="End">⏭</button>
+      <input type="range" id="slider" min="0" max="0" value="0">
+      <span id="stepinfo">—</span>
+    </div>
+    <div id="timeline"></div>
+    <div class="controls">
+      <label class="chk"><input type="checkbox" id="diff" checked> 변경 셀 표시</label>
+      <label class="chk"><input type="checkbox" id="click" checked> 클릭 위치</label>
+      <label class="chk"><input type="checkbox" id="big"> 크게</label>
+      <label class="chk">속도 <select id="speed"><option value="600">느림</option><option value="250" selected>보통</option><option value="80">빠름</option></select></label>
+      <span style="flex:1"></span>
+      <a id="loglink" href="#" target="_blank" style="display:none">raw log</a>
+      <a id="booklink" href="#" target="_blank" style="display:none">rulebook</a>
+    </div>
+    <div id="notes" class="note"></div>
+  </section>
+  <section id="detail"><div class="empty">게임과 레벨을 고르세요</div></section>
+</main>
+<script>
+const PALETTE = ["#000000","#0074d9","#ff4136","#2ecc40","#ffdc00","#aaaaaa","#f012be","#ff851b","#7fdbff","#870c25","#ffffff","#b10dc9","#00c8c8","#8cf03c","#ffa0b4","#008c78"];
+const $ = id => document.getElementById(id);
+const state = { runs: [], run: null, detail: null, game: null, level: null, data: null, steps: [], i: 0, timer: null };
+
+async function api(path) { const r = await fetch(path); const j = await r.json(); if (!r.ok) throw new Error(j.error || r.statusText); return j; }
+const fmt = (x, d = 2) => x == null ? "—" : (typeof x === "number" ? x.toFixed(d) : x);
+const esc = s => String(s ?? "").replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+
+function readHash() { const h = location.hash.slice(1).split("/"); return { run: h[0] || null, game: h[1] || null, level: h[2] ? +h[2] : null, step: h[3] ? +h[3] : null }; }
+function writeHash() { const parts = [state.run, state.game, state.level, state.i].filter(x => x != null); history.replaceState(null, "", "#" + parts.join("/")); }
+
+async function loadRuns() {
+  state.runs = await api("/api/runs");
+  const sel = $("runsel"); sel.innerHTML = "";
+  for (const r of state.runs) {
+    const o = document.createElement("option"); o.value = r.run_id;
+    const d = (r.started_at || "").slice(0, 16).replace("T", " ");
+    o.textContent = `${d}  ${r.tag || "(no tag)"}  · ${r.mode || "?"}${r.no_model ? "/nomodel" : ""} · ${r.games}g · ${fmt(r.aggregate?.score)}${r.logged_games.length ? "" : "  (no logs)"}`;
+    sel.appendChild(o);
+  }
+  const h = readHash();
+  const start = state.runs.find(r => r.run_id === h.run) ? h.run : (state.runs.find(r => r.logged_games.length) || state.runs[0] || {}).run_id;
+  if (start) { sel.value = start; await selectRun(start, h); }
+}
+
+async function selectRun(runId, h = {}) {
+  state.run = runId; state.game = state.level = null; state.steps = []; state.data = null;
+  state.detail = await api(`/api/runs/${runId}`);
+  const d = state.detail, a = d.aggregate || {};
+  $("runinfo").textContent = `score ${fmt(a.score, 3)} · levels ${a.levels_completed ?? "?"} · L2+ ${a.games_level2plus ?? "?"}/${a.games_played ?? "?"} · ${d.git?.commit || ""}${d.git?.dirty ? "*" : ""}`;
+  renderGames();
+  if (h.game && d.games.find(g => g.game_id === h.game)) await selectLevel(h.game, h.level || 1, h.step);
+  else { $("detail").innerHTML = '<div class="empty">게임과 레벨을 고르세요</div>'; drawEmpty(); }
+  writeHash();
+}
+
+function renderGames() {
+  const box = $("games"); box.innerHTML = "";
+  for (const g of state.detail.games) {
+    const el = document.createElement("div"); el.className = "game" + (g.has_log ? "" : " nolog") + (g.game_id === state.game ? " open" : "");
+    const done = g.levels_completed ?? 0, tot = g.levels_total || "?";
+    el.innerHTML = `<div class="head"><b>${esc(g.game_id)}</b><span class="meta">L ${done}/${tot} · ${g.actions ?? "?"}a · ${fmt(g.score, 1)}</span></div><div class="levels"></div>`;
+    const lv = el.querySelector(".levels");
+    for (const L of g.levels) {
+      const c = document.createElement("span");
+      c.className = "lv " + (L.completed ? "done" : L.played ? "fail" : "none") + (g.game_id === state.game && L.level === state.level ? " active" : "");
+      c.textContent = `L${L.level}` + (L.actions != null ? ` ${L.actions}a` : "");
+      c.title = L.played ? `${L.completed ? "completed" : "not completed"} · ${L.reason || ""} · score ${fmt(L.score, 1)} · baseline ${L.baseline ?? "?"}` : "not reached";
+      if (L.played && g.has_log) c.onclick = e => { e.stopPropagation(); selectLevel(g.game_id, L.level); };
+      lv.appendChild(c);
+    }
+    if (g.has_log) el.querySelector(".head").onclick = () => { el.classList.toggle("open"); };
+    box.appendChild(el);
+  }
+}
+
+async function selectLevel(game, level, step = null) {
+  stop();
+  state.game = game; state.level = level;
+  renderGames();
+  $("detail").innerHTML = '<div class="empty">재생 중…</div>';
+  try {
+    if (!state.data || state.data.game_id !== game || state.data.run_id !== state.run) state.data = await api(`/api/runs/${state.run}/games/${game}`);
+  } catch (e) { $("detail").innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+  const all = state.data.steps;
+  state.steps = all.filter(s => s.level === level);
+  if (!state.steps.length) state.steps = all;   // level not in the replay (e.g. replay diverged): show everything
+  $("slider").max = state.steps.length - 1;
+  $("notes").textContent = (state.data.notes || []).join(" · ") + (state.data.source === "log" ? "  (source: log parse)" : "");
+  $("loglink").href = `/api/runs/${state.run}/games/${game}/log`; $("loglink").style.display = "";
+  $("booklink").href = `/api/runs/${state.run}/games/${game}/rulebook`; $("booklink").style.display = "";
+  renderTimeline();
+  goto(step != null && step < state.steps.length ? step : 0);
+}
+
+function renderTimeline() {
+  const t = $("timeline"); t.innerHTML = "";
+  state.steps.forEach((s, i) => {
+    const el = document.createElement("i");
+    el.className = "k-" + (s.kind === "step" ? (s.game_over ? "over" : (s.tag || "obs")) : s.kind);
+    el.title = `#${i} a${s.a} ${s.action}`;
+    el.onclick = () => goto(i);
+    t.appendChild(el);
+  });
+}
+
+function goto(i) {
+  if (!state.steps.length) return;
+  state.i = Math.max(0, Math.min(state.steps.length - 1, i));
+  $("slider").value = state.i;
+  const s = state.steps[state.i];
+  $("stepinfo").textContent = `${state.i + 1}/${state.steps.length}  a${s.a}  L${s.level} att${s.attempt}  ${s.t != null ? s.t + "s" : ""}`;
+  [...$("timeline").children].forEach((el, k) => el.classList.toggle("cur", k === state.i));
+  draw(); renderDetail(); writeHash();
+}
+
+function drawEmpty() { const c = $("grid").getContext("2d"); c.fillStyle = "#000"; c.fillRect(0, 0, 64, 64); $("overlay").getContext("2d").clearRect(0, 0, 512, 512); }
+
+function draw() {
+  const s = state.steps[state.i], prev = state.i > 0 ? state.steps[state.i - 1] : null;
+  const g = $("grid").getContext("2d");
+  const img = g.createImageData(64, 64);
+  for (let r = 0; r < 64; r++) for (let c = 0; c < 64; c++) {
+    const v = parseInt(s.frame[r][c], 16), hex = PALETTE[v];
+    const k = (r * 64 + c) * 4;
+    img.data[k] = parseInt(hex.slice(1, 3), 16); img.data[k + 1] = parseInt(hex.slice(3, 5), 16); img.data[k + 2] = parseInt(hex.slice(5, 7), 16); img.data[k + 3] = 255;
+  }
+  g.putImageData(img, 0, 0);
+  const o = $("overlay").getContext("2d"); o.clearRect(0, 0, 512, 512);
+  const cell = 8;
+  if ($("diff").checked && prev && s.kind === "step") {
+    o.strokeStyle = "rgba(255,255,255,0.85)"; o.lineWidth = 1;
+    for (let r = 0; r < 64; r++) { const a = s.frame[r], b = prev.frame[r]; if (a === b) continue;
+      for (let c = 0; c < 64; c++) if (a[c] !== b[c]) o.strokeRect(c * cell + .5, r * cell + .5, cell - 1, cell - 1); }
+  }
+  if ($("click").checked && s.row != null) {
+    o.strokeStyle = "#ff3b3b"; o.lineWidth = 2;
+    o.beginPath(); o.arc(s.col * cell + cell / 2, s.row * cell + cell / 2, 9, 0, Math.PI * 2); o.stroke();
+    o.beginPath(); o.moveTo(s.col * cell + cell / 2 - 14, s.row * cell + cell / 2); o.lineTo(s.col * cell + cell / 2 + 14, s.row * cell + cell / 2);
+    o.moveTo(s.col * cell + cell / 2, s.row * cell + cell / 2 - 14); o.lineTo(s.col * cell + cell / 2, s.row * cell + cell / 2 + 14); o.stroke();
+  }
+}
+
+function renderDetail() {
+  const s = state.steps[state.i];
+  const g = state.detail.games.find(x => x.game_id === state.game) || {};
+  const L = (g.levels || []).find(x => x.level === state.level) || {};
+  const lvinfo = state.data.levels[String(state.level)] || {};
+  const kind = s.kind === "step" ? (s.tag || "obs") : s.kind;
+  let h = `<h2>${esc(state.game)} · level ${state.level}</h2>
+  <div class="lvsum">
+    <div><div class="n" style="color:${L.completed ? "var(--ok)" : "var(--bad)"}">${L.completed ? "완료" : "미완료"}</div><div class="l">${esc(L.reason || "")}</div></div>
+    <div><div class="n">${L.actions ?? lvinfo.steps ?? "?"}</div><div class="l">actions (기준 ${L.baseline ?? "?"})</div></div>
+    <div><div class="n">${fmt(L.score, 1)}</div><div class="l">level score</div></div>
+    <div><div class="n">${lvinfo.attempts ?? "?"}</div><div class="l">attempts</div></div>
+  </div>
+  <div class="row"><span class="badge b-${kind}">${esc(kind)}</span> <b style="font-family:ui-monospace,monospace">${esc(s.action)}</b> <span style="color:var(--muted)">${esc(s.label)}</span>
+    ${s.kind === "step" ? `<span style="color:var(--muted)"> · ${s.changed} cells changed${s.level_completed ? " · <b style='color:var(--ok)'>LEVEL COMPLETED</b>" : ""}${s.won ? " · <b style='color:var(--ok)'>WIN</b>" : ""}${s.game_over ? " · <b style='color:var(--warn)'>GAME OVER</b>" : ""}${s.hash_mismatch ? " · <b style='color:var(--bad)'>replay differs from record</b>" : ""}</span>` : ""}</div>`;
+  if (s.predicted) h += `<div class="row"><div class="lbl">predicted</div><div class="val">${esc(s.predicted)}</div></div>`;
+  if (s.actual) h += `<div class="row"><div class="lbl">actual</div><div class="val">${esc(s.actual)}</div></div>`;
+  if (s.events.length) {
+    h += `<div class="lbl" style="margin:10px 0 4px">이 액션 뒤의 로그 (${s.events.length})</div>`;
+    for (const e of s.events) {
+      const first = e.text.split("\n")[0];
+      const open = /^(REVIEW|DECIDE|rulebook|win facts|level|essential|INIT|CRASH)/.test(e.kind) ? " open" : "";
+      h += `<details${open}><summary><span class="kind">${esc(e.kind)}</span>${esc(first.slice(0, 140))}${first.length > 140 || e.text.includes("\n") ? " …" : ""}</summary><pre>${esc(e.text)}</pre></details>`;
+    }
+  }
+  $("detail").innerHTML = h;
+}
+
+function play() { if (state.timer) return stop(); $("play").textContent = "⏸"; state.timer = setInterval(() => { if (state.i >= state.steps.length - 1) return stop(); goto(state.i + 1); }, +$("speed").value); }
+function stop() { clearInterval(state.timer); state.timer = null; $("play").textContent = "▶"; }
+
+$("runsel").onchange = e => selectRun(e.target.value);
+$("slider").oninput = e => goto(+e.target.value);
+$("first").onclick = () => goto(0); $("last").onclick = () => goto(state.steps.length - 1);
+$("prev").onclick = () => goto(state.i - 1); $("next").onclick = () => goto(state.i + 1);
+$("play").onclick = play;
+$("diff").onchange = $("click").onchange = draw;
+$("big").onchange = e => { $("boardwrap").classList.toggle("big", e.target.checked); };
+document.addEventListener("keydown", e => {
+  if (e.target.tagName === "SELECT" || e.target.tagName === "INPUT") return;
+  if (e.key === "ArrowLeft") { goto(state.i - 1); e.preventDefault(); }
+  else if (e.key === "ArrowRight") { goto(state.i + 1); e.preventDefault(); }
+  else if (e.key === "Home") goto(0); else if (e.key === "End") goto(state.steps.length - 1);
+  else if (e.key === " ") { play(); e.preventDefault(); }
+});
+drawEmpty();
+loadRuns().catch(e => { $("games").innerHTML = `<div class="empty">${esc(e.message)}</div>`; });
+</script>
+</body>
+</html>
