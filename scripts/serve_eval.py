@@ -2,7 +2,12 @@
 """Local evaluation viewer: browse recorded rulebook runs game by game and level by level, replaying every board.
 
     make eval-site            # http://0.0.0.0:8090/ (all interfaces)
-    .venv/bin/python scripts/serve_eval.py [--port 8090] [--host 0.0.0.0]
+    .venv/bin/python scripts/serve_eval.py [--port 8090] [--host 0.0.0.0] [--no-reload]
+
+Auto-reload: by default a supervisor process runs the server as a child and restarts it whenever a watched
+source file changes (this file, scripts/eval_viewer/, rulebook/, arcnav/). index.html is read per request, so
+page edits need only a browser refresh; the page also polls /api/health and reloads itself after a restart.
+Replay caches on disk survive a restart; in-memory play sessions do not.
 
 Data: experiments/rulebook/results/run-*.json + logs/<run>/<game>.log (+ <game>.actions.jsonl for newer runs).
 Boards are rebuilt by replaying the recorded actions against the offline engine (scripts/eval_viewer/replay.py)
@@ -23,7 +28,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
+import subprocess
 import sys
 import threading
 import time
@@ -39,6 +46,9 @@ from scripts.eval_viewer import replay as R  # noqa: E402
 
 HERE = Path(__file__).resolve().parent / "eval_viewer"
 SAFE = re.compile(r"^[A-Za-z0-9_.-]+$")
+STARTED = time.time()
+WATCH_DIRS = [HERE, ROOT / "rulebook", ROOT / "arcnav"]
+WATCH_FILES = [Path(__file__).resolve()]
 
 # ── interactive play sessions ──────────────────────────────────────────────
 _sessions: dict = {}
@@ -135,6 +145,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(R.list_runs())
             if parts[1:] == ["games"]:
                 return self._json(list_games())
+            if parts[1:] == ["health"]:
+                return self._json({"started": STARTED, "pid": os.getpid()})
             if len(parts) >= 3 and parts[1] == "runs":
                 run_id = parts[2]
                 if not SAFE.match(run_id):
@@ -187,17 +199,79 @@ class Handler(BaseHTTPRequestHandler):
         print(f"[serve_eval] {fmt % args}")
 
 
+# ── auto-reload supervisor ─────────────────────────────────────────────────
+def _snapshot() -> dict:
+    files = list(WATCH_FILES)
+    for d in WATCH_DIRS:
+        if d.exists():
+            files += [f for f in d.rglob("*") if f.suffix in (".py", ".html") and "__pycache__" not in f.parts]
+    out = {}
+    for f in files:
+        try:
+            out[str(f)] = f.stat().st_mtime_ns
+        except FileNotFoundError:
+            pass
+    return out
+
+
+def supervise(argv: list[str]) -> int:
+    """Run the server as a child process; restart it when a watched file changes. Ctrl+C stops both."""
+    cmd = [sys.executable, str(Path(__file__).resolve()), *argv, "--no-reload"]
+    env = {**os.environ, "EVAL_VIEWER_CHILD": "1"}
+    child = None
+    try:
+        while True:
+            snap = _snapshot()
+            child = subprocess.Popen(cmd, env=env)
+            crashed = False
+            while True:
+                time.sleep(0.5)
+                if child.poll() is not None:
+                    if child.returncode == 0:
+                        return 0
+                    if not crashed:
+                        print(f"[reload] server exited with code {child.returncode}; waiting for a file change", flush=True)
+                    crashed = True
+                if _snapshot() != snap:
+                    changed = [k for k in set(snap) | set(_snapshot()) if snap.get(k) != _snapshot().get(k)]
+                    print(f"[reload] {', '.join(Path(c).name for c in changed[:4])} changed -> restarting", flush=True)
+                    break
+                if crashed:
+                    snap = _snapshot(); time.sleep(1.0)
+                    continue
+            if child.poll() is None:
+                child.terminate()
+                try:
+                    child.wait(5)
+                except subprocess.TimeoutExpired:
+                    child.kill(); child.wait()
+    except KeyboardInterrupt:
+        if child is not None and child.poll() is None:
+            child.terminate()
+            try:
+                child.wait(5)
+            except subprocess.TimeoutExpired:
+                child.kill()
+        return 0
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--port", type=int, default=8090)
     p.add_argument("--host", default="0.0.0.0")
+    p.add_argument("--no-reload", action="store_true", help="run a single process without the file watcher")
     args = p.parse_args()
+    if not args.no_reload:
+        sys.exit(supervise([a for a in sys.argv[1:] if a != "--no-reload"]))
     server = ThreadingHTTPServer((args.host, args.port), Handler)
-    print(f"평가 뷰어: http://{args.host}:{args.port}/   (종료: Ctrl+C)")
+    tag = " (auto-reload on)" if os.environ.get("EVAL_VIEWER_CHILD") else ""
+    print(f"평가 뷰어: http://{args.host}:{args.port}/{tag}   (종료: Ctrl+C)", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
+    finally:
+        server.server_close()
 
 
 if __name__ == "__main__":
