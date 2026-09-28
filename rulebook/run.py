@@ -95,6 +95,7 @@ def main(argv=None) -> None:
     ap.add_argument("--minutes", type=float); ap.add_argument("--jobs", type=int); ap.add_argument("--level-actions", type=int)
     ap.add_argument("--no-model", action="store_true", help="deterministic fallback policy only (smoke test)")
     ap.add_argument("--mode", choices=["choose", "coder"], help="choose = model picks a candidate label; coder = model writes python against the library")
+    ap.add_argument("--gateway", default="", help="competition-mode Arcade against this gateway URL (e.g. http://127.0.0.1:8001/ from `make serve`) instead of offline env files")
     a = ap.parse_args(argv)
     logging.basicConfig(level=logging.WARNING)
     cfg = dict(DEFAULT_CONFIG)
@@ -105,7 +106,11 @@ def main(argv=None) -> None:
     if a.level_actions: cfg["level_actions"] = a.level_actions
     if a.mode: cfg["mode"] = a.mode
     cfg["no_model"] = a.no_model
-    arc = make_arcade()
+    if a.gateway:
+        os.environ.setdefault("ARC_API_KEY", "local-dev")
+        arc = make_arcade(competition=True, base_url=a.gateway)
+    else:
+        arc = make_arcade()
     games = sorted(e.game_id.split("-")[0] for e in arc.get_environments()) if a.games == "all" else [g.strip() for g in a.games.split(",") if g.strip()]
     run(games, cfg, out_dir=Path(a.out), tag=a.tag, arc=arc)
 

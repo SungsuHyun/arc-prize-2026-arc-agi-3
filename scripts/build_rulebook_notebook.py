@@ -26,6 +26,9 @@ NOTEBOOK_PATH = OUT_DIR / "rulebook_submission.ipynb"
 METADATA_PATH = OUT_DIR / "kernel-metadata.json"
 SMOKE_GAMES = ["tn36", "lp85"]
 SMOKE_MINUTES = 12
+REPLICA = True            # commit mode: replicate the rerun mechanics (in-notebook competition gateway, full ids, 12 concurrent) on public games
+REPLICA_GAMES = 12
+REPLICA_MINUTES = 12
 RERUN_JOBS = 12
 RERUN_TOTAL_MINUTES = 470
 RERUN_MAX_MINUTES_PER_GAME = 120
@@ -83,6 +86,29 @@ def build() -> dict:
             cfg.update(jobs={RERUN_JOBS}, max_minutes=max(20, min({RERUN_MAX_MINUTES_PER_GAME}, total_left / waves)))
             print(f'rerun: {{len(games)}} games, {{cfg["jobs"]}} concurrent, {{cfg["max_minutes"]:.0f}} min/game, waves={{waves}}')
             run(games, cfg, out_dir=out_dir, tag='kaggle-rerun', arc=arc, deadline=T0 + {RERUN_TOTAL_MINUTES} * 60)   # the gateway records actions and emits submission.parquet
+        elif {REPLICA!r}:
+            # rerun replica: the same competition gateway server (arc_agi.server) as a thread, competition mode, full ids, 12 games at once
+            import threading, arc_agi
+            from arc_agi import OperationMode
+            from arc_agi.server import create_app
+            _arcade = arc_agi.Arcade(operation_mode=OperationMode.OFFLINE, environments_dir='{base.COMP}/environment_files')
+            _app, _api = create_app(_arcade, competition_mode=True)
+            threading.Thread(target=lambda: _app.run(host='127.0.0.1', port=8001, threaded=True), daemon=True).start()
+            for _ in range(60):
+                try:
+                    urllib.request.urlopen('http://127.0.0.1:8001/api/games', timeout=5).read(); break
+                except Exception:
+                    time.sleep(2)
+            os.environ['ARC_API_KEY'] = 'test-key-123'
+            arc = make_arcade(competition=True, base_url='http://127.0.0.1:8001')
+            games = sorted(e.game_id for e in arc.get_environments())[:{REPLICA_GAMES}]
+            cfg.update(jobs={RERUN_JOBS}, max_minutes={REPLICA_MINUTES})
+            print(f'replica: {{len(games)}} games at once, {{cfg["max_minutes"]}} min/game, ids {{games[:3]}} ...')
+            res = run(games, cfg, out_dir=out_dir, tag='kaggle-replica', arc=arc, deadline=time.time() + ({REPLICA_MINUTES} + 6) * 60)
+            print('replica errors:', [(g['game_id'], g.get('error')) for g in res['games'] if g.get('error')])
+            print('replica levels:', [(g['game_id'][:4], g.get('levels_completed'), g.get('actions'), g.get('model_calls', {{}}).get('decide')) for g in res['games']])
+            import pandas as pd
+            pd.DataFrame(data=[['1_0', '1', True, 1]], columns=['row_id', 'game_id', 'end_of_game', 'score']).to_parquet('/kaggle/working/submission.parquet', index=False)
         else:
             arc = make_arcade(environments_dir='{base.COMP}/environment_files')
             cfg.update(jobs=2, max_minutes={SMOKE_MINUTES})
