@@ -19,7 +19,7 @@ from .sandbox import Sandbox
 
 
 class WorldModelLab:
-    def __init__(self, *, llm=None, sandbox: Optional[Sandbox] = None, memory=None, K: int = 2, N: int = 5, tau: float = 0.3, log=None,
+    def __init__(self, *, llm=None, sandbox: Optional[Sandbox] = None, memory=None, K: int = 4, N: int = 5, tau: float = 0.3, log=None,
                  validate_in_subprocess: bool = True):
         self.llm, self.sandbox, self.memory = llm, sandbox or Sandbox(), memory
         self.K, self.N, self.tau = K, N, tau
@@ -100,8 +100,9 @@ class WorldModelLab:
         self._job.join(timeout)
         return not self.job_running()
 
-    def most_informative_action(self, H: list[Hypothesis], scene: Scene, available: list[Action], *, semantics=None, extra_clicks=()) -> Optional[Action]:
-        return _mia(H, scene, available, tau=self.tau, semantics=semantics, extra_clicks=extra_clicks)
+    def most_informative_action(self, H: list[Hypothesis], scene: Scene, available: list[Action], *, semantics=None, extra_clicks=(),
+                                exclude: Optional[set] = None) -> Optional[Action]:
+        return _mia(H, scene, available, tau=self.tau, semantics=semantics, extra_clicks=extra_clicks, exclude=exclude)
 
     def diagnose(self, h: Hypothesis, log: list[Transition], scene: Scene) -> Optional[dict]:
         """Violation diagnosis after a level change (spec §14, JSON {rule, cause, fix_hint})."""

@@ -30,6 +30,7 @@ class Session:
         self.deadline = deadline or (self.t0 + max_seconds if max_seconds else None)
         self.reset_allowed = True
         self.errors = 0
+        self.initial_click_cap = int((budget.cfg.get("per_level") or {}).get("initial_clicks", 16))
 
     # ── lifecycle ──
     def start(self) -> Scene:

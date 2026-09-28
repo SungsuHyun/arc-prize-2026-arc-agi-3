@@ -85,6 +85,7 @@ class Orchestrator:
         plan: Optional[list[Action]] = None
         touched: set = set(); exploring = False
         last_refine_n = -1; resets_without_progress = 0; game_overs = 0
+        tried_experiments: set = set()
         while not s.finished():
             if s.env.status().state == "GAME_OVER":
                 game_overs += 1
@@ -109,7 +110,7 @@ class Orchestrator:
                     state = "LOCAL_PROBE"
                     self._novel_ids = novel_ids
             if state == "PROBE":
-                cap = budget.cap("initial_probe") if not s.transitions else budget.cap("reprobe")
+                cap = budget.cap("initial_probe") if not s.transitions else budget.cap("reprobe", s.level)
                 kind = "initial" if not s.transitions else "reprobe"
                 if kind == "reprobe":
                     reprobe_rounds += 1
@@ -125,7 +126,7 @@ class Orchestrator:
                         if s.reset_allowed and resets_without_progress < 3:
                             events.emit(state, "HYPOTHESIZE", "reprobe budget exhausted -> RESET", budget_used=budget.used())
                             s.act(Action.reset(), "reprobe"); planner.stuck.reset(); resets_without_progress += 1
-                            budget.used_by["reprobe"] = 0; touched.clear(); state = "HYPOTHESIZE"; continue
+                            budget.reset_level(s.level, "reprobe"); touched.clear(); state = "HYPOTHESIZE"; continue
                         stop = "UNRESOLVED"; events.emit(state, "END", "no progress after 3 resets", budget_used=budget.used()); break
                 res = probe.run_initial(cap, do_reset_probe=False) if kind == "initial" else probe.run_walk(cap)
                 semantics = classify_actions(s.transitions, semantics)
@@ -150,15 +151,17 @@ class Orchestrator:
                     best = H[0] if H else None
                     if allow_llm and (best is None or best.score < 1.0 or best.coverage < 1.0) and not wml.job_running():
                         if wml.start_llm_job(s.transitions, best, self.memory.priors("mechanisms"), scene=s.scene, semantics=semantics, level_note=level_note,
-                                             K=(1 if budget.fraction_left() < 0.5 else 2)):
+                                             K=(2 if budget.fraction_left() < 0.5 else 4)):
                             events.emit("HYPOTHESIZE", "HYPOTHESIZE", f"llm job started in background (round {wml.async_rounds}, log {len(s.transitions)})", budget_used=budget.used())
                 budget.llm_calls = wml.llm_calls + goal_inf.__dict__.get("llm_calls", 0)
                 roles_fn = (lambda sc, m=H[0].model: m.with_roles(sc)) if H and isinstance(H[0].model, RuleModel) else None
                 G = goal_inf.refine(s.transitions, G, self.memory.priors("goals"), s.level, s.scene, roles_fn=roles_fn)
                 exp = None
-                if not budget.low() and budget.allows("experiment") and experiments_this_round < 6:
-                    exp = wml.most_informative_action(H, s.scene, s.available_actions(), semantics=semantics, extra_clicks=planner.responsive)
+                if not budget.low() and budget.allows("experiment", level=s.level) and experiments_this_round < 6:
+                    exp = wml.most_informative_action(H, s.scene, s.available_actions(), semantics=semantics, extra_clicks=planner.responsive,
+                                                      exclude=tried_experiments)   # 3. never repeat an experiment from the same state
                 if exp is not None:
+                    tried_experiments.add((s.scene.frame_hash, exp.label()))
                     t = s.act(exp, "experiment"); experiments_this_round += 1
                     events.emit("HYPOTHESIZE", "HYPOTHESIZE", f"experiment {exp.label()} (gain over {len(H)} hypotheses)", transition_id=t.id if t else None, budget_used=budget.used())
                     continue
@@ -174,7 +177,7 @@ class Orchestrator:
                 if not H or not G:
                     if not H and s.transitions:
                         # nothing explains the log: fall back to probing with untried actions / clicks
-                        state = "PROBE" if budget.cap("reprobe") > 0 else "HYPOTHESIZE"
+                        state = "PROBE" if budget.cap("reprobe", s.level) > 0 else "HYPOTHESIZE"
                         events.emit("PLAN", state, "no hypothesis" if not H else "no goal", budget_used=budget.used())
                         if state == "HYPOTHESIZE" and hypothesize_rounds > 3:
                             stop = "no_hypothesis"; break
@@ -212,7 +215,7 @@ class Orchestrator:
                     events.emit("PLAN", "HYPOTHESIZE", reason, budget_used=budget.used())
                     state = "HYPOTHESIZE"
                     if no_plan_rounds >= 6:
-                        if wml.job_running() and budget.cap("reprobe") <= 0:
+                        if wml.job_running() and budget.cap("reprobe", s.level) <= 0:
                             events.emit("PLAN", "HYPOTHESIZE", "no plan, reprobe spent -> waiting for the llm job", budget_used=budget.used())
                             wml.wait_job(120.0); no_plan_rounds = 0; continue
                         events.emit("PLAN", "PROBE", "no plan after 6 rounds -> reprobe", budget_used=budget.used()); state = "PROBE"; no_plan_rounds = 0

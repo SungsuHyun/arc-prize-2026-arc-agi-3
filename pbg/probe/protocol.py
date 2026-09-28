@@ -48,20 +48,19 @@ class Probe:
         return getattr(self.s, "reset_allowed", True)
 
     def _click_targets(self, scene: Scene, limit: int) -> list[Action]:
-        """Object centres (largest distinct shapes first, one per (colour, shape) up to a spread), then region centres."""
-        seen: set[tuple] = set(); out: list[Action] = []
+        """Click targets in priority order: one object per (colour, shape) class (largest first), then region centres,
+        then the remaining objects of already-seen classes. Independent of the budget size: the cheap, informative
+        clicks always come first and `limit` only cuts the tail."""
+        seen: set[tuple] = set(); first: list[Action] = []; rest: list[Action] = []
         strips = {r.id for r in scene.regions if r.kind_hint == "ui_strip"}
         for o in sorted(scene.objects, key=lambda o: (-o.area, o.id)):
             if o.region in strips or o.area < 2:
                 continue
             key = (o.color, o.shape_sig)
-            if key in seen and len(scene.objects) > limit:
-                continue
-            seen.add(key); out.append(Action.click(*o.center))
-        for r in scene.regions:
-            if r.kind_hint != "ui_strip":
-                out.append(Action.click(*r.center))
-        return out[:limit]
+            (rest if key in seen else first).append(Action.click(*o.center))
+            seen.add(key)
+        regions = [Action.click(*r.center) for r in scene.regions if r.kind_hint != "ui_strip"]
+        return (first + regions + rest)[:limit]
 
     # ── protocols ──
     def run_initial(self, budget_cap: int, *, do_reset_probe: bool = True) -> ProbeResult:
@@ -93,9 +92,10 @@ class Probe:
             if act(a, "button-repeat") is None:
                 break
         res.steps_done.append("repeat")
-        # 3. clicks
+        # 3. clicks (per-level absolute cap on top of the budget fraction: a board with 47 objects must not cost 47 clicks)
         if self._has_click():
-            for a in self._click_targets(self.s.scene, max(1, budget_cap - res.actions_used - 2)):
+            click_cap = min(budget_cap - res.actions_used - 2, int(getattr(self.s, "initial_click_cap", 16)))
+            for a in self._click_targets(self.s.scene, max(1, click_cap)):
                 if act(a, "click-target") is None:
                     break
             res.steps_done.append("clicks")

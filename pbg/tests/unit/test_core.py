@@ -59,3 +59,13 @@ def test_event_log_requires_reason(tmp_path: Path):
     except ValueError:
         pass
     assert len(EventLog.read(tmp_path / "e.jsonl")) == 1
+
+
+def test_budget_per_level_caps():
+    b = Budget(2000, {"total": 2000, "reprobe": 0.08, "experiment": 0.25, "per_level": {"reprobe": 32, "experiment": 12}, "low_budget_fraction": 0.2, "llm_calls_max": 60})
+    assert b.cap("reprobe", 1) == 32 and b.cap("reprobe") == 160
+    b.charge("reprobe", 32, level=1)
+    assert b.cap("reprobe", 1) == 0 and b.cap("reprobe", 2) == 32
+    b.reset_level(1, "reprobe")
+    assert b.cap("reprobe", 1) == 32
+    assert b.allows("experiment", level=1) and b.cap("experiment", 1) == 12
