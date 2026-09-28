@@ -40,6 +40,15 @@ make eval-site            # http://0.0.0.0:8090/  (모든 인터페이스, EVAL_
   (변경 셀 외곽선, 클릭 위치, 타임라인, 재생, ←/→/Space), 오른쪽 스텝 상세와 그 뒤의 로그 이벤트.
   URL 해시 `#run/game/level/step`로 특정 스텝 공유 가능.
 
+## 직접 플레이 모드
+
+헤더의 "직접 플레이"를 누르면 왼쪽에 environment_files의 25개 게임이 뜨고, 고르면 오프라인 엔진으로
+새 판이 시작된다. 조작은 화살표·Space·7(ACTION7)·R(리셋) 키 또는 화면 버튼, MOUSE가 허용된 게임은
+보드 클릭(클릭 좌표 → row/col 변환). 액션 배너와 오른쪽 "내 액션" 목록에 매 액션의 결과(바뀐 셀 수,
+LEVEL COMPLETED, GAME OVER)가 표시된다. 시간은 재지 않고 아무것도 기록하지 않는다.
+서버 API: `POST /api/play/new {game_id}`, `POST /api/play/<sid>/step {action}`, `POST /api/play/<sid>/reset`
+(세션은 메모리에만, 최대 32개).
+
 ## 다음
 
 - 레벨 시점의 룰북 스냅샷(현재는 최종본 + REVIEW 로그로 대체)

@@ -14,6 +14,10 @@ API (all JSON):
     GET /api/runs/<run>/games/<game>            replayed steps of one game (?level=N keeps one level)
     GET /api/runs/<run>/games/<game>/rulebook   final rulebook of that game
     GET /api/runs/<run>/games/<game>/log        raw log (text/plain)
+    GET /api/games                              playable game ids (environment_files)
+    POST /api/play/new {game_id}                start an interactive session (no timing, nothing recorded)
+    POST /api/play/<sid>/step {action}          action = "UP"|"DOWN"|"LEFT"|"RIGHT"|"SPACE"|"ACTION7" | {"action":"MOUSE","row":r,"col":c}
+    POST /api/play/<sid>/reset
 """
 from __future__ import annotations
 
@@ -21,7 +25,10 @@ import argparse
 import json
 import re
 import sys
+import threading
+import time
 import traceback
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -32,6 +39,75 @@ from scripts.eval_viewer import replay as R  # noqa: E402
 
 HERE = Path(__file__).resolve().parent / "eval_viewer"
 SAFE = re.compile(r"^[A-Za-z0-9_.-]+$")
+
+# ── interactive play sessions ──────────────────────────────────────────────
+_sessions: dict = {}
+_sessions_lock = threading.Lock()
+MAX_SESSIONS = 32
+
+
+def list_games() -> list[str]:
+    d = R.ROOT / "environment_files"
+    return sorted(x.name for x in d.iterdir() if x.is_dir()) if d.exists() else []
+
+
+def _hex(frame) -> list[str]:
+    return ["".join(f"{v & 15:x}" for v in row) for row in frame.grid]
+
+
+def _state(sess: dict, last: dict | None = None) -> dict:
+    g = sess["game"]
+    return {"sid": sess["sid"], "game_id": g.game_id, "frame": _hex(g.frame) if g.frame else None, "level": g.level, "levels_total": g.levels_total,
+            "state": g.state, "valid_actions": g.valid_actions, "actions_used": g.actions_used, "level_actions": g.level_actions,
+            "attempt": g.attempt, "level_action_log": g.level_action_log, "last": last}
+
+
+def play_new(game_id: str) -> dict:
+    from rulebook.env import Game
+    if not SAFE.match(game_id) or game_id not in list_games():
+        raise ValueError(f"unknown game {game_id}")
+    with R._arcade_lock:
+        env = R._arc().make(game_id)
+    if env is None:
+        raise RuntimeError(f"cannot create environment for {game_id}")
+    g = Game(env, game_id); g.reset()
+    sess = {"sid": uuid.uuid4().hex[:12], "game": g, "lock": threading.Lock(), "created": time.time()}
+    with _sessions_lock:
+        if len(_sessions) >= MAX_SESSIONS:   # drop the oldest
+            oldest = min(_sessions.values(), key=lambda x: x["created"])
+            _sessions.pop(oldest["sid"], None)
+        _sessions[sess["sid"]] = sess
+    return _state(sess)
+
+
+def play_step(sid: str, action) -> dict:
+    from rulebook.env import action_label
+    sess = _sessions.get(sid)
+    if sess is None:
+        raise KeyError("session expired: start a new game")
+    with sess["lock"]:
+        g = sess["game"]
+        if isinstance(action, dict):
+            act = {"action": "MOUSE", "row": max(0, min(63, int(action.get("row", 0)))), "col": max(0, min(63, int(action.get("col", 0))))}
+        else:
+            act = str(action)
+            if act not in ("UP", "DOWN", "LEFT", "RIGHT", "SPACE", "ACTION7"):
+                raise ValueError(f"bad action {act}")
+        before = g.frame
+        res = g.step(act)
+        changed = 0 if res.get("invalid") else sum(1 for ra, rb in zip(before.grid, g.frame.grid) for x, y in zip(ra, rb) if x != y)
+        last = {**res, "action": action_label(act), "row": act["row"] if isinstance(act, dict) else None, "col": act["col"] if isinstance(act, dict) else None,
+                "changed": changed}
+        return _state(sess, last)
+
+
+def play_reset(sid: str) -> dict:
+    sess = _sessions.get(sid)
+    if sess is None:
+        raise KeyError("session expired: start a new game")
+    with sess["lock"]:
+        sess["game"].reset()
+        return _state(sess, {"action": "RESET", "row": None, "col": None, "changed": 0})
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -57,6 +133,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"error": "not found"}, 404)
             if parts[1:] == ["runs"]:
                 return self._json(R.list_runs())
+            if parts[1:] == ["games"]:
+                return self._json(list_games())
             if len(parts) >= 3 and parts[1] == "runs":
                 run_id = parts[2]
                 if not SAFE.match(run_id):
@@ -82,6 +160,25 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"error": "not found"}, 404)
         except FileNotFoundError as e:
             return self._json({"error": f"not found: {e}"}, 404)
+        except Exception as e:
+            traceback.print_exc()
+            return self._json({"error": f"{type(e).__name__}: {e}"}, 500)
+
+    def do_POST(self) -> None:  # noqa: N802
+        parts = [p for p in urlparse(self.path).path.split("/") if p]
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+            body = json.loads(self.rfile.read(n) or b"{}") if n else {}
+            if parts[:2] == ["api", "play"]:
+                if parts[2:] == ["new"]:
+                    return self._json(play_new(str(body.get("game_id", ""))))
+                if len(parts) == 4 and parts[3] == "step":
+                    return self._json(play_step(parts[2], body.get("action")))
+                if len(parts) == 4 and parts[3] == "reset":
+                    return self._json(play_reset(parts[2]))
+            return self._json({"error": "not found"}, 404)
+        except (KeyError, ValueError) as e:
+            return self._json({"error": e.args[0] if e.args else str(e)}, 400)
         except Exception as e:
             traceback.print_exc()
             return self._json({"error": f"{type(e).__name__}: {e}"}, 500)

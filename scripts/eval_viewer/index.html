@@ -74,11 +74,33 @@
   .empty { color: var(--muted); padding: 30px; text-align: center; }
   a { color: var(--accent); }
   label.chk { color: var(--muted); user-select: none; }
+  .modes { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+  .modes button { border: 0; border-radius: 0; padding: 4px 12px; }
+  .modes button.on { background: var(--accent); color: #0b0b0b; }
+  body.play #boardwrap { cursor: crosshair; }
+  body.play { --bw: min(100%, calc(100vh - 335px)); }
+  body.play #speedlbl { display: none; }
+  body.play #boardwrap.nomouse { cursor: default; }
+  .pad { display: grid; grid-template-columns: repeat(3, 52px); grid-auto-rows: 44px; gap: 4px; }
+  .pad button { font-size: 20px; font-weight: 700; }
+  .pad button.off { opacity: .25; }
+  .playbar { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+  .playbar .st { font-family: ui-monospace, Menlo, Consolas, monospace; color: var(--muted); }
+  .playbar .st b { color: var(--text); }
+  .hist { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; }
+  .hist div { padding: 2px 6px; border-bottom: 1px solid var(--border); display: flex; gap: 8px; }
+  .hist .n { color: var(--muted); width: 40px; }
+  .hist .ev { margin-left: auto; }
+  .pgame { display: flex; justify-content: space-between; align-items: center; padding: 6px 8px; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 6px; background: var(--panel-2); cursor: pointer; }
+  .pgame:hover { border-color: var(--accent); } .pgame.active { border-color: var(--accent); }
+  .pgame b { font-family: ui-monospace, Menlo, Consolas, monospace; }
+  .flash { animation: flash .5s; } @keyframes flash { from { background: var(--accent); } to { background: transparent; } }
 </style>
 </head>
 <body>
 <header>
   <h1>Rulebook Eval Viewer</h1>
+  <span class="modes"><button id="mode-replay" class="on">재생 보기</button><button id="mode-play">직접 플레이</button></span>
   <select id="runsel"></select>
   <span id="runinfo"></span>
   <span style="flex:1"></span>
@@ -101,26 +123,40 @@
     <div class="controls">
       <label class="chk"><input type="checkbox" id="diff" checked> 변경 셀 표시</label>
       <label class="chk"><input type="checkbox" id="click" checked> 클릭 위치</label>
-      <label class="chk">속도 <select id="speed"><option value="600">느림</option><option value="250" selected>보통</option><option value="80">빠름</option></select></label>
+      <label class="chk" id="speedlbl">속도 <select id="speed"><option value="600">느림</option><option value="250" selected>보통</option><option value="80">빠름</option></select></label>
       <span style="flex:1"></span>
       <a id="loglink" href="#" target="_blank" style="display:none">raw log</a>
       <a id="booklink" href="#" target="_blank" style="display:none">rulebook</a>
     </div>
     <div id="notes" class="note"></div>
+    <div id="playctl" style="display:none">
+      <div class="playbar">
+        <div class="pad">
+          <span></span><button data-a="UP" title="↑">↑</button><span></span>
+          <button data-a="LEFT" title="←">←</button><button data-a="DOWN" title="↓">↓</button><button data-a="RIGHT" title="→">→</button>
+          <button data-a="SPACE" title="Space" style="grid-column: span 2; font-size: 13px">SPACE</button><button data-a="ACTION7" title="7" style="font-size: 13px">A7</button>
+        </div>
+        <div>
+          <div class="st" id="playstat">게임을 고르세요</div>
+          <div style="margin-top:8px; display:flex; gap:6px; flex-wrap:wrap"><button id="playreset" title="R">RESET (R)</button><button id="playnew">처음부터 다시</button></div>
+          <div class="sub" style="color:var(--muted); margin-top:8px">키보드: 화살표 · Space · 7 = ACTION7 · R = 리셋 · 보드 클릭 = MOUSE 액션(허용된 게임만)</div>
+        </div>
+      </div>
+    </div>
   </section>
   <section id="detail"><div class="empty">게임과 레벨을 고르세요</div></section>
 </main>
 <script>
 const PALETTE = ["#000000","#0074d9","#ff4136","#2ecc40","#ffdc00","#aaaaaa","#f012be","#ff851b","#7fdbff","#870c25","#ffffff","#b10dc9","#00c8c8","#8cf03c","#ffa0b4","#008c78"];
 const $ = id => document.getElementById(id);
-const state = { runs: [], run: null, detail: null, game: null, level: null, data: null, steps: [], i: 0, timer: null };
+const state = { runs: [], run: null, detail: null, game: null, level: null, data: null, steps: [], i: 0, timer: null, mode: "replay", play: null, games: [] };
 
-async function api(path) { const r = await fetch(path); const j = await r.json(); if (!r.ok) throw new Error(j.error || r.statusText); return j; }
+async function api(path, body) { const r = await fetch(path, body ? { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) } : undefined); const j = await r.json(); if (!r.ok) throw new Error(j.error || r.statusText); return j; }
 const fmt = (x, d = 2) => x == null ? "—" : (typeof x === "number" ? x.toFixed(d) : x);
 const esc = s => String(s ?? "").replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
 
 function readHash() { const h = location.hash.slice(1).split("/"); return { run: h[0] || null, game: h[1] || null, level: h[2] ? +h[2] : null, step: h[3] ? +h[3] : null }; }
-function writeHash() { const parts = [state.run, state.game, state.level, state.i].filter(x => x != null); history.replaceState(null, "", "#" + parts.join("/")); }
+function writeHash() { if (state.mode === "play") return; const parts = [state.run, state.game, state.level, state.i].filter(x => x != null); history.replaceState(null, "", "#" + parts.join("/")); }
 
 async function loadRuns() {
   state.runs = await api("/api/runs");
@@ -134,6 +170,7 @@ async function loadRuns() {
   const h = readHash();
   const start = state.runs.find(r => r.run_id === h.run) ? h.run : (state.runs.find(r => r.logged_games.length) || state.runs[0] || {}).run_id;
   if (start) { sel.value = start; await selectRun(start, h); }
+  if (h.run === "play") { setMode("play"); if (h.game) startPlay(h.game); }
 }
 
 async function selectRun(runId, h = {}) {
@@ -209,21 +246,22 @@ function goto(i) {
 
 function drawEmpty() { const c = $("grid").getContext("2d"); c.fillStyle = "#000"; c.fillRect(0, 0, 64, 64); $("overlay").getContext("2d").clearRect(0, 0, 1024, 1024); }
 
-function draw() {
-  const s = state.steps[state.i], prev = state.i > 0 ? state.steps[state.i - 1] : null;
+function draw() { const s = state.steps[state.i], prev = state.i > 0 ? state.steps[state.i - 1] : null; drawBoard(s.frame, prev && prev.frame, s); }
+
+function drawBoard(frame, prevFrame, s) {
   const g = $("grid").getContext("2d");
   const img = g.createImageData(64, 64);
   for (let r = 0; r < 64; r++) for (let c = 0; c < 64; c++) {
-    const v = parseInt(s.frame[r][c], 16), hex = PALETTE[v];
+    const v = parseInt(frame[r][c], 16), hex = PALETTE[v];
     const k = (r * 64 + c) * 4;
     img.data[k] = parseInt(hex.slice(1, 3), 16); img.data[k + 1] = parseInt(hex.slice(3, 5), 16); img.data[k + 2] = parseInt(hex.slice(5, 7), 16); img.data[k + 3] = 255;
   }
   g.putImageData(img, 0, 0);
   const o = $("overlay").getContext("2d"); o.clearRect(0, 0, 1024, 1024);
   const cell = 16;
-  if ($("diff").checked && prev && s.kind === "step") {
+  if ($("diff").checked && prevFrame && s.kind === "step") {
     o.strokeStyle = "rgba(255,255,255,0.9)"; o.lineWidth = 1.5;
-    for (let r = 0; r < 64; r++) { const a = s.frame[r], b = prev.frame[r]; if (a === b) continue;
+    for (let r = 0; r < 64; r++) { const a = frame[r], b = prevFrame[r]; if (a === b) continue;
       for (let c = 0; c < 64; c++) if (a[c] !== b[c]) o.strokeRect(c * cell + 1, r * cell + 1, cell - 2, cell - 2); }
   }
   if ($("click").checked && s.row != null) {
@@ -240,7 +278,7 @@ function draw() {
     const glyph = KEY_GLYPH[s.action] || s.action; o.font = "bold 64px system-ui, sans-serif";
     const w = o.measureText(glyph).width + 28;
     o.fillStyle = "rgba(0,0,0,.7)"; o.fillRect(1024 - w - 12, 12, w, 80);
-    o.strokeStyle = "var(--accent)"; o.strokeStyle = "#5aa9ff"; o.lineWidth = 3; o.strokeRect(1024 - w - 12, 12, w, 80);
+    o.strokeStyle = "#5aa9ff"; o.lineWidth = 3; o.strokeRect(1024 - w - 12, 12, w, 80);
     o.fillStyle = "#fff"; o.fillText(glyph, 1024 - w + 2, 74);
   }
 }
@@ -305,14 +343,118 @@ function renderDetail() {
 function play() { if (state.timer) return stop(); $("play").textContent = "⏸"; state.timer = setInterval(() => { if (state.i >= state.steps.length - 1) return stop(); goto(state.i + 1); }, +$("speed").value); }
 function stop() { clearInterval(state.timer); state.timer = null; $("play").textContent = "▶"; }
 
+// ── interactive play ────────────────────────────────────────────────────
+function setMode(m) {
+  stop(); state.mode = m; document.body.classList.toggle("play", m === "play");
+  $("mode-replay").classList.toggle("on", m === "replay"); $("mode-play").classList.toggle("on", m === "play");
+  for (const id of ["runsel", "runinfo", "timeline", "loglink", "booklink"]) $(id).style.display = m === "play" ? "none" : "";
+  $("first").parentElement.style.display = m === "play" ? "none" : "";
+  $("playctl").style.display = m === "play" ? "" : "none";
+  $("notes").textContent = "";
+  if (m === "play") renderPlayGames(); else { renderGames(); if (state.steps.length) goto(state.i); }
+}
+
+async function renderPlayGames() {
+  if (!state.games.length) state.games = await api("/api/games");
+  const box = $("games"); box.innerHTML = '<div class="sub" style="color:var(--muted);padding:4px 6px 8px">게임을 고르면 새 판이 시작됩니다</div>';
+  for (const gid of state.games) {
+    const el = document.createElement("div"); el.className = "pgame" + (state.play && state.play.game_id === gid ? " active" : "");
+    const known = (state.detail?.games || []).find(g => g.game_id === gid);
+    el.innerHTML = `<b>${esc(gid)}</b><span class="meta" style="color:var(--muted)">${known ? `agent L ${known.levels_completed ?? 0}/${known.levels_total || "?"}` : ""}</span>`;
+    el.onclick = () => startPlay(gid);
+    box.appendChild(el);
+  }
+  if (!state.play) { $("action").innerHTML = '<span class="sub">왼쪽에서 게임을 고르세요</span>'; $("detail").innerHTML = '<div class="empty">직접 플레이 모드</div>'; drawEmpty(); }
+}
+
+async function startPlay(gid) {
+  try {
+    const st = await api("/api/play/new", { game_id: gid });
+    state.play = { ...st, prev: null, history: [] };
+    history.replaceState(null, "", "#play/" + gid);
+    renderPlayGames(); renderPlay();
+  } catch (e) { $("notes").textContent = e.message; }
+}
+
+async function playAct(action) {
+  const p = state.play; if (!p || p.busy) return;
+  const name = typeof action === "string" ? action : "MOUSE";
+  if (p.valid_actions.length && !p.valid_actions.includes(name)) { $("notes").textContent = `${name}은(는) 이 게임에서 허용되지 않는 액션입니다 (허용: ${p.valid_actions.join(", ")})`; return; }
+  p.busy = true;
+  try {
+    const st = await api(`/api/play/${p.sid}/step`, { action });
+    p.prev = p.frame; Object.assign(p, st);
+    if (!st.last.invalid) p.history.push({ n: st.actions_used, ...st.last, level: st.last.level_completed ? st.level - 1 : st.level });
+    $("notes").textContent = st.last.invalid ? "허용되지 않는 액션" : "";
+    renderPlay();
+  } catch (e) { $("notes").textContent = e.message; if (/expired/.test(e.message)) state.play = null; }
+  finally { if (state.play) state.play.busy = false; }
+}
+
+async function playReset() {
+  const p = state.play; if (!p) return;
+  try { const st = await api(`/api/play/${p.sid}/reset`, {}); p.prev = null; Object.assign(p, st); p.history.push({ n: st.actions_used, action: "RESET", changed: 0, level: st.level }); renderPlay(); }
+  catch (e) { $("notes").textContent = e.message; }
+}
+
+function renderPlay() {
+  const p = state.play; if (!p) return;
+  const last = p.last || {};
+  const s = { kind: last.action && last.action !== "RESET" ? "step" : "reset", row: last.row ?? null, col: last.col ?? null, action: last.action === "MOUSE" ? "MOUSE" : (last.action || "").replace(/\(.*/, "") };
+  drawBoard(p.frame, p.prev, s);
+  $("boardwrap").classList.toggle("nomouse", !p.valid_actions.includes("MOUSE"));
+  document.querySelectorAll(".pad button").forEach(b => b.classList.toggle("off", p.valid_actions.length > 0 && !p.valid_actions.includes(b.dataset.a)));
+  const done = p.state === "WIN", over = p.state === "GAME_OVER";
+  $("playstat").innerHTML = `<b>${esc(p.game_id)}</b> · level <b>${p.level}</b>/${p.levels_total} · 이번 레벨 <b>${p.level_actions}</b> 액션 · 누적 ${p.actions_used}` +
+    (done ? ' · <b style="color:var(--ok)">모든 레벨 완료 (WIN)</b>' : over ? ' · <b style="color:var(--warn)">GAME OVER — RESET을 누르세요</b>' : "") +
+    `<br><span>허용 액션: ${p.valid_actions.join(", ") || "?"}</span>`;
+  // banner
+  let key, what, sub = "", res = "";
+  if (!p.last) { key = `<span class="key pseudo">L${p.level}</span>`; what = `${esc(p.game_id)} 시작 — 레벨 ${p.level}/${p.levels_total}`; sub = "보드를 클릭하거나 키를 눌러 보세요"; }
+  else if (last.action === "RESET") { key = `<span class="key pseudo">RESET</span>`; what = "리셋"; sub = `level ${p.level} · attempt ${p.attempt}`; }
+  else if (last.row != null) { const v = p.prev ? parseInt(p.prev[last.row][last.col], 16) : null; key = `<span class="key mouse">🖱</span>`; what = `클릭 (row ${last.row}, col ${last.col})`; sub = v != null ? `클릭한 셀의 색: <i class="sw" style="background:${PALETTE[v]}"></i>colour ${v}` : ""; }
+  else { key = `<span class="key">${KEY_GLYPH[last.action] || esc(last.action)}</span>`; what = `키 입력: ${esc(last.action)}`; sub = KEY_NAME[last.action] || ""; }
+  if (p.last && last.action !== "RESET") {
+    res = last.invalid ? '<b style="color:var(--bad)">invalid</b>' : `${last.changed} cells changed`;
+    if (last.level_completed) res += `<br><b style="color:var(--ok)">LEVEL COMPLETED</b>`;
+    if (last.won) res += `<br><b style="color:var(--ok)">WIN</b>`;
+    if (last.game_over) res += `<br><b style="color:var(--warn)">GAME OVER</b>`;
+  }
+  $("action").innerHTML = `${key}<div><div class="what">${what}</div><div class="sub">${sub}</div></div><div class="res">${res}</div>`;
+  $("action").classList.remove("flash"); void $("action").offsetWidth; $("action").classList.add("flash");
+  // history
+  const lvl = (p.level_action_log || []).map((n, i) => `<span style="color:var(--ok)">L${i + 1} ✓ ${n}a</span>`).join(" · ");
+  let h = `<h2>${esc(p.game_id)} · 직접 플레이</h2><div class="row" style="color:var(--muted)">${lvl || "완료한 레벨 없음"}</div><div class="lbl" style="margin-bottom:4px">내 액션 (${p.history.length})</div><div class="hist">`;
+  for (const x of [...p.history].reverse().slice(0, 200)) {
+    h += `<div><span class="n">${x.n}</span><span>L${x.level}</span><span>${esc(x.action)}</span><span class="ev">${x.action === "RESET" ? "" : x.changed + " changed"}${x.level_completed ? ' <b style="color:var(--ok)">LEVEL ✓</b>' : ""}${x.game_over ? ' <b style="color:var(--warn)">GAME OVER</b>' : ""}${x.won ? ' <b style="color:var(--ok)">WIN</b>' : ""}</span></div>`;
+  }
+  $("detail").innerHTML = h + "</div>";
+}
+
+$("mode-replay").onclick = () => setMode("replay"); $("mode-play").onclick = () => setMode("play");
+document.querySelectorAll(".pad button").forEach(b => b.onclick = () => playAct(b.dataset.a));
+$("playreset").onclick = playReset; $("playnew").onclick = () => state.play && startPlay(state.play.game_id);
+$("boardwrap").addEventListener("click", e => {
+  if (state.mode !== "play" || !state.play) return;
+  const r = $("boardwrap").getBoundingClientRect();
+  const col = Math.min(63, Math.max(0, Math.floor((e.clientX - r.left) / r.width * 64))), row = Math.min(63, Math.max(0, Math.floor((e.clientY - r.top) / r.height * 64)));
+  playAct({ action: "MOUSE", row, col });
+});
+
 $("runsel").onchange = e => selectRun(e.target.value);
 $("slider").oninput = e => goto(+e.target.value);
 $("first").onclick = () => goto(0); $("last").onclick = () => goto(state.steps.length - 1);
 $("prev").onclick = () => goto(state.i - 1); $("next").onclick = () => goto(state.i + 1);
 $("play").onclick = play;
-$("diff").onchange = $("click").onchange = draw;
+$("diff").onchange = $("click").onchange = () => state.mode === "play" ? renderPlay() : draw();
 document.addEventListener("keydown", e => {
   if (e.target.tagName === "SELECT" || e.target.tagName === "INPUT") return;
+  if (state.mode === "play") {
+    const map = { ArrowUp: "UP", ArrowDown: "DOWN", ArrowLeft: "LEFT", ArrowRight: "RIGHT", " ": "SPACE", "7": "ACTION7" };
+    if (map[e.key]) { playAct(map[e.key]); e.preventDefault(); }
+    else if (e.key === "r" || e.key === "R") playReset();
+    return;
+  }
   if (e.key === "ArrowLeft") { goto(state.i - 1); e.preventDefault(); }
   else if (e.key === "ArrowRight") { goto(state.i + 1); e.preventDefault(); }
   else if (e.key === "Home") goto(0); else if (e.key === "End") goto(state.steps.length - 1);
