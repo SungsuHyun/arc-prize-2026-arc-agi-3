@@ -280,3 +280,7 @@ plans_ignored와 game_over_loop는 줄었고 stuck_repeating·hypotheses_refuted
   lp85 L1뿐). 처리량 약 2배. → v11 = 같은 코드의 제출용 빌드, 2026-09-29 00:00 UTC 할당량에 자동 제출 예약.
 - 캐글 v12(압축 프롬프트 + "then" 배치, 제출용): 스모크 3.53 — tn36 L1(70액션, 결정 42회, 배치 후속 28), lp85 L2(104액션, 결정 47회, 배치 후속 53).
   **2026-09-29 00:00 UTC 자동 제출 예약**(v8의 0.10과 비교해 처리량 개선의 효과를 잰다).
+| 4 | fa76dcb + INIT thinking 없음 | 0.94 | 4/25 (ar25 2.78, tn36, lp85 L2, vc33 L2) | 2/25 | budget 7, predictor_blind 7, stuck_repeating 4 |
+
+INIT thinking 없는 선택 모드가 두 번(1.06, 0.94) 모두 thinking 있는 회차(0.67–0.77)보다 높고 빠르다 → 로컬 기본값도 INIT thinking 없음으로.
+남은 상위 실패는 predictor_blind(효과 가족 밖, 7게임)와 stuck_repeating(4)이다.

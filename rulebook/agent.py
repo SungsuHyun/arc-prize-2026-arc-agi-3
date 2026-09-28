@@ -28,7 +28,7 @@ from .repl import Repl
 
 DEFAULTS = {"max_minutes": 20.0, "level_actions": 200, "max_actions": 2000, "reviews_per_level": 8, "max_levels": 10,
             "review_think": "level",   # thinking during reviews: "level" = only after a level completion, "always", "never"
-            "init_think": True,        # thinking for the initial rulebook (off on Kaggle: the FP8 27B thinks past the token budget)
+            "init_think": False,       # thinking for the initial rulebook: off (25-game passes: 1.06 / 0.94 without vs 0.67-0.77 with; and 22 s vs 100 s)
             "mode": "choose"}          # "choose": the model picks a candidate label; "coder": the model writes python against the library
 
 
