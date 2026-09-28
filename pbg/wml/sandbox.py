@@ -45,8 +45,10 @@ def static_check(code: str) -> None:
             raise StaticCheckError(f"dunder access not allowed: {node.attr}")
         if isinstance(node, ast.Constant) and isinstance(node.value, str) and GAME_ID_RE.match(node.value):
             raise StaticCheckError(f"game id literal '{node.value}' (no-game-id-branch)")
-    if len(COORD_RE.findall(code)) >= 20:
-        raise StaticCheckError("too many hard-coded coordinates (>= 20)")
+    n_coords = sum(1 for node in ast.walk(tree) if isinstance(node, ast.Tuple) and len(node.elts) == 2
+                   and all(isinstance(e, ast.Constant) and isinstance(e.value, int) for e in node.elts))
+    if n_coords >= 20:
+        raise StaticCheckError("too many hard-coded coordinate tuples in code (>= 20)")
     if "def build_model" not in code and "def build_goal" not in code:
         raise StaticCheckError("code must define build_model() or build_goal()")
 

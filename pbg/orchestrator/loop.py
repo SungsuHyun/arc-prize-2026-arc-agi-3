@@ -84,8 +84,15 @@ class Orchestrator:
         prev_level_scene: Optional[Scene] = scene
         plan: Optional[list[Action]] = None
         touched: set = set(); exploring = False
-        last_refine_n = -1; resets_without_progress = 0
+        last_refine_n = -1; resets_without_progress = 0; game_overs = 0
         while not s.finished():
+            if s.env.status().state == "GAME_OVER":
+                game_overs += 1
+                if game_overs > 20:
+                    stop = "GAME_OVER"; break
+                events.emit(state, "PLAN", f"game over #{game_overs} (during {state}) -> RESET", budget_used=budget.used())
+                s.act(Action.reset(), "plan"); planner.stuck.reset(); touched.clear(); state = "PLAN"
+                continue
             if s.level > last_level:
                 # level transition procedure (spec §13)
                 novelty, novel_ids = level_novelty(prev_level_scene, s.scene)
@@ -106,6 +113,11 @@ class Orchestrator:
                 kind = "initial" if not s.transitions else "reprobe"
                 if kind == "reprobe":
                     reprobe_rounds += 1
+                    if cap <= 0 and wml.job_running():
+                        # nothing cheap left to try: wait for the pending LLM candidates rather than spend actions (spec §15)
+                        events.emit(state, "HYPOTHESIZE", "reprobe budget exhausted, waiting for the llm job", budget_used=budget.used())
+                        wml.wait_job(min(240.0, max(0.0, (s.deadline - time.time()) if s.deadline else 240.0)))
+                        state = "HYPOTHESIZE"; continue
                     if cap <= 0:
                         # re-exploration budget exhausted: reset as the last resort (spec §15); the reprobe allowance
                         # starts again after the reset (a new attempt), and the game is only abandoned after 3 resets
@@ -130,11 +142,16 @@ class Orchestrator:
                 hypothesize_rounds += 1
                 level_note = self._level_note(mem, s.level)
                 allow_llm = self.use_llm and budget.allows_llm() and not budget.low()
-                if len(s.transitions) != last_refine_n:
+                if len(s.transitions) != last_refine_n or (wml._job is not None and not wml.job_running()):
                     semantics = classify_actions(s.transitions, semantics)
                     H = wml.refine(s.transitions, H, self.memory.priors("mechanisms"), scene=s.scene, semantics=semantics, available=s.available_actions(),
-                                   level_note=level_note, use_llm=allow_llm, K=(2 if budget.fraction_left() < 0.5 else 4))
+                                   level_note=level_note, use_llm=False)
                     last_refine_n = len(s.transitions)
+                    best = H[0] if H else None
+                    if allow_llm and (best is None or best.score < 1.0 or best.coverage < 1.0) and not wml.job_running():
+                        if wml.start_llm_job(s.transitions, best, self.memory.priors("mechanisms"), scene=s.scene, semantics=semantics, level_note=level_note,
+                                             K=(1 if budget.fraction_left() < 0.5 else 2)):
+                            events.emit("HYPOTHESIZE", "HYPOTHESIZE", f"llm job started in background (round {wml.async_rounds}, log {len(s.transitions)})", budget_used=budget.used())
                 budget.llm_calls = wml.llm_calls + goal_inf.__dict__.get("llm_calls", 0)
                 roles_fn = (lambda sc, m=H[0].model: m.with_roles(sc)) if H and isinstance(H[0].model, RuleModel) else None
                 G = goal_inf.refine(s.transitions, G, self.memory.priors("goals"), s.level, s.scene, roles_fn=roles_fn)
@@ -152,6 +169,8 @@ class Orchestrator:
                 events.emit("HYPOTHESIZE", "PLAN", f"{top}; goals={len(G)} top={G[0].name if G else None}", budget_used=budget.used())
                 state = "PLAN"
             elif state == "PLAN":
+                if wml._job is not None and not wml.job_running():
+                    events.emit("PLAN", "HYPOTHESIZE", "llm job finished -> merge candidates", budget_used=budget.used()); state = "HYPOTHESIZE"; continue
                 if not H or not G:
                     if not H and s.transitions:
                         # nothing explains the log: fall back to probing with untried actions / clicks
@@ -193,6 +212,9 @@ class Orchestrator:
                     events.emit("PLAN", "HYPOTHESIZE", reason, budget_used=budget.used())
                     state = "HYPOTHESIZE"
                     if no_plan_rounds >= 6:
+                        if wml.job_running() and budget.cap("reprobe") <= 0:
+                            events.emit("PLAN", "HYPOTHESIZE", "no plan, reprobe spent -> waiting for the llm job", budget_used=budget.used())
+                            wml.wait_job(120.0); no_plan_rounds = 0; continue
                         events.emit("PLAN", "PROBE", "no plan after 6 rounds -> reprobe", budget_used=budget.used()); state = "PROBE"; no_plan_rounds = 0
                     continue
                 events.emit("PLAN", "EXECUTE", f"plan of {len(plan)}: {[a.label() for a in plan[:8]]}", budget_used=budget.used())
@@ -220,9 +242,12 @@ class Orchestrator:
                 elif r.kind == "EXHAUSTED":
                     events.emit("EXECUTE", "PLAN", f"plan exhausted ({r.executed} actions)", budget_used=budget.used()); state = "PLAN"
                 elif r.kind == "FAILED":
-                    events.emit("EXECUTE", "PLAN", "game over -> retry from PLAN with memory kept", transition_id=r.t.id if r.t else None, budget_used=budget.used())
-                    if s.env.status().state == "GAME_OVER":
+                    # GAME_OVER: the level restarts on RESET; retry from PLAN with memory kept (spec §12)
+                    game_overs += 1
+                    events.emit("EXECUTE", "PLAN", f"game over #{game_overs} -> RESET, retry from PLAN with memory kept", transition_id=r.t.id if r.t else None, budget_used=budget.used())
+                    if game_overs > 20:
                         stop = "GAME_OVER"; break
+                    s.act(Action.reset(), "plan"); planner.stuck.reset(); touched.clear()
                     state = "PLAN"
                 else:
                     events.emit("EXECUTE", "PLAN", f"execution error: {r.detail}", budget_used=budget.used()); state = "PLAN"

@@ -32,8 +32,9 @@ Hard rules:
   cancel conditions must be exact (step size in pixels, blocked by which colours/roles, board bounds).
 - No imports except numpy, math, itertools, dataclasses, typing, collections. No file/network access. Do not compare
   game ids. Do not hard-code lists of coordinates.
-- CODE ONLY: no analysis, no reasoning, no long docstrings or comments (at most one short comment per rule). Work out the
-  mechanics silently and write the final rules. Keep the whole reply under 120 lines of code.
+- CODE ONLY: no analysis, no reasoning, no observation-by-observation walkthrough anywhere in the reply — not in prose,
+  not in comments, not in docstrings (at most one short comment per rule). Work out the mechanics silently and write
+  the final rules. Keep the whole reply under 120 lines of code.
 - Do not model gauges / counters / timers in ui_strip regions: evaluation ignores them and they waste rules.
 Reply with exactly ONE ```python code block (the model) and optionally ONE ```json block {"notes": "..."}.
 

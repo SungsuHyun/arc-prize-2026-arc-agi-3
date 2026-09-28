@@ -3,6 +3,8 @@ candidates), verify each on the WHOLE log, keep N hypotheses with score/coverage
 from __future__ import annotations
 
 import json
+import threading
+import time
 from typing import Optional
 
 from ..core.contracts import Hypothesis, RuleModel
@@ -17,7 +19,7 @@ from .sandbox import Sandbox
 
 
 class WorldModelLab:
-    def __init__(self, *, llm=None, sandbox: Optional[Sandbox] = None, memory=None, K: int = 4, N: int = 5, tau: float = 0.3, log=None,
+    def __init__(self, *, llm=None, sandbox: Optional[Sandbox] = None, memory=None, K: int = 2, N: int = 5, tau: float = 0.3, log=None,
                  validate_in_subprocess: bool = True):
         self.llm, self.sandbox, self.memory = llm, sandbox or Sandbox(), memory
         self.K, self.N, self.tau = K, N, tau
@@ -27,6 +29,10 @@ class WorldModelLab:
         self.hidden_state_suspected = False
         self.last_context: list[dict] = []
         self.generation_log: list[dict] = []
+        self._job: Optional[threading.Thread] = None      # background LLM generation (spec §15: keep planning meanwhile)
+        self._job_result: list[Hypothesis] = []
+        self._job_started = 0.0
+        self.async_rounds = 0
 
     # ── public ──
     def refine(self, log: list[Transition], current: list[Hypothesis], priors: Optional[dict], *, scene: Scene, semantics: dict,
@@ -42,14 +48,57 @@ class WorldModelLab:
             H.append(make_hypothesis(model, res, induced_code(name), name, "induced"))
         H = dedupe(H); H.sort(key=lambda h: h.sort_key(), reverse=True)
         best = H[0] if H else None
-        # 3. LLM candidates when nothing is perfect
+        # 3. LLM candidates when nothing is perfect — synchronously here, or in the background via start_llm_job()
         if use_llm and self.llm is not None and (best is None or best.score < 1.0 or best.coverage < 1.0):
             H += self._llm_candidates(log, best, priors, scene=scene, semantics=semantics, level_note=level_note, K=K or self.K)
             H = dedupe(H); H.sort(key=lambda h: h.sort_key(), reverse=True)
+        # merge candidates a finished background job produced (re-verified on the current, larger log)
+        for h in self.collect_job():
+            res = evaluate(h.model, log)
+            H.append(make_hypothesis(h.model, res, h.code, h.name, h.origin))
+        H = dedupe(H); H.sort(key=lambda h: h.sort_key(), reverse=True)
         self._detect_hidden_state(log)
         for h in H:
             h.verified = promotable(evaluate(h.model, log)) if h.score >= 1.0 else False
         return H[:self.N]
+
+    # ── background generation ──
+    def job_running(self) -> bool:
+        return self._job is not None and self._job.is_alive()
+
+    def start_llm_job(self, log: list[Transition], best: Optional[Hypothesis], priors, *, scene: Scene, semantics: dict, level_note: str = "",
+                      K: Optional[int] = None) -> bool:
+        """Generate LLM candidates in a thread on a snapshot of the log; the orchestrator keeps acting on the current
+        hypotheses and merges the result at a later HYPOTHESIZE (spec §15 'LLM latency -> plan on the top hypothesis')."""
+        if self.llm is None or self.job_running() or self.llm.exhausted():
+            return False
+        snapshot = list(log)
+        def run():
+            try:
+                self._job_result = self._llm_candidates(snapshot, best, priors, scene=scene, semantics=dict(semantics), level_note=level_note, K=K or self.K)
+            except Exception as e:
+                self.log(f"llm job failed: {e!r}")
+                self._job_result = []
+        self._job_result = []
+        self._job = threading.Thread(target=run, daemon=True, name="wml-llm")
+        self._job_started = time.time()
+        self._job.start(); self.async_rounds += 1
+        return True
+
+    def collect_job(self) -> list[Hypothesis]:
+        if self._job is None or self._job.is_alive():
+            return []
+        out, self._job_result, self._job = self._job_result, [], None
+        if out:
+            self.log(f"llm job delivered {len(out)} candidate(s) after {time.time() - self._job_started:.0f}s")
+        return out
+
+    def wait_job(self, timeout: float) -> bool:
+        """Block up to `timeout` seconds for a running job (used only when nothing useful can be done meanwhile)."""
+        if not self.job_running():
+            return True
+        self._job.join(timeout)
+        return not self.job_running()
 
     def most_informative_action(self, H: list[Hypothesis], scene: Scene, available: list[Action], *, semantics=None, extra_clicks=()) -> Optional[Action]:
         return _mia(H, scene, available, tau=self.tau, semantics=semantics, extra_clicks=extra_clicks)
@@ -94,7 +143,7 @@ class WorldModelLab:
                 break
             code = self.llm.extract_code(reply)
             attempts = 0
-            while attempts < 3:
+            while attempts < 2:      # generate + at most ONE follow-up (repair or critique) per candidate
                 if not code:
                     self.generation_log.append({"k": k, "error": "no code block"})
                     break
@@ -113,7 +162,7 @@ class WorldModelLab:
                     self.generation_log.append({"k": k, "score": res.score, "coverage": res.coverage, "n_rules": len(model.rules())})
                     self.log(f"llm candidate {k}: score={res.score:.2f} cov={res.coverage:.2f} rules={len(model.rules())}")
                     # one critique round when the verification is imperfect (spec §14 'violation diagnosis' feedback)
-                    if res.score < 1.0 and attempts < 2 and not self.llm.exhausted():
+                    if res.score < 1.0 and attempts < 1 and not self.llm.exhausted():
                         attempts += 1
                         mism = self._mismatch_lines(model, log, res.violations[:6])
                         unk = [summarize(t) for t in log if t.id in set(res.unknown[:4])]
@@ -129,7 +178,7 @@ class WorldModelLab:
                 attempts += 1
                 self.generation_log.append({"k": k, "attempt": attempts, "error": str(v.get("error"))[:300]})
                 self.log(f"llm candidate {k} rejected: {str(v.get('error'))[:200]}")
-                if attempts >= 3 or self.llm.exhausted():
+                if attempts >= 2 or self.llm.exhausted():
                     break
                 try:
                     reply = self.llm.chat(repair_prompt(msgs + [{"role": "assistant", "content": reply}], str(v.get("error"))), purpose="world_model", use_cache=False)

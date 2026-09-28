@@ -44,7 +44,7 @@ class Session:
 
     def finished(self) -> bool:
         st = self.env.status().state
-        return st in ("WIN", "GAME_OVER") or self.budget.remaining() <= 0 or self.timed_out()
+        return st == "WIN" or self.budget.remaining() <= 0 or self.timed_out()
 
     def timed_out(self) -> bool:
         return self.deadline is not None and time.time() > self.deadline
@@ -73,6 +73,8 @@ class Session:
             self.level = self.env.status().level
             self.budget.sync(self.env.status().actions_used)
             return t
+        if self.env.status().state == "GAME_OVER":
+            return None          # the caller must RESET first
         rt = self.env.step(action)
         if rt.error:
             self.errors += 1
