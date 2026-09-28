@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Local evaluation viewer: browse recorded rulebook runs game by game and level by level, replaying every board.
+"""Replay: browse recorded runs (rulebook and pbg lines, finished or still in progress) game by game and level by level, replaying every board.
 
     make eval-site            # http://0.0.0.0:8090/ (all interfaces)
     .venv/bin/python scripts/serve_eval.py [--port 8090] [--host 0.0.0.0] [--no-reload]
@@ -9,12 +9,12 @@ source file changes (this file, scripts/eval_viewer/, rulebook/, arcnav/). index
 page edits need only a browser refresh; the page also polls /api/health and reloads itself after a restart.
 Replay caches on disk survive a restart; in-memory play sessions do not.
 
-Data: experiments/rulebook/results/run-*.json + logs/<run>/<game>.log (+ <game>.actions.jsonl for newer runs).
-Boards are rebuilt by replaying the recorded actions against the offline engine (scripts/eval_viewer/replay.py)
-and cached under results/cache/. Nothing is published; this is a local tool only.
+Data: experiments/{rulebook,pbg}/results/run-*.json + logs/<run>/<game>.log + <game>.actions.jsonl (+ logs/<run>/run.json written at
+run start, which is how a run still in progress shows up before its summary exists). Boards are rebuilt by replaying the recorded
+actions against the offline engine (scripts/eval_viewer/replay.py) and cached under results/cache/. Nothing is published; local only.
 
 API (all JSON):
-    GET /api/runs                               runs, newest first
+    GET /api/runs                               runs of every line, newest first (status: finished | running | aborted)
     GET /api/runs/<run>                         games + per-level summary of one run
     GET /api/runs/<run>/games/<game>            replayed steps of one game (?level=N keeps one level)
     GET /api/runs/<run>/games/<game>/rulebook   final rulebook of that game
@@ -159,10 +159,10 @@ class Handler(BaseHTTPRequestHandler):
                         return self._json({"error": "bad game id"}, 400)
                     sub = parts[5] if len(parts) > 5 else ""
                     if sub == "rulebook":
-                        p = R.RESULTS / "logs" / run_id / f"{game}.rulebook.json"
+                        p = R.log_dir(run_id) / f"{game}.rulebook.json"
                         return self._send(200, p.read_bytes()) if p.exists() else self._json({"error": "no rulebook"}, 404)
                     if sub == "log":
-                        p = R.RESULTS / "logs" / run_id / f"{game}.log"
+                        p = R.log_dir(run_id) / f"{game}.log"
                         return self._send(200, p.read_bytes(), "text/plain; charset=utf-8") if p.exists() else self._json({"error": "no log"}, 404)
                     data = R.load_steps(run_id, game)
                     if "level" in q:
@@ -265,7 +265,7 @@ def main() -> None:
         sys.exit(supervise([a for a in sys.argv[1:] if a != "--no-reload"]))
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     tag = " (auto-reload on)" if os.environ.get("EVAL_VIEWER_CHILD") else ""
-    print(f"평가 뷰어: http://{args.host}:{args.port}/{tag}   (종료: Ctrl+C)", flush=True)
+    print(f"Replay: http://{args.host}:{args.port}/{tag}   (종료: Ctrl+C)", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

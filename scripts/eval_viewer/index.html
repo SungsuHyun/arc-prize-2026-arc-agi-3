@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Rulebook Eval Viewer</title>
+<title>Replay</title>
 <style>
   :root {
     --bg: #14161a; --panel: #1c1f25; --panel-2: #242830; --border: #2f343d; --text: #e6e8ec; --muted: #9aa1ad;
@@ -95,11 +95,15 @@
   .pgame:hover { border-color: var(--accent); } .pgame.active { border-color: var(--accent); }
   .pgame b { font-family: ui-monospace, Menlo, Consolas, monospace; }
   .flash { animation: flash .5s; } @keyframes flash { from { background: var(--accent); } to { background: transparent; } }
+  .live { display: inline-flex; align-items: center; gap: 5px; color: var(--ok); font-weight: 600; }
+  .live::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--ok); animation: pulse 1.2s infinite; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
+  .aborted { color: var(--warn); }
 </style>
 </head>
 <body>
 <header>
-  <h1>Rulebook Eval Viewer</h1>
+  <h1>Replay</h1>
   <span class="modes"><button id="mode-replay" class="on">재생 보기</button><button id="mode-play">직접 플레이</button></span>
   <select id="runsel"></select>
   <span id="runinfo"></span>
@@ -149,7 +153,8 @@
 <script>
 const PALETTE = ["#000000","#0074d9","#ff4136","#2ecc40","#ffdc00","#aaaaaa","#f012be","#ff851b","#7fdbff","#870c25","#ffffff","#b10dc9","#00c8c8","#8cf03c","#ffa0b4","#008c78"];
 const $ = id => document.getElementById(id);
-const state = { runs: [], run: null, detail: null, game: null, level: null, data: null, steps: [], i: 0, timer: null, mode: "replay", play: null, games: [] };
+const state = { runs: [], run: null, detail: null, game: null, level: null, data: null, steps: [], i: 0, timer: null, mode: "replay", play: null, games: [], live: null };
+const STATUS = { running: '<span class="live">진행 중</span>', aborted: '<span class="aborted">중단됨</span>', finished: "" };
 
 async function api(path, body) { const r = await fetch(path, body ? { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) } : undefined); const j = await r.json(); if (!r.ok) throw new Error(j.error || r.statusText); return j; }
 const fmt = (x, d = 2) => x == null ? "—" : (typeof x === "number" ? x.toFixed(d) : x);
@@ -158,13 +163,18 @@ const esc = s => String(s ?? "").replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;"
 function readHash() { const h = location.hash.slice(1).split("/"); return { run: h[0] || null, game: h[1] || null, level: h[2] ? +h[2] : null, step: h[3] ? +h[3] : null }; }
 function writeHash() { if (state.mode === "play") return; const parts = [state.run, state.game, state.level, state.i].filter(x => x != null); history.replaceState(null, "", "#" + parts.join("/")); }
 
+function runLabel(r) {
+  const d = (r.started_at || "").slice(0, 16).replace("T", " ");
+  const st = r.status === "running" ? "● 진행 중  " : r.status === "aborted" ? "✕ 중단  " : "";
+  const score = r.status === "finished" ? fmt(r.aggregate?.score) : `${r.aggregate?.levels_completed ?? 0} lv / ${r.aggregate?.actions ?? 0}a`;
+  return `${st}${d}  ${r.tag || "(no tag)"}  · ${r.experiment}${r.mode ? "/" + r.mode : ""}${r.no_model ? "/nomodel" : ""} · ${r.games}g · ${score}${r.logged_games.length ? "" : "  (no logs)"}`;
+}
+
 async function loadRuns() {
   state.runs = await api("/api/runs");
   const sel = $("runsel"); sel.innerHTML = "";
   for (const r of state.runs) {
-    const o = document.createElement("option"); o.value = r.run_id;
-    const d = (r.started_at || "").slice(0, 16).replace("T", " ");
-    o.textContent = `${d}  ${r.tag || "(no tag)"}  · ${r.mode || "?"}${r.no_model ? "/nomodel" : ""} · ${r.games}g · ${fmt(r.aggregate?.score)}${r.logged_games.length ? "" : "  (no logs)"}`;
+    const o = document.createElement("option"); o.value = r.run_id; o.textContent = runLabel(r);
     sel.appendChild(o);
   }
   const h = readHash();
@@ -176,12 +186,56 @@ async function loadRuns() {
 async function selectRun(runId, h = {}) {
   state.run = runId; state.game = state.level = null; state.steps = []; state.data = null;
   state.detail = await api(`/api/runs/${runId}`);
-  const d = state.detail, a = d.aggregate || {};
-  $("runinfo").textContent = `score ${fmt(a.score, 3)} · levels ${a.levels_completed ?? "?"} · L2+ ${a.games_level2plus ?? "?"}/${a.games_played ?? "?"} · ${d.git?.commit || ""}${d.git?.dirty ? "*" : ""}`;
+  renderRunInfo();
   renderGames();
-  if (h.game && d.games.find(g => g.game_id === h.game)) await selectLevel(h.game, h.level || 1, h.step);
+  if (h.game && d().games.find(g => g.game_id === h.game)) await selectLevel(h.game, h.level || 1, h.step);
   else { $("detail").innerHTML = '<div class="empty">게임과 레벨을 고르세요</div>'; drawEmpty(); }
   writeHash();
+  watchRun();
+}
+const d = () => state.detail;
+
+function renderRunInfo() {
+  const a = d().aggregate || {};
+  const score = d().status === "finished" ? `score ${fmt(a.score, 3)} · ` : "";
+  $("runinfo").innerHTML = `${STATUS[d().status] || ""} ${score}levels ${a.levels_completed ?? "?"} · L2+ ${a.games_level2plus ?? "?"}/${a.games_played ?? "?"} · ${esc(d().git?.commit || "")}${d().git?.dirty ? "*" : ""}`;
+}
+
+// a run in progress: re-read its summary every few seconds and, when the open game grew, extend the replay in place
+function watchRun() {
+  clearInterval(state.live); state.live = null;
+  if (!d() || d().status !== "running") return;
+  state.live = setInterval(async () => {
+    if (state.mode !== "replay" || !state.run) return;
+    try {
+      const fresh = await api(`/api/runs/${state.run}`);
+      if (fresh.run_id !== state.run) return;
+      const changed = JSON.stringify(fresh.games) !== JSON.stringify(d().games);
+      state.detail = fresh; renderRunInfo();
+      if (changed) renderGames();
+      if (fresh.status !== "running") { clearInterval(state.live); state.live = null; loadRunList(); }
+      if (changed && state.game && state.level != null) await refreshSteps();
+    } catch {}
+  }, 5000);
+}
+
+async function loadRunList() {   // refresh the labels (a run just finished) without losing the selection
+  const cur = state.run; const runs = await api("/api/runs"); state.runs = runs;
+  const sel = $("runsel"); const keep = sel.value; sel.innerHTML = "";
+  for (const r of runs) { const o = document.createElement("option"); o.value = r.run_id; o.textContent = runLabel(r); sel.appendChild(o); }
+  sel.value = keep || cur;
+}
+
+async function refreshSteps() {
+  const wasEnd = state.i >= state.steps.length - 1, level = state.level, game = state.game;
+  const data = await api(`/api/runs/${state.run}/games/${game}`);
+  if (state.game !== game || state.level !== level) return;
+  state.data = data;
+  let steps = data.steps.filter(s => s.level === level); if (!steps.length) steps = data.steps;
+  if (steps.length === state.steps.length) return;
+  state.steps = steps; $("slider").max = steps.length - 1;
+  $("notes").textContent = (data.notes || []).join(" · ");
+  renderTimeline(); goto(wasEnd ? steps.length - 1 : state.i);
 }
 
 function renderGames() {
@@ -189,7 +243,8 @@ function renderGames() {
   for (const g of state.detail.games) {
     const el = document.createElement("div"); el.className = "game" + (g.has_log ? "" : " nolog") + (g.game_id === state.game ? " open" : "");
     const done = g.levels_completed ?? 0, tot = g.levels_total || "?";
-    el.innerHTML = `<div class="head"><b>${esc(g.game_id)}</b><span class="meta">L ${done}/${tot} · ${g.actions ?? "?"}a · ${fmt(g.score, 1)}</span></div><div class="levels"></div>`;
+    const tail = state.detail.status === "finished" ? fmt(g.score, 1) : (g.stop_reason === "waiting" ? "대기" : g.stop_reason === "no action record" ? "기록 없음" : state.detail.status === "running" ? '<span class="live"></span>' : "중단");
+    el.innerHTML = `<div class="head"><b>${esc(g.game_id)}</b><span class="meta">L ${done}/${tot} · ${g.actions ?? "?"}a · ${tail}</span></div><div class="levels"></div>`;
     const lv = el.querySelector(".levels");
     for (const L of g.levels) {
       const c = document.createElement("span");
@@ -218,7 +273,8 @@ async function selectLevel(game, level, step = null) {
   $("slider").max = state.steps.length - 1;
   $("notes").textContent = (state.data.notes || []).join(" · ") + (state.data.source === "log" ? "  (source: log parse)" : "");
   $("loglink").href = `/api/runs/${state.run}/games/${game}/log`; $("loglink").style.display = "";
-  $("booklink").href = `/api/runs/${state.run}/games/${game}/rulebook`; $("booklink").style.display = "";
+  const gi = state.detail.games.find(x => x.game_id === game) || {};
+  $("booklink").href = `/api/runs/${state.run}/games/${game}/rulebook`; $("booklink").style.display = gi.has_rulebook ? "" : "none";
   renderTimeline();
   goto(step != null && step < state.steps.length ? step : 0);
 }
@@ -320,7 +376,7 @@ function renderDetail() {
   const kind = s.kind === "step" ? (s.tag || "obs") : s.kind;
   let h = `<h2>${esc(state.game)} · level ${state.level}</h2>
   <div class="lvsum">
-    <div><div class="n" style="color:${L.completed ? "var(--ok)" : "var(--bad)"}">${L.completed ? "완료" : "미완료"}</div><div class="l">${esc(L.reason || "")}</div></div>
+    <div><div class="n" style="color:${L.completed ? "var(--ok)" : L.reason === "in progress" ? "var(--accent)" : "var(--bad)"}">${L.completed ? "완료" : L.reason === "in progress" ? "진행 중" : "미완료"}</div><div class="l">${L.reason === "in progress" ? "" : esc(L.reason || "")}</div></div>
     <div><div class="n">${L.actions ?? lvinfo.steps ?? "?"}</div><div class="l">actions (기준 ${L.baseline ?? "?"})</div></div>
     <div><div class="n">${fmt(L.score, 1)}</div><div class="l">level score</div></div>
     <div><div class="n">${lvinfo.attempts ?? "?"}</div><div class="l">attempts</div></div>

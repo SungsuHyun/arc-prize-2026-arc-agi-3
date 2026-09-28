@@ -60,7 +60,7 @@ def play_game(arc, game_id: str, cfg: dict, log_dir: Path, memory: Memory, llm, 
         raw_env = arc.make(game_id)
     if raw_env is None:
         return {"game_id": game_id, "error": "could not create env"}
-    env = ArcadeEnv(raw_env, game_id, log_dir=memory.episodic_dir(game_id), budget_total=cfg.get("budget"))
+    env = ArcadeEnv(raw_env, game_id, log_dir=memory.episodic_dir(game_id), budget_total=cfg.get("budget"), replay_path=log_dir / f"{game_id}.actions.jsonl")
     orch = Orchestrator(memory=memory, llm=llm, budget_cfg=cfg.get("budget_cfg"), log=log, events_dir=log_dir, use_llm=not cfg.get("no_llm"),
                         max_seconds=cfg["max_minutes"] * 60, planner_kwargs=cfg.get("planner", {}), max_levels=int(cfg.get("max_levels", 20)))
     try:
@@ -72,6 +72,14 @@ def play_game(arc, game_id: str, cfg: dict, log_dir: Path, memory: Memory, llm, 
         log(f"CRASH {e!r}")
         st = env.status()
         return {"game_id": game_id, "error": f"{type(e).__name__}: {e}", "actions": st.actions_used, "levels_completed": st.level - 1, "levels_total": st.levels_total}
+
+
+def write_run_meta(log_dir: Path, **meta) -> None:
+    """logs/<run>/run.json, written before the first action: lets the eval viewer list a run that is still in progress
+    (the summary run-<id>.json only exists once every game has finished)."""
+    started = meta.pop("started")
+    log_dir.mkdir(parents=True, exist_ok=True)
+    (log_dir / "run.json").write_text(json.dumps({**meta, "started_at": started.isoformat(), "pid": os.getpid(), "git": _git()}, indent=1, default=str))
 
 
 def run(game_ids: list[str], cfg: dict, *, out_dir: Path = DEFAULT_OUT, memory_root: Path = DEFAULT_MEMORY, tag: str = "", arc=None) -> dict:
@@ -86,6 +94,7 @@ def run(game_ids: list[str], cfg: dict, *, out_dir: Path = DEFAULT_OUT, memory_r
             llm_cfg.update(cfg["llm"])
         llm = LLMGateway(llm_cfg, cache_dir=memory_root / "llm_cache", max_calls=int(load_budget_config().get("llm_calls_max", 60)) * len(game_ids))
     lock = threading.Lock(); started = dt.datetime.now(dt.timezone.utc)
+    write_run_meta(log_dir, experiment="pbg", run_id=run_id, tag=tag, started=started, game_ids=game_ids, params={k: v for k, v in cfg.items() if k != "llm"})
     import faulthandler
     faulthandler.enable()
     hard_limit = cfg["max_minutes"] * 60 + 300          # a game that is still computing this long after its deadline is reported as hung

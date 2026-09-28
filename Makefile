@@ -168,7 +168,7 @@ site: ## Serve the benchmark site at http://localhost:8080, auto-rebuilding on r
 	$(VENV_PY) scripts/serve_site.py --port $(SITE_PORT)
 
 
-eval-site: ## Local evaluation viewer (rulebook runs, game -> level -> step replay) at http://localhost:8090 (EVAL_PORT=)
+eval-site: ## Replay: local viewer of rulebook/pbg runs incl. ones in progress (game -> level -> step boards) at http://localhost:8090 (EVAL_PORT=)
 	$(VENV_PY) scripts/serve_eval.py --port $(EVAL_PORT)
 
 EVAL_UNIT       := arc-eval-site.service

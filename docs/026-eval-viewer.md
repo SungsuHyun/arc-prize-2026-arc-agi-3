@@ -66,6 +66,23 @@ LEVEL COMPLETED, GAME OVER)가 표시된다. 시간은 재지 않고 아무것�
 서버 API: `POST /api/play/new {game_id}`, `POST /api/play/<sid>/step {action}`, `POST /api/play/<sid>/reset`
 (세션은 메모리에만, 최대 32개).
 
+## 2026-09-29 추가: 이름 Replay, pbg 라인, 진행 중 실행
+
+- 뷰어 이름을 **Replay**로 바꿨다(페이지 제목·헤더·systemd 설명). make 타깃(`eval-site`)과 포트는 그대로.
+- **pbg 실행도 같은 화면에서 본다.** `pbg/env/wrapper.py`의 `ArcadeEnv`가 rulebook과 같은 형식의
+  `experiments/pbg/results/logs/<run>/<game>.actions.jsonl`(reset/step, 액션 라벨, 레벨, 시도, 프레임 sha1, 벽시계)을
+  쓰고, 뷰어(`replay.py`)는 `EXPERIMENTS = {rulebook, pbg}` 두 results 폴더를 함께 훑는다. pbg 로그는
+  `HH:MM:SS 메시지` 형식이라 액션 카운터가 없으므로 기록의 `clock`과 대조해 스텝에 붙인다. 완료 실행의
+  레벨 요약은 pbg의 `level_actions` 딕셔너리에서 만든다.
+- **진행 중인 실행이 보인다.** 두 러너(`rulebook/run.py`, `pbg/harness/online_runner.py`)가 첫 액션 전에
+  `logs/<run>/run.json`(태그·게임·파라미터·pid)을 남기고, 요약 `run-<id>.json`이 아직 없는 로그 폴더는
+  pid가 살아 있으면 `running`, 아니면 `aborted`로 목록에 오른다(`● 진행 중` / `✕ 중단`). 진행 중 실행의
+  게임·레벨 요약은 actions.jsonl을 집계해 만들고, 페이지는 5초마다 다시 읽어 보드가 늘어나면 제자리에서
+  이어 붙인다(마지막 스텝을 보고 있었으면 따라간다). 요약이 생기면 목록 라벨이 완료로 바뀐다.
+  이 변경 전에 시작한 실행은 run.json·actions.jsonl이 없어 목록에는 뜨지만 초기 보드만 재생된다.
+- 검증: `pbg --games ar25 --minutes 1 --no-llm --budget 40` 스모크를 진행 중에 열어 18스텝 재생, 해시 불일치 0,
+  planner 로그 4건이 마지막 스텝에 붙음; 종료 후 같은 run id가 완료 상태로 전환.
+
 ## 다음
 
 - 레벨 시점의 룰북 스냅샷(현재는 최종본 + REVIEW 로그로 대체)

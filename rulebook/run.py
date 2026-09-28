@@ -59,6 +59,9 @@ def run(game_ids: list[str], cfg: dict, *, out_dir: Path, tag: str = "", arc=Non
     log_dir = out_dir / "logs" / run_id
     arc = arc or make_arcade()
     lock = threading.Lock(); started = dt.datetime.now(dt.timezone.utc)
+    log_dir.mkdir(parents=True, exist_ok=True)   # logs/<run>/run.json before the first action: the eval viewer lists the run while it is in progress
+    (log_dir / "run.json").write_text(json.dumps({"experiment": "rulebook", "run_id": run_id, "tag": tag, "started_at": started.isoformat(), "pid": os.getpid(),
+                                                  "games": game_ids, "params": cfg}, indent=1, default=str))
     with ThreadPoolExecutor(max_workers=int(cfg.get("jobs", 2))) as ex:
         games = list(ex.map(lambda g: play_game(arc, g, cfg, log_dir, lock=lock, deadline=deadline), game_ids))
     try:

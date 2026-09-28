@@ -54,6 +54,7 @@ class Game:
             return
         rec["t"] = round(time.time() - self.t0, 2)
         rec["hash"] = hashlib.sha1(self.frame.ascii.encode()).hexdigest()[:12] if self.frame else None
+        rec["levels_total"] = self.levels_total; rec["state"] = self.state
         with open(self.record_path, "a") as f:
             f.write(json.dumps(rec) + "\n")
 

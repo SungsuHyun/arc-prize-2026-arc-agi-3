@@ -8,6 +8,7 @@
 * every raw request/response is appended to episodic/{game_id}/raw.jsonl (input of ReplayEnv)"""
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 from dataclasses import dataclass, field
@@ -78,11 +79,17 @@ class EnvWrapper:
 class ArcadeEnv(EnvWrapper):
     """arc_agi / arcengine environment. `env` is the object returned by Arcade.make(game_id)."""
 
-    def __init__(self, env, game_id: str, *, log_dir: Optional[Path] = None, budget_total: Optional[int] = None):
+    def __init__(self, env, game_id: str, *, log_dir: Optional[Path] = None, budget_total: Optional[int] = None, replay_path: Optional[Path] = None):
         self.env, self.game_id = env, game_id
         self.log_path = (Path(log_dir) / "raw.jsonl") if log_dir else None
         if self.log_path:
             self.log_path.parent.mkdir(parents=True, exist_ok=True)
+        # per-run action record in the rulebook format (results/logs/<run>/<game>.actions.jsonl): one line per reset/step with a
+        # frame hash, so the eval viewer (scripts/eval_viewer) can replay the game against the offline engine and check every board
+        self.replay_path = Path(replay_path) if replay_path else None
+        if self.replay_path:
+            self.replay_path.parent.mkdir(parents=True, exist_ok=True)
+        self.attempt = 0
         self.budget_total = budget_total
         self.frame: Optional[Frame] = None
         self.state = "NOT_PLAYED"
@@ -130,7 +137,30 @@ class ArcadeEnv(EnvWrapper):
         self._record({"kind": action.type.lower() if action.type == "RESET" else "step", "step_idx": self.step_idx, "action": action.to_json(),
                       "frames": [grid_to_rows(g) for g in grids], "state": self.state, "level": self.level, "levels_total": self.levels_total,
                       "available_actions": self._avail, "status_change": change, "t": round(time.time() - self.t0, 3)})
+        self._record_replay(action, grids[-1] if grids else None, prev_level, prev_state, change)
         return after, inters, change
+
+    _REPLAY_LABEL = {1: "UP", 2: "DOWN", 3: "LEFT", 4: "RIGHT", 5: "SPACE", 7: "ACTION7"}
+
+    def _record_replay(self, action: Action, last_grid, prev_level: int, prev_state: str, change: Optional[str]) -> None:
+        """Append one rulebook-compatible line (see rulebook.env.Game._record): the viewer replays these against the engine."""
+        if self.replay_path is None:
+            return
+        h = hashlib.sha1("\n".join(grid_to_rows(last_grid)).encode()).hexdigest()[:12] if last_grid is not None else None
+        now = time.time()
+        base = {"t": round(now - self.t0, 2), "clock": time.strftime("%H:%M:%S", time.localtime(now)), "hash": h, "state": self.state, "levels_total": self.levels_total}
+        if action.type == "RESET":
+            self.attempt += 1
+            rec = {"kind": "reset", "step": self.step_idx, "level": self.level, "attempt": self.attempt, **base}
+        else:
+            label = {"action": "MOUSE", "row": int(action.row), "col": int(action.col)} if action.type == "CLICK" else self._REPLAY_LABEL.get(action.id, f"ACTION{action.id}")
+            completed = change in ("LEVEL_UP", "WIN")
+            rec = {"kind": "step", "step": self.step_idx, "action": label, "level": prev_level, "attempt": self.attempt,
+                   "level_completed": completed, "game_over": change == "GAME_OVER", "won": change == "WIN", **base}
+            if completed:
+                self.attempt += 1
+        with open(self.replay_path, "a") as f:
+            f.write(json.dumps(rec) + "\n")
 
     def _record(self, rec: dict) -> None:
         if self.log_path:
