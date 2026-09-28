@@ -43,7 +43,7 @@ def per_level(ev: list[dict], g: dict) -> list[dict]:
         for e in es:
             actions_by[(e["from"], e["to"])] += e["budget_used"] - prev; prev = e["budget_used"]
         plans = [e for e in es if e["reason"].startswith("plan of") or e["reason"].startswith("explore plan")]
-        outcomes = Counter(e["reason"].split(" ")[0] + " " + e["reason"].split(" ")[1] for e in es if e["from"] == "EXECUTE")
+        outcomes = Counter(" ".join(e["reason"].split(" ")[:2]) for e in es if e["from"] == "EXECUTE")
         tops = [e["reason"] for e in es if e["reason"].startswith("top h=")]
         goals = Counter(re.search(r"top=([^;|]+)", t).group(1) if re.search(r"top=([^;|]+)", t) else "?" for t in tops)
         scores = [float(m.group(1)) for t in tops for m in [re.search(r"score=([\d.]+)", t)] if m]

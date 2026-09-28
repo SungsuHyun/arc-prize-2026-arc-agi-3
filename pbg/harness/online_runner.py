@@ -96,10 +96,16 @@ def run(game_ids: list[str], cfg: dict, *, out_dir: Path = DEFAULT_OUT, memory_r
     for e in scd.get("environments", []) or []:
         if e.get("runs"):
             by_id[e["id"].split("-")[0]] = e["runs"][-1]
+    runs_by_id = {e["id"].split("-")[0]: e.get("runs") or [] for e in scd.get("environments", []) or []}
     for g in games:
         r = by_id.get(g["game_id"].split("-")[0])
         if r:
             g["score"] = r.get("score"); g["level_scores"] = r.get("level_scores"); g["level_baseline_actions"] = r.get("level_baseline_actions")
+            runs = runs_by_id.get(g["game_id"].split("-")[0], [])
+            best = max(runs, key=lambda x: x.get("score") or 0) if runs else r
+            g["scorecard_runs"] = len(runs); g["score_best_run"] = best.get("score"); g["levels_best_run"] = best.get("levels_completed")
+            if len(runs) > 1:
+                g["note"] = f"{len(runs)} scorecard runs (a RESET on a fresh level restarts the game); last run scored, best run {best.get('score')}"
     scores = [g.get("score") or 0.0 for g in games]
     result = {"schema": 1, "experiment": "pbg", "run_id": run_id, "started_at": started.isoformat(), "finished_at": dt.datetime.now(dt.timezone.utc).isoformat(),
               "git": _git(), "tag": tag, "config": {"description": "pbg: perception -> probe -> world-model lab -> goal inference -> planner (spec docs/027)", "games": game_ids, "params": {k: v for k, v in cfg.items() if k != "llm"}},
@@ -112,7 +118,7 @@ def run(game_ids: list[str], cfg: dict, *, out_dir: Path = DEFAULT_OUT, memory_r
     print(f"\n========= pbg {tag} =========")
     for g in games:
         print(f"  {g['game_id']:8} levels={g.get('levels_completed', '?'):>2}/{g.get('levels_total', '?')} actions={g.get('actions', '?'):>5} score={g.get('score', 0) or 0:.3f} "
-              f"llm={g.get('llm_calls', '?')} events={g.get('events', '?')} stop={g.get('stop_reason', g.get('error'))} per-level={g.get('level_actions')}")
+              f"llm={g.get('llm_calls', '?')} runs={g.get('scorecard_runs', 1)} best={g.get('score_best_run', 0) or 0:.2f} stop={g.get('stop_reason', g.get('error'))} per-level={g.get('level_actions')}")
     print(f"Aggregate score: {result['aggregate']['score']:.4f} | level>=2: {result['aggregate']['games_level2plus']}/{len(games)}\nResult: {out}\nLogs: {log_dir}")
     return result
 

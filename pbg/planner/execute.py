@@ -10,7 +10,7 @@ from ..core.contracts import Hypothesis, scene_equal, scene_mismatch
 from ..core.types import Action, Scene, Transition
 from .astar import astar
 from .beam import beam_search
-from .common import action_set, make_successor
+from .common import action_set, make_successor, state_key
 from .mcts import mcts
 from .stuck import StuckDetector
 
@@ -43,6 +43,8 @@ class Planner:
         self.stuck = StuckDetector()
         self.responsive: list[tuple[int, int]] = []
         self.last_info: Optional[PlanInfo] = None
+        self.observed: dict = {}          # (state_key, action label) -> observed after scene (ground truth for planning)
+        self.observed_seen: list = []
 
     def _actions_fn(self, available: list[Action], semantics):
         def fn(scene: Scene) -> list[Action]:
@@ -73,7 +75,7 @@ class Planner:
 
     def _search_one(self, scene: Scene, model, goal, available, semantics, depth: int, visited: set) -> tuple[Optional[list[Action]], str]:
         actions_fn = self._actions_fn(available, semantics)
-        succ = make_successor(model, actions_fn)
+        succ = make_successor(model, actions_fn, self.observed)
         setattr(goal, "model_hint", model)
         ab = self._abstract(scene, model, goal)
         if ab:
@@ -140,6 +142,8 @@ class Planner:
             t = session.act(a, kind)
             if t is None:
                 return ExecResult("ERROR", current, None, i, {"reason": "env error or budget"})
+            if t.status_change is None:
+                self.observed[(state_key(t.before), a.label())] = t.after
             if a.type == "CLICK" and not t.diff.is_noop:
                 self.responsive.append((a.row, a.col)); self.responsive = self.responsive[-20:]
             if t.status_change in ("LEVEL_UP", "WIN"):

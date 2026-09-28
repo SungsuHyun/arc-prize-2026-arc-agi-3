@@ -43,30 +43,59 @@ def foreground_mask(grid: np.ndarray, regions: list[Region], global_bg: int, reg
     return fg
 
 
+def checker_mask(grid: np.ndarray) -> np.ndarray:
+    """Pixels that belong to a 2x2-periodic two-colour texture (checkerboard hazards, dotted floors): every 2x2 block
+    whose diagonals agree and whose rows differ marks its four pixels."""
+    h, w = grid.shape
+    a, b, c, d = grid[:-1, :-1], grid[:-1, 1:], grid[1:, :-1], grid[1:, 1:]
+    blk = (a == d) & (b == c) & (a != b)
+    m = np.zeros((h, w), dtype=bool)
+    m[:-1, :-1] |= blk; m[:-1, 1:] |= blk; m[1:, :-1] |= blk; m[1:, 1:] |= blk
+    return m
+
+
 def segment_objects(grid: np.ndarray, regions: list[Region], global_bg: int, region_masks: dict, *, connectivity: int = 4,
                     max_objects: int = 200, min_region_area: int = 0) -> tuple[list[Object], list[tuple[int, int]]]:
     """Returns (objects with provisional ids 0..n-1, adjacency pairs between different-colour components)."""
     h, w = grid.shape
     fg = foreground_mask(grid, regions, global_bg, region_masks, min_region_area=min_region_area)
+    objs: list[Object] = []
+    # 2x2-periodic textures become ONE multi-colour object each (a checkerboard is not 100 one-pixel objects)
+    tex = checker_mask(grid) & (fg | (grid != global_bg))
+    tex_labels, tn = label_components(np.zeros_like(grid), tex, 8)
+    tex_stats = component_stats(tex_labels, tn) if tn else []
+    tex_used = np.zeros((h, w), dtype=bool)
+    for s in tex_stats:
+        if s["area"] < 8:
+            continue
+        r0, c0, r1, c1 = s["bbox"]
+        m = np.zeros((r1 - r0, c1 - c0), dtype=bool); m[s["rows"] - r0, s["cols"] - c0] = True
+        cm = np.where(m, grid[r0:r1, c0:c1], -1).astype(np.int8)
+        cols = sorted({int(v) for v in grid[s["rows"], s["cols"]]})
+        color = max(cols, key=lambda cc: int((cm == cc).sum()))
+        reg = smallest_region_for_bbox(regions, (r0, c0, r1, c1))
+        objs.append(Object(len(objs), color, tuple(cols), (r0, c0, r1, c1), m, s["area"], shape_signature(m), reg.id, color_mask=cm))
+        tex_used[s["rows"], s["cols"]] = True
+    fg = fg & ~tex_used
     labels, n = label_components(grid, fg, connectivity)
     stats = component_stats(labels, n)
-    objs: list[Object] = []
+    base = len(objs)
     for s in stats:
         r0, c0, r1, c1 = s["bbox"]
         color = int(grid[s["rows"][0], s["cols"][0]])
         m = np.zeros((r1 - r0, c1 - c0), dtype=bool); m[s["rows"] - r0, s["cols"] - c0] = True
         reg = smallest_region_for_bbox(regions, (r0, c0, r1, c1))
-        objs.append(Object(s["id"], color, (color,), (r0, c0, r1, c1), m, s["area"], shape_signature(m), reg.id))
+        objs.append(Object(base + s["id"], color, (color,), (r0, c0, r1, c1), m, s["area"], shape_signature(m), reg.id))
     # adjacency between different-colour components (merge candidates)
     adj: set[tuple[int, int]] = set()
     a = labels[:, :-1]; b = labels[:, 1:]
     sel = (a >= 0) & (b >= 0) & (a != b)
     for x, y in zip(a[sel].tolist(), b[sel].tolist()):
-        adj.add((min(x, y), max(x, y)))
+        adj.add((base + min(x, y), base + max(x, y)))
     a = labels[:-1, :]; b = labels[1:, :]
     sel = (a >= 0) & (b >= 0) & (a != b)
     for x, y in zip(a[sel].tolist(), b[sel].tolist()):
-        adj.add((min(x, y), max(x, y)))
+        adj.add((base + min(x, y), base + max(x, y)))
     if len(objs) > max_objects:
         objs.sort(key=lambda o: -o.area); objs = objs[:max_objects]
         keep = {o.id for o in objs}

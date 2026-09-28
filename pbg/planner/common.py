@@ -59,13 +59,27 @@ def dead(scene: Scene) -> bool:
     return bool(scene.aux.get("dead"))
 
 
-def make_successor(model, actions_fn: Callable[[Scene], list[Action]]):
+def state_key(scene: Scene) -> tuple:
+    """Identity of a scene for observed-transition lookup: objects outside ui strips."""
+    strips = {r.id for r in scene.regions if r.kind_hint == "ui_strip"}
+    return tuple(sorted(o.identity() for o in scene.objects if o.region not in strips))
+
+
+def make_successor(model, actions_fn: Callable[[Scene], list[Action]], observed: Optional[dict] = None):
+    """Successor generator over model predictions. `observed` = {(state_key, action label): after scene} from real
+    transitions: where the environment has already answered, the answer replaces the prediction (a model that
+    mispredicted a state cannot keep proposing the same plan)."""
     def successors(scene: Scene):
+        sk = state_key(scene) if observed else None
         for a in actions_fn(scene):
-            try:
-                nxt = model.predict(scene, a)
-            except Exception:
-                nxt = None
+            nxt = None
+            if observed:
+                nxt = observed.get((sk, a.label()))
+            if nxt is None:
+                try:
+                    nxt = model.predict(scene, a)
+                except Exception:
+                    nxt = None
             if nxt is None or dead(nxt):
                 continue
             yield a, nxt

@@ -56,13 +56,13 @@ def component_stats(labels: np.ndarray, n: int) -> list[dict]:
     return out
 
 
-def _is_periodic(strip: np.ndarray) -> bool:
-    """A 1-D colour sequence is periodic if some period p in 2..len/2 repeats at least twice (with tolerance at the end)."""
+def _is_periodic(strip: np.ndarray, min_repeats: int = 2) -> bool:
+    """A 1-D colour sequence is periodic if some period p in 2..len/min_repeats repeats at least min_repeats times."""
     seq = strip.tolist()
     n = len(seq)
-    for p in range(2, n // 2 + 1):
-        ok = all(seq[i] == seq[i - p] for i in range(p, n - (n % p)))
-        if ok and n // p >= 2 and len(set(seq[:p])) > 1:
+    for p in range(2, n // min_repeats + 1):
+        ok = all(seq[i] == seq[i - p] for i in range(p, n))
+        if ok and n // p >= min_repeats and len(set(seq[:p])) > 1:
             return True
     return False
 
@@ -137,12 +137,41 @@ def find_regions(grid: np.ndarray, *, min_area_ratio: float = 0.05, ui_strip_max
             if any(reg.kind_hint == "ui_strip" and reg.bbox == bbox for reg in regions):
                 continue
             regions.append(Region(f"R{rid}", global_bg, bbox, "ui_strip")); rid += 1
+    # dotted / alternating HUD lines: a thin band (1-3 px) whose non-background pixels form a periodic multi-colour
+    # pattern of length >= 12 (a row of 1-px ticks is not one component, so the component test above misses it)
+    for axis in (0, 1):
+        n_lines = h if axis == 0 else w
+        for i in range(n_lines):
+            line = grid[i, :] if axis == 0 else grid[:, i]
+            fg_line = line != global_bg
+            if fg_line.sum() < 6:
+                continue
+            idx = np.nonzero(fg_line)[0]
+            runs = np.split(idx, np.nonzero(np.diff(idx) > 2)[0] + 1)      # gaps of <= 2 background pixels stay in one run (dotted lines)
+            for run in runs:
+                if run[-1] - run[0] + 1 < 12 or len(run) < 6:
+                    continue
+                seq = line[run[0]:run[-1] + 1]
+                if len(set(seq.tolist())) >= 2 and _is_periodic(seq, min_repeats=3):
+                    # the band must be thin: the same pattern must not continue above/below for more than 3 lines
+                    thick = 1
+                    for j in (i + 1, i + 2, i + 3):
+                        if j < n_lines and np.array_equal((grid[j, :] if axis == 0 else grid[:, j])[run[0]:run[-1] + 1], seq):
+                            thick += 1
+                    if thick > 3:
+                        continue
+                    bbox = (i, 0, i + thick, w) if axis == 0 else (0, i, h, i + thick)
+                    if not any(reg.kind_hint == "ui_strip" and reg.bbox == bbox for reg in regions):
+                        regions.append(Region(f"R{rid}", global_bg, bbox, "ui_strip")); rid += 1
+                    break
     # merge overlapping strip bands into one
     strips = [r for r in regions if r.kind_hint == "ui_strip"]
     merged: list[Region] = []
+    def orient(b):
+        return "h" if (b[3] - b[1]) >= (b[2] - b[0]) else "v"
     for r in sorted(strips, key=lambda r: r.bbox):
         for m in merged:
-            if _bands_overlap(m.bbox, r.bbox):
+            if orient(m.bbox) == orient(r.bbox) and _bands_overlap(m.bbox, r.bbox):
                 m.bbox = (min(m.bbox[0], r.bbox[0]), min(m.bbox[1], r.bbox[1]), max(m.bbox[2], r.bbox[2]), max(m.bbox[3], r.bbox[3]))
                 break
         else:

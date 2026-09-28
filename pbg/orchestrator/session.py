@@ -30,6 +30,7 @@ class Session:
         self.deadline = deadline or (self.t0 + max_seconds if max_seconds else None)
         self.reset_allowed = True
         self.errors = 0
+        self.actions_since_reset = 0
         self.initial_click_cap = int((budget.cfg.get("per_level") or {}).get("initial_clicks", 16))
 
     # ── lifecycle ──
@@ -61,6 +62,10 @@ class Session:
         if self.budget.remaining() <= 0 or self.timed_out():
             return None
         if action.type == "RESET":
+            if self.actions_since_reset == 0:
+                self.log("RESET refused: no action since the last reset (a second RESET would restart the whole game)")
+                return None
+            self.actions_since_reset = 0
             level = self.level
             frame = self.env.reset(self.game_id)
             self.budget.charge(kind, 1, level)
@@ -84,6 +89,7 @@ class Session:
                 return None
             return None
         level = rt.level
+        self.actions_since_reset += 1
         self.budget.charge(kind, 1, level)
         self.level_actions[level] = self.level_actions.get(level, 0) + 1
         self.step_idx += 1

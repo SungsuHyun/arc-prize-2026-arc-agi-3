@@ -133,6 +133,10 @@ class Orchestrator:
                         # starts again after the reset (a new attempt), and the game is only abandoned after 3 resets
                         # without a level-up
                         if s.reset_allowed and resets_without_progress < int(self.max_resets):
+                            if s.actions_since_reset == 0:
+                                # nothing happened since the last reset: a second RESET would restart the whole game
+                                events.emit(state, "HYPOTHESIZE", "reset refused (no action since last reset) -> waiting/exploring instead", budget_used=budget.used())
+                                budget.reset_level(s.level, "reprobe"); wml.wait_job(60.0); state = "HYPOTHESIZE"; continue
                             events.emit(state, "HYPOTHESIZE", "reprobe budget exhausted -> RESET", budget_used=budget.used())
                             s.act(Action.reset(), "reprobe"); planner.stuck.reset(); resets_without_progress += 1
                             budget.reset_level(s.level, "reprobe"); touched.clear(); state = "HYPOTHESIZE"; continue
@@ -150,6 +154,10 @@ class Orchestrator:
                 state = "HYPOTHESIZE"; experiments_this_round = 0
             elif state == "HYPOTHESIZE":
                 hypothesize_rounds += 1
+                for t_ in s.transitions[len(planner.observed_seen):]:
+                    planner.observed_seen.append(t_.id)
+                    if t_.status_change is None and t_.action.type != "RESET":
+                        planner.observed[(_state_key(t_.before), t_.action.label())] = t_.after
                 level_note = self._level_note(mem, s.level)
                 allow_llm = self.use_llm and budget.allows_llm() and not budget.low()
                 if len(s.transitions) != last_refine_n or (wml._job is not None and not wml.job_running()):
@@ -251,6 +259,16 @@ class Orchestrator:
                     events.emit("EXECUTE", "PROBE", f"stuck: {r.detail.get('reason')}", transition_id=r.t.id if r.t else None, budget_used=budget.used())
                     planner.stuck.reset(); state = "PROBE"
                 elif r.kind == "EXHAUSTED":
+                    reached = planner.last_info.goal if planner.last_info else None
+                    if reached is not None and reached.template != "explore":
+                        roles_fn = (lambda sc, m=H[0].model: m.with_roles(sc)) if H and isinstance(H[0].model, RuleModel) else (lambda sc: sc)
+                        if reached.is_goal(roles_fn(s.scene)):
+                            # the predicate holds and nothing happened: it is not the win condition (stronger than 'unreachable')
+                            idx = next((i for i, g in enumerate(G) if g.name == reached.name), None)
+                            if idx is not None:
+                                goal_inf.demote(G, idx, penalty=-0.6)
+                            events.emit("EXECUTE", "PLAN", f"plan exhausted ({r.executed} actions): goal {reached.name} reached without level-up -> demoted", budget_used=budget.used())
+                            state = "PLAN"; continue
                     events.emit("EXECUTE", "PLAN", f"plan exhausted ({r.executed} actions)", budget_used=budget.used()); state = "PLAN"
                 elif r.kind == "FAILED":
                     # GAME_OVER: the level restarts on RESET; retry from PLAN with memory kept (spec §12)
