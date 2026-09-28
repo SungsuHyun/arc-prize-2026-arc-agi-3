@@ -16,12 +16,19 @@ def plan_key(scene: Scene) -> tuple:
 
 def astar(start: Scene, successors: Callable[[Scene], Iterable[tuple[Action, Scene]]], is_goal: Callable[[Scene], bool],
           progress: Callable[[Scene], float], *, depth: int = 60, weight: float = 8.0, max_nodes: int = 100_000,
-          visited_penalty: Optional[set] = None, time_limit: float = 0.5) -> Optional[list[Action]]:
+          visited_penalty: Optional[set] = None, time_limit: float = 0.5, heuristic: Optional[Callable[[Scene], Optional[float]]] = None) -> Optional[list[Action]]:
     counter = itertools.count()
     start_key = plan_key(start)
     if is_goal(start):
         return []
-    open_heap = [(weight * (1.0 - progress(start)), next(counter), 0.0, 0, start_key)]
+
+    def h_of(s: Scene) -> float:
+        if heuristic is not None:
+            e = heuristic(s)
+            if e is not None:
+                return float(e)
+        return weight * (1.0 - progress(s))
+    open_heap = [(h_of(start), next(counter), 0.0, 0, start_key)]
     nodes = {start_key: (start, None, None, 0.0)}   # key -> (scene, parent_key, action, g)
     closed: set = set()
     expanded = 0; t0 = time.perf_counter()
@@ -48,7 +55,7 @@ def astar(start: Scene, successors: Callable[[Scene], Iterable[tuple[Action, Sce
             if old is not None and old[3] <= g2:
                 continue
             nodes[k] = (nxt, key, a, g2)
-            h = weight * (1.0 - progress(nxt))
+            h = h_of(nxt)
             heapq.heappush(open_heap, (g2 + h, next(counter), g2, d + 1, k))
     return None
 

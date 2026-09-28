@@ -101,8 +101,8 @@ class WorldModelLab:
         return not self.job_running()
 
     def most_informative_action(self, H: list[Hypothesis], scene: Scene, available: list[Action], *, semantics=None, extra_clicks=(),
-                                exclude: Optional[set] = None) -> Optional[Action]:
-        return _mia(H, scene, available, tau=self.tau, semantics=semantics, extra_clicks=extra_clicks, exclude=exclude)
+                                exclude: Optional[set] = None, state_key=None) -> Optional[Action]:
+        return _mia(H, scene, available, tau=self.tau, semantics=semantics, extra_clicks=extra_clicks, exclude=exclude, state_key=state_key)
 
     def diagnose(self, h: Hypothesis, log: list[Transition], scene: Scene) -> Optional[dict]:
         """Violation diagnosis after a level change (spec §14, JSON {rule, cause, fix_hint})."""

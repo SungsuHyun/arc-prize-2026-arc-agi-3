@@ -35,7 +35,7 @@ class PlanInfo:
 
 
 class Planner:
-    def __init__(self, *, depth: int = 60, weight: float = 8.0, beam_width: int = 32, time_limit: float = 0.5, stochastic: bool = False,
+    def __init__(self, *, depth: int = 60, weight: float = 8.0, beam_width: int = 32, time_limit: float = 3.0, stochastic: bool = False,
                  log=None):
         self.depth, self.weight, self.beam_width, self.time_limit = depth, weight, beam_width, time_limit
         self.stochastic = stochastic
@@ -49,18 +49,47 @@ class Planner:
             return action_set(scene, available, semantics=semantics, responsive=self.responsive)
         return fn
 
+    def _abstract(self, scene: Scene, model, goal) -> Optional[list[Action]]:
+        """Goal-provided abstract plan (over the goal-relevant objects only), verified by full simulation with the model."""
+        ap = getattr(goal, "abstract_plan", None)
+        if ap is None:
+            return None
+        try:
+            rs = model.with_roles(scene) if hasattr(model, "with_roles") else scene
+            trig_keys = ap(rs, model)
+        except Exception:
+            return None
+        if not trig_keys:
+            return None
+        plan = []; s_ = scene
+        for tk in trig_keys:
+            r0, c0, r1, c1 = tk
+            a = Action.click((r0 + r1 - 1) // 2, (c0 + c1 - 1) // 2)
+            nxt = model.predict(s_, a)
+            if nxt is None:
+                return None
+            plan.append(a); s_ = nxt
+        return plan if goal.is_goal(model.with_roles(s_) if hasattr(model, "with_roles") else s_) else None
+
     def _search_one(self, scene: Scene, model, goal, available, semantics, depth: int, visited: set) -> tuple[Optional[list[Action]], str]:
         actions_fn = self._actions_fn(available, semantics)
         succ = make_successor(model, actions_fn)
+        setattr(goal, "model_hint", model)
+        ab = self._abstract(scene, model, goal)
+        if ab:
+            return ab, "abstract"
+
         # a goal's progress heuristic, damped when it proved non-monotone (spec §9)
         w = self.weight * getattr(goal, "progress_weight", 1.0)
         if self.stochastic:
             p = mcts(scene, lambda s, a: model.predict(s, a), actions_fn, goal.is_goal, goal.progress)
             return p, "mcts"
-        p = astar(scene, succ, goal.is_goal, goal.progress, depth=depth, weight=w, visited_penalty=visited, time_limit=self.time_limit)
+        est = getattr(goal, "estimate", None)
+        p = astar(scene, succ, goal.is_goal, goal.progress, depth=depth, weight=w, visited_penalty=visited, time_limit=self.time_limit,
+                  heuristic=(lambda s_, e=est: e(s_)) if est else None)
         if p is not None:
             return p, "astar"
-        p = beam_search(scene, succ, goal.is_goal, goal.progress, depth=depth, width=self.beam_width)
+        p = beam_search(scene, succ, goal.is_goal, goal.progress, depth=depth, width=self.beam_width, time_limit=self.time_limit)
         return p, "beam" if p is not None else "none"
 
     def search(self, scene: Scene, H: list[Hypothesis], G: list, *, available: list[Action], semantics=None, depth: Optional[int] = None,

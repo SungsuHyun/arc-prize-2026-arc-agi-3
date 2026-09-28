@@ -22,6 +22,15 @@ class GoalInstance:
     code: str = ""
     progress_weight: float = 1.0  # lowered to 0.5 when progress is not monotone during execution
     history: list = field(default_factory=list)
+    estimate_fn: Optional[Callable[[Scene], Optional[float]]] = None   # remaining actions estimate (A* heuristic), if the template can compute one
+
+    def estimate(self, scene: Scene) -> Optional[float]:
+        if self.estimate_fn is None:
+            return None
+        try:
+            return self.estimate_fn(scene)
+        except Exception:
+            return None
 
     def is_goal(self, scene: Scene) -> bool:
         try:
@@ -385,21 +394,103 @@ def t_fill_marked_slots(scene: Scene, ctx: dict) -> list[GoalInstance]:
     def is_goal(s):
         sl = _marked_slots(s)
         return bool(sl) and all(filled(s, x) for x in sl)
+    dist_cache: dict = {}
+
+    def graph_distance(pos, target, graph) -> Optional[int]:
+        """Fewest trigger clicks moving a piece from top-left `pos` to `target` under the learned permutations
+        (BFS over positions, other pieces ignored: a relaxed plan)."""
+        key = (pos, target)
+        if key in dist_cache:
+            return dist_cache[key]
+        from collections import deque
+        seen = {pos}; q = deque([(pos, 0)])
+        while q:
+            cur, d = q.popleft()
+            if cur == target:
+                dist_cache[key] = d; return d
+            for mapping in graph.values():
+                nxt = mapping.get(cur)
+                if nxt is not None and nxt not in seen:
+                    seen.add(nxt); q.append((nxt, d + 1))
+        dist_cache[key] = None
+        return None
+
     def progress(s):
         sl = _marked_slots(s)
         if not sl:
             return 0.0
         done = sum(1 for x in sl if filled(s, x))
         ps = pieces(s); near = 0.0
+        graph = getattr(getattr(inst, "model_hint", None), "position_graph", None)
         for color, b in sl:
             if filled(s, (color, b)):
                 continue
             cands = [p for p in ps if p.color == color] if by_color else ps
-            if cands:
-                cr, cc = (b[0] + b[2] - 1) // 2, (b[1] + b[3] - 1) // 2
-                near += 1.0 - min(_dist(p.center, (cr, cc)) for p in cands) / _max_dist(s)
-        return (done + 0.5 * near) / len(sl)
-    return [GoalInstance("fill_marked_slots", "fill_marked_slots", {"slots": len(slots), "by_color": by_color}, is_goal, progress, clue=0.2)]
+            if not cands:
+                continue
+            if graph:
+                ds = [graph_distance((p.bbox[0], p.bbox[1]), (b[0], b[1]), graph) for p in cands]
+                ds = [d for d in ds if d is not None]
+                if ds:
+                    near += 1.0 / (1.0 + min(ds)); continue
+            cr, cc = (b[0] + b[2] - 1) // 2, (b[1] + b[3] - 1) // 2
+            near += 1.0 - min(_dist(p.center, (cr, cc)) for p in cands) / _max_dist(s)
+        return (done + 0.9 * near) / len(sl)
+
+    def estimate(s):
+        """Relaxed plan length: sum over unfilled slots of the fewest clicks that bring a matching piece there."""
+        graph = getattr(getattr(inst, "model_hint", None), "position_graph", None)
+        if not graph:
+            return None
+        total = 0
+        for color, b in _marked_slots(s):
+            if filled(s, (color, b)):
+                continue
+            cands = [p for p in pieces(s) if p.color == color] if by_color else pieces(s)
+            ds = [graph_distance((p.bbox[0], p.bbox[1]), (b[0], b[1]), graph) for p in cands]
+            ds = [d for d in ds if d is not None]
+            if not ds:
+                return None
+            total += min(ds)
+        return float(total)
+    def abstract_plan(s, model):
+        """Exact plan over the goal-relevant pieces only: BFS on the joint top-left positions of the pieces that can fill
+        the slots (other pieces ride along), under the learned per-trigger permutations. Returns trigger top-lefts."""
+        graph = getattr(model, "position_graph", None)
+        if not graph:
+            return None
+        from collections import deque
+        sl = _marked_slots(s)
+        open_slots = [(c, b) for c, b in sl if not filled(s, (c, b))]
+        if not open_slots:
+            return []
+        targets = [(b[0], b[1]) for _, b in open_slots]
+        cands = [p for p in pieces(s) if (p.color in {c for c, _ in open_slots})] if by_color else pieces(s)
+        cands = cands[:4]
+        if not cands:
+            return None
+        start = tuple((p.bbox[0], p.bbox[1]) for p in cands)
+        def done(state):
+            return all(any(pos == tg for pos in state) for tg in targets)
+        triggers = list(graph.items())
+        seen = {start: None}; q = deque([start]); parent = {}
+        while q:
+            cur = q.popleft()
+            if done(cur):
+                path = []
+                while cur in parent:
+                    cur, trig = parent[cur]; path.append(trig)
+                return list(reversed(path))
+            for tkey, mapping in triggers:
+                nxt = tuple(mapping.get(pos, pos) for pos in cur)
+                if nxt not in seen:
+                    seen[nxt] = True; parent[nxt] = (cur, tkey); q.append(nxt)
+            if len(seen) > 200_000:
+                return None
+        return None
+    inst = GoalInstance("fill_marked_slots", "fill_marked_slots", {"slots": len(slots), "by_color": by_color}, is_goal, progress, clue=0.2, estimate_fn=estimate)
+    inst.abstract_plan = abstract_plan
+    return [inst]
 
 
 def t_same_cell(scene: Scene, ctx: dict) -> list[GoalInstance]:

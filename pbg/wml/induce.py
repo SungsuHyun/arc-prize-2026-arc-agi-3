@@ -429,6 +429,7 @@ def induce_click_hypotheses(log: list[Transition], semantics: dict, available: l
         return []
     model = RuleModel(rules, role_fn, default="noop", name="induced:click")
     model.level_scoped = bool(perms)      # learned position permutations only hold for the level they were seen on
+    model.position_graph = {k[2]: dict(m) for k, m in perms.items()}   # trigger bbox -> {top-left -> top-left}
     return [("induced:click", model)]
 
 

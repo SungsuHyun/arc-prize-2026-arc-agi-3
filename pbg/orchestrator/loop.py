@@ -49,8 +49,9 @@ class Result:
 class Orchestrator:
     def __init__(self, *, memory: Memory, llm=None, budget_cfg: Optional[dict] = None, perception_cfg: Optional[dict] = None, log=None,
                  events_dir: Optional[Path] = None, use_llm: bool = True, max_seconds: Optional[float] = None, planner_kwargs: Optional[dict] = None,
-                 max_levels: int = 20):
+                 max_levels: int = 20, max_resets: int = 6):
         self.memory, self.llm = memory, llm
+        self.max_resets = max_resets
         self.budget_cfg, self.perception_cfg = budget_cfg, perception_cfg
         self.log = log or (lambda *a, **k: None)
         self.events_dir = events_dir
@@ -131,11 +132,11 @@ class Orchestrator:
                         # re-exploration budget exhausted: reset as the last resort (spec §15); the reprobe allowance
                         # starts again after the reset (a new attempt), and the game is only abandoned after 3 resets
                         # without a level-up
-                        if s.reset_allowed and resets_without_progress < 3:
+                        if s.reset_allowed and resets_without_progress < int(self.max_resets):
                             events.emit(state, "HYPOTHESIZE", "reprobe budget exhausted -> RESET", budget_used=budget.used())
                             s.act(Action.reset(), "reprobe"); planner.stuck.reset(); resets_without_progress += 1
                             budget.reset_level(s.level, "reprobe"); touched.clear(); state = "HYPOTHESIZE"; continue
-                        stop = "UNRESOLVED"; events.emit(state, "END", "no progress after 3 resets", budget_used=budget.used()); break
+                        stop = "UNRESOLVED"; events.emit(state, "END", f"no progress after {self.max_resets} resets", budget_used=budget.used()); break
                 res = probe.run_initial(cap, do_reset_probe=False) if kind == "initial" else probe.run_walk(cap)
                 semantics = classify_actions(s.transitions, semantics)
                 self.memory.save_semantics(game_id, semantics.to_json())
@@ -167,9 +168,9 @@ class Orchestrator:
                 exp = None
                 if not budget.low() and budget.allows("experiment", level=s.level) and experiments_this_round < 6:
                     exp = wml.most_informative_action(H, s.scene, s.available_actions(), semantics=semantics, extra_clicks=planner.responsive,
-                                                      exclude=tried_experiments)   # 3. never repeat an experiment from the same state
+                                                      exclude=tried_experiments, state_key=_state_key(s.scene))   # never repeat an experiment from the same state
                 if exp is not None:
-                    tried_experiments.add((s.scene.frame_hash, exp.label()))
+                    tried_experiments.add((_state_key(s.scene), exp.label()))
                     t = s.act(exp, "experiment"); experiments_this_round += 1
                     events.emit("HYPOTHESIZE", "HYPOTHESIZE", f"experiment {exp.label()} (gain over {len(H)} hypotheses)", transition_id=t.id if t else None, budget_used=budget.used())
                     continue
@@ -307,3 +308,9 @@ def _mark_touched(touched: set, scene: Scene, H: list[Hypothesis]) -> None:
         for o in s.objects:
             if o.id != a.id and (a.overlaps(o) or _adjacent(a, o)):
                 touched.add(o.identity())
+
+
+def _state_key(scene: Scene) -> tuple:
+    """State identity for experiment bookkeeping: objects outside ui strips (counters must not make states look new)."""
+    strips = {r.id for r in scene.regions if r.kind_hint == "ui_strip"}
+    return tuple(sorted(o.identity() for o in scene.objects if o.region not in strips))

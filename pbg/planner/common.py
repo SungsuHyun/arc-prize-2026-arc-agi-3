@@ -14,6 +14,17 @@ def click_candidates(scene: Scene, extra: list[tuple[int, int]] = (), limit: int
     coordinates (spec §10)."""
     seen: set[tuple[int, int]] = set(); out: list[Action] = []
     strips = {r.id for r in scene.regions if r.kind_hint == "ui_strip"}
+    triggers = [o for o in scene.objects if o.role and "trigger" in o.role]
+    if triggers:
+        # the model knows which objects react to clicks: plan over those (plus known responsive coordinates) only
+        for o in triggers:
+            if o.center not in seen:
+                seen.add(o.center); out.append(Action.click(*o.center))
+        for rc in extra:
+            rc = (int(rc[0]), int(rc[1]))
+            if rc not in seen:
+                seen.add(rc); out.append(Action.click(*rc))
+        return out[:limit]
     for o in sorted(scene.objects, key=lambda o: (o.role in PASSIVE_ROLES, -o.area, o.id)):
         if o.region in strips:
             continue
