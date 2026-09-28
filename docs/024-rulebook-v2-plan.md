@@ -243,3 +243,12 @@ check_rule(재생 검증)·define_goal(하네스가 평가·기각하는 술어)
 평가 도구: `scripts/rulebook_eval.py --tag <tag>` → `experiments/rulebook/eval/<tag>.md`(게임별 레벨·액션·효율·예측 품질·계획 사용·실패 유형,
 여러 회차면 평균±표준편차). 수정: 같은 액션 수에서 게임오버가 반복되면 "시도 상한 N액션"을 배워 남은 예산을 모델에 알림.
 | 캐글 v8 (5f90ea4, 선택 모드 + 평가 1회차 기반 자동 개선) | 같은 스모크 | 5.95 | tn36 L1 44액션, lp85 L2 56액션. **2026-09-28 00:13 UTC 리더보드 제출(56623396)** |
+
+### 11.3 선택 모드 25게임 평가 루프 (15분·4동시)
+
+| 회차 | 코드 | 합계 | 레벨 1 | 레벨 2 | 실패 유형 상위 |
+|---|---|---|---|---|---|
+| 1 | 69aa016 | 0.674 | 2/25 (lp85 L3, vc33) | 1/25 | budget 10, stuck_repeating 4, predictor_blind 3, plans_ignored 2, game_over_loop 2 |
+| 2 | 5f90ea4 (inert 그룹·계획 자동 실행·거부 라벨 안내·위험 회피) | 0.746 | 3/25 (tn36 10액션, lp85 L2, vc33 L2) | 2/25 | budget 7, stuck_repeating 6, no_win_hypothesis 4, hypotheses_refuted 4 |
+
+plans_ignored와 game_over_loop는 줄었고 stuck_repeating·hypotheses_refuted가 남는다. 1회차씩이라 차이는 잡음 범위 안이다.
