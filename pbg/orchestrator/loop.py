@@ -86,7 +86,7 @@ class Orchestrator:
         plan: Optional[list[Action]] = None
         touched: set = set(); exploring = False
         last_refine_n = -1; resets_without_progress = 0; game_overs = 0
-        tried_experiments: set = set(); bumped: set = set()
+        tried_experiments: set = set(); bumped: set = set(); clicked: set = set()
         idle_iters = 0; last_used = -1
         while not s.finished():
             if budget.used() == last_used:
@@ -115,7 +115,7 @@ class Orchestrator:
                                                                      "novelty": novelty, "replaced_rules": [], "added_rules": []})
                 events.emit(state, "PLAN" if novelty == 0 else "PROBE", f"level {last_level} -> {s.level}, novelty {novelty}", budget_used=budget.used())
                 last_level = s.level; prev_level_scene = s.scene; level_start_step = s.step_idx
-                planner.stuck.reset(); no_plan_rounds = 0; reprobe_rounds = 0; resets_without_progress = 0; touched.clear()
+                planner.stuck.reset(); no_plan_rounds = 0; reprobe_rounds = 0; resets_without_progress = 0; touched.clear(); clicked.clear()
                 if s.level > self.max_levels:
                     stop = "max_levels"; break
                 if novelty == 0 and H:
@@ -139,9 +139,13 @@ class Orchestrator:
                         # without a level-up
                         if s.reset_allowed and resets_without_progress < int(self.max_resets):
                             if s.actions_since_reset == 0:
-                                # nothing happened since the last reset: a second RESET would restart the whole game
-                                events.emit(state, "HYPOTHESIZE", "reset refused (no action since last reset) -> waiting/exploring instead", budget_used=budget.used())
-                                budget.reset_level(s.level, "reprobe"); wml.wait_job(60.0); state = "HYPOTHESIZE"; continue
+                                # nothing happened since the last reset: a second RESET would restart the whole game.
+                                # Grant a fresh re-exploration allowance and walk (act) instead of spinning.
+                                events.emit(state, "PROBE", "reset refused (no action since last reset) -> fresh walk allowance", budget_used=budget.used())
+                                budget.reset_level(s.level, "reprobe")
+                                if wml.job_running():
+                                    wml.wait_job(60.0)
+                                cap = budget.cap("reprobe", s.level)
                             events.emit(state, "HYPOTHESIZE", "reprobe budget exhausted -> RESET", budget_used=budget.used())
                             s.act(Action.reset(), "reprobe"); planner.stuck.reset(); resets_without_progress += 1
                             budget.reset_level(s.level, "reprobe"); touched.clear(); state = "HYPOTHESIZE"; continue
@@ -156,7 +160,7 @@ class Orchestrator:
                             for k, v in semantics.items() if k.startswith("ACTION") and isinstance(v, dict) and v.get("class") == "MOVE" and v.get("displacement")}
                     step = max([abs(v["displacement"][0]) + abs(v["displacement"][1]) for k, v in semantics.items() if k.startswith("ACTION") and isinstance(v, dict) and v.get("displacement")] or [1])
                     dirs = {k: (d[0] * step, d[1] * step) for k, d in dirs.items()}
-                    res = probe.run_walk(cap, agent_ids=agent_ids, dirs=dirs, bumped=bumped)
+                    res = probe.run_walk(cap, agent_ids=agent_ids, dirs=dirs, bumped=bumped, clicked=clicked)
                 semantics = classify_actions(s.transitions, semantics)
                 self.memory.save_semantics(game_id, semantics.to_json())
                 events.emit("PROBE", "HYPOTHESIZE", f"{kind} probe done: {res.actions_used} actions, steps {res.steps_done}", budget_used=budget.used())
