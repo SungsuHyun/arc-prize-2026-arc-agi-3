@@ -254,6 +254,9 @@ check_rule(재생 검증)·define_goal(하네스가 평가·기각하는 술어)
 plans_ignored와 game_over_loop는 줄었고 stuck_repeating·hypotheses_refuted가 남는다. 1회차씩이라 차이는 잡음 범위 안이다.
 | 매트릭스: 선택 모드, INIT thinking 없음 | 5f90ea4 | **1.061** | 3/25 (lp85 L3 16.7, vc33 L2 9.4 — L1 6액션, r11l L1 7액션) | 2/25 | budget 9, stuck_repeating 6, no_win_hypothesis 4 |
 | 4 | fa76dcb + INIT thinking 없음 | 0.94 | 4/25 (ar25 2.78, tn36, lp85 L2, vc33 L2) | 2/25 | budget 7, predictor_blind 7, stuck_repeating 4 |
+| 5 | b449971 (2c89afe 효과 요약·전색 이동·키 순열·noop 키·거부 대체) | 0.48 | 3/25 (vc33 L2 8.79, lp85 L1 7액션, m0r0 L1 101액션) | 1/25 | budget 7, no_win_hypothesis 5, predictor_blind 5, hypotheses_refuted 4 |
+
+5회차(0.48)는 4회차(0.94)보다 낮지만 판정 보류: 게임당 모델 대기가 벽시계의 99%(ar25 923초 중 920초)였고, 11:13–11:34에 다른 세션의 pbg 4게임 실행이 같은 로컬 모델을 나눠 써서 결정 수가 9–68회(4회차보다 적음)에 그쳤다. tn36·ar25 L1 탈락은 결정 부족과 구분되지 않으므로 GPU 단독 조건으로 재실행이 필요하다. 결과 파일 run-20260928-103213-155826, 태그 eval-choose-nothink-15m-pass5.
 
 INIT thinking 없는 선택 모드가 두 번(1.06, 0.94) 모두 thinking 있는 회차(0.67–0.77)보다 높고 빠르다 → 로컬 기본값도 INIT thinking 없음으로(a022953).
 남은 상위 실패는 predictor_blind(효과 가족 밖, 7게임)와 stuck_repeating(4)이다.
