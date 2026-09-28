@@ -61,6 +61,22 @@ def infer_roles_static(log: list[Transition], semantics: dict) -> dict:
                 if reg is not None and reg.id != "R0" and reg.kind_hint != "ui_strip" and reg.bg_color not in agent_regions and (o.colors, o.shape_sig) not in hints["agent"]:
                     changed_boxes.add((o.region, tuple(o.bbox)))
     hints["indicator_boxes"] |= changed_boxes
+    # object classes that move while no agent is anywhere near them react to the button, not to the agent: indicators
+    # (ls20's direction compass lives outside every panel)
+    far_moves: Counter = Counter(); near_moves: Counter = Counter()
+    for t in log:
+        agents_before = [o for o in t.before.objects if (o.colors, o.shape_sig) in hints["agent"]]
+        for oid, (dr, dc) in t.diff.moved:
+            o = t.before.get(oid)
+            if o is None or (o.colors, o.shape_sig) in hints["agent"]:
+                continue
+            reg = t.before.region(o.region)
+            if reg is not None and reg.kind_hint == "ui_strip":
+                continue
+            moved_box = o.moved(dr, dc)
+            touched = any(a.overlaps(o) or a.overlaps(moved_box) or _near(a, o, 6) for a in agents_before)
+            (near_moves if touched else far_moves)[(o.colors, o.shape_sig)] += 1
+    hints["indicator_classes"] = {k for k, n in far_moves.items() if n >= 2 and n > 2 * near_moves.get(k, 0)}
     hints["indicator_regions"] = set()
     if agent_regions:
         for t in log[-1:]:
@@ -82,8 +98,13 @@ def infer_roles_static(log: list[Transition], semantics: dict) -> dict:
     return hints
 
 
+def _near(a, b, d: int) -> bool:
+    ar0, ac0, ar1, ac1 = a.bbox; br0, bc0, br1, bc1 = b.bbox
+    return not (ar1 + d <= br0 or br1 + d <= ar0 or ac1 + d <= bc0 or bc1 + d <= ac0)
+
+
 def _role_fn_factory(agent_keys: set, wall_colors: set, collectible_colors: set, agent_colors: set, pushable_colors: set = frozenset(),
-                     indicator_boxes: set = frozenset(), indicator_regions: set = frozenset()):
+                     indicator_boxes: set = frozenset(), indicator_regions: set = frozenset(), indicator_classes: set = frozenset()):
     ind_boxes = {b for _, b in indicator_boxes}
     ind_regions = set(indicator_regions or ())
     agent_palette = set()
@@ -103,7 +124,8 @@ def _role_fn_factory(agent_keys: set, wall_colors: set, collectible_colors: set,
         for o in scene.objects:
             reg = scene.region(o.region)
             if o.region in strips or (tuple(o.bbox) in ind_boxes and (o.colors, o.shape_sig) not in agent_keys) or \
-               (reg is not None and reg.bg_color in ind_regions and (o.colors, o.shape_sig) not in agent_keys):
+               (reg is not None and reg.bg_color in ind_regions and (o.colors, o.shape_sig) not in agent_keys) or \
+               ((o.colors, o.shape_sig) in indicator_classes and (o.colors, o.shape_sig) not in agent_keys):
                 roles[o.id] = "indicator"
             elif (o.colors, o.shape_sig) in agent_keys or (o.colors in agent_colors and len(o.colors) > 1):
                 roles[o.id] = "agent"
@@ -308,7 +330,7 @@ def induce_hypotheses(log: list[Transition], semantics: dict, available: list[Ac
                 ("induced:move+walls+collect", True, False, True, False), ("induced:move+floor", False, True, False, False), ("induced:move", False, False, False, False)]
     for name, w, f, c, p in variants:
         role_fn = _role_fn_factory(agent_keys, wall_colors if w else set(), collectible_colors if c else set(), agent_colors, pushable_colors if p else set(),
-                                   hints["indicator_boxes"], hints.get("indicator_regions", set()))
+                                   hints["indicator_boxes"], hints.get("indicator_regions", set()), hints.get("indicator_classes", set()))
         m = RuleModel(base_rules(w, f, c, p), role_fn, default="unknown", name=name)
         out.append((name, m))
         if assumed:
