@@ -59,6 +59,14 @@ class WorldModelLab:
             H.append(make_hypothesis(h.model, res, h.code, h.name, h.origin))
         H = dedupe(H); H.sort(key=lambda h: h.sort_key(), reverse=True)
         self._detect_hidden_state(log)
+        # live misprediction penalties follow the CODE (a re-delivered LLM candidate with the same source is the same model)
+        penalty_by_code: dict[str, int] = {}
+        for h in list(current) + H:
+            if h.code:
+                penalty_by_code[h.code] = max(penalty_by_code.get(h.code, 0), h.recent_mismatches)
+        for h in H:
+            if h.code and penalty_by_code.get(h.code, 0) > h.recent_mismatches:
+                h.recent_mismatches = penalty_by_code[h.code]
         for h in H:
             h.verified = promotable(evaluate(h.model, log)) if h.score >= 1.0 else False
         # keep the hypothesis set diverse: the best prior-composed model stays even when LLM candidates outscore it
