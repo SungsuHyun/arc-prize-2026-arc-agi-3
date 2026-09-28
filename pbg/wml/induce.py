@@ -338,6 +338,13 @@ def induce_click_hypotheses(log: list[Transition], semantics: dict, available: l
     # learned permutations: per trigger class, the top-left -> top-left mapping of every moved object, if consistent
     votes: dict[tuple, dict] = {}
     last_level = max(t.level for t in clicks)
+    move_counts: Counter = Counter()          # (colour, shape) classes that move at least 3 times are pieces; others are static marks
+    for t in [x for x in clicks if x.level == last_level and not x.status_change]:
+        for i, _ in t.diff.moved:
+            ob = t.before.get(i)
+            if ob is not None:
+                move_counts[(ob.color, ob.shape_sig)] += 1
+    piece_classes = {k for k, n in move_counts.items() if n >= 3}
     for t in [x for x in clicks if x.level == last_level and not x.status_change]:   # level-specific positions; a level-up frame is the next board
         oid = object_under(t.before, t.action.row, t.action.col)
         o = t.before.get(oid) if oid is not None else None
@@ -346,21 +353,28 @@ def induce_click_hypotheses(log: list[Transition], semantics: dict, available: l
         key = (o.color, o.shape_sig, tuple(o.bbox)); ui = strip_ids(t)     # a permutation belongs to ONE trigger object
         reshaped = {x[0] for x in t.diff.reshaped}
         m = votes.setdefault(key, {})
+        occupied_before = {(o.bbox[0], o.bbox[1]) for o in t.before.objects}
         for i, (dr, dc) in t.diff.moved:
             ob = t.before.get(i)
-            if ob is None or i in ui or i == oid or i in reshaped:
+            if ob is None or i in ui or i == oid or i in reshaped or (ob.color, ob.shape_sig) not in piece_classes:
                 continue
             src = (ob.bbox[0], ob.bbox[1]); dst = (ob.bbox[0] + dr, ob.bbox[1] + dc)
-            m.setdefault(src, Counter())[dst] += 1
-    # majority vote per source position (tracking noise on small marks must not kill the whole permutation)
+            m.setdefault(src, []).append((dst, frozenset(occupied_before)))
+    # per source position: the nearest destination is the one-slot move; a farther destination is explained by the
+    # one-slot target being FREE at click time (pieces slide into gaps). Otherwise majority vote.
     perms: dict[tuple, dict] = {}
     for key, m in votes.items():
         mapping = {}; agree = total = 0
-        for src, c in m.items():
-            dst, n = c.most_common(1)[0]
-            agree += n; total += sum(c.values())
-            if n >= 1:
-                mapping[src] = dst
+        for src, obs_list in m.items():
+            c = Counter(d for d, _ in obs_list)
+            total += len(obs_list)
+            if len(c) == 1:
+                mapping[src] = next(iter(c)); agree += len(obs_list); continue
+            # identical adjacent pieces make the tracker report "one piece moved two slots, the other stayed" for what is
+            # really "both moved one slot": the nearest well-supported destination is the true one-slot move
+            supported = [d for d, n in c.items() if n >= 0.25 * len(obs_list)]
+            near = min(supported or c, key=lambda d: abs(d[0] - src[0]) + abs(d[1] - src[1]))
+            mapping[src] = near; agree += c[near]
         if len(mapping) >= 2 and agree >= 0.6 * total:
             perms[key] = mapping
     if not any(eff.get("recolor") or eff.get("remove") for eff in effects.values()) and not click_moves and not perms:
@@ -429,7 +443,7 @@ def induce_click_hypotheses(log: list[Transition], semantics: dict, available: l
         return []
     model = RuleModel(rules, role_fn, default="noop", name="induced:click")
     model.level_scoped = bool(perms)      # learned position permutations only hold for the level they were seen on
-    model.position_graph = {k[2]: dict(m) for k, m in perms.items()}   # trigger bbox -> {top-left -> top-left}
+    model.position_graph = {k[2]: {src: (d["near"] if isinstance(d, dict) else d) for src, d in m.items()} for k, m in perms.items()}   # trigger bbox -> {top-left -> top-left}
     return [("induced:click", model)]
 
 

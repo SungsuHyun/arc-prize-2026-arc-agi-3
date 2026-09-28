@@ -106,6 +106,7 @@ class Session:
         self.scene, self.frame = after, rt.after
         if rt.status_change == "LEVEL_UP":
             self.level = self.env.status().level
+            self.actions_since_reset = 0        # a RESET on a fresh level restarts the whole game: treat the new level like a fresh reset
             # new level: tracking ids restart with the new board
             self.scene = self.perception.parse(rt.after, None)
         return t

@@ -103,6 +103,11 @@ class Orchestrator:
                 events.emit(state, "PLAN", f"game over #{game_overs} (during {state}) -> RESET", budget_used=budget.used())
                 s.act(Action.reset(), "plan"); planner.stuck.reset(); touched.clear(); state = "PLAN"
                 continue
+            if s.level < last_level:
+                # the game restarted from level 1 (engine semantics of a RESET on a fresh level): start the level bookkeeping over
+                events.emit(state, "PLAN", f"game restarted at level {s.level} (was {last_level}); level bookkeeping reset", budget_used=budget.used())
+                last_level = s.level; prev_level_scene = s.scene; planner.stuck.reset(); touched.clear(); bumped.clear(); tried_experiments.clear()
+                no_plan_rounds = 0; reprobe_rounds = 0; resets_without_progress = 0; state = "PLAN"; continue
             if s.level > last_level:
                 # level transition procedure (spec §13)
                 novelty, novel_ids = level_novelty(prev_level_scene, s.scene)

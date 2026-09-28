@@ -295,11 +295,15 @@ def permute_on_click(trigger_role: str, mapping: dict) -> Effect:
                 hit = True; break
         if not hit:
             return scene
+        occupied = {(o.bbox[0], o.bbox[1]) for o in scene.objects}
         new = {}
         for o in scene.objects:
             key = (o.bbox[0], o.bbox[1])
             if key in mapping:
-                tr, tc = mapping[key]
+                dst = mapping[key]
+                if isinstance(dst, dict):        # conditional: {"near": dst_when_next_slot_occupied, "far": dst_when_free, "next": slot}
+                    dst = dst["near"] if dst.get("next") in occupied else dst.get("far", dst["near"])
+                tr, tc = dst
                 new[o.id] = o.moved(tr - o.bbox[0], tc - o.bbox[1])
         return _replace(scene, new)
     return effect

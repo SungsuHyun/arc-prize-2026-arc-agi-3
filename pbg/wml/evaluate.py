@@ -86,7 +86,7 @@ def _equal(pred, obs, ignore_ui: bool, t: Transition, model=None) -> bool:
     existence only (display elements may recolour/tick without being part of the mechanics)."""
     if not ignore_ui:
         return scene_equal(pred, obs)
-    strips = {r.id for r in obs.regions if r.kind_hint == "ui_strip"}
+    bands = [r.bbox for r in list(obs.regions) + list(pred.regions) if r.kind_hint == "ui_strip"]
     loose_ids: set[int] = set()
     if model is not None:
         try:
@@ -94,10 +94,13 @@ def _equal(pred, obs, ignore_ui: bool, t: Transition, model=None) -> bool:
             loose_ids = {i for i, r in roles.items() if r == "indicator"}
         except Exception:
             loose_ids = set()
-    if not strips and not loose_ids:
-        return scene_equal(pred, obs)
+
+    def in_band(o) -> bool:      # geometry, not region ids: region numbering can differ between the two scenes
+        r0, c0, r1, c1 = o.bbox
+        return any(b[0] <= r0 and b[1] <= c0 and r1 <= b[2] and c1 <= b[3] for b in bands)
+
     def strict(o):
-        return o.region not in strips and o.id not in loose_ids
+        return not in_band(o) and o.id not in loose_ids and o.area > 2    # 1-2 px marks/ticks are display elements
     a = sorted(o.identity() for o in pred.objects if strict(o)); b = sorted(o.identity() for o in obs.objects if strict(o))
     return a == b
 
