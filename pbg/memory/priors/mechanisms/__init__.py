@@ -282,6 +282,29 @@ def move_on_click(trigger_role: str, mover_role: str, dr: int, dc: int) -> Effec
     return effect
 
 
+def permute_on_click(trigger_role: str, mapping: dict) -> Effect:
+    """Clicking a `trigger_role` object moves every object whose top-left is a key of `mapping` to the mapped top-left
+    (a learned position permutation: track shifts with wrap-around, rotations, swaps). Objects elsewhere stay."""
+    def effect(scene: Scene, action: Action) -> Optional[Scene]:
+        if action.type != "CLICK":
+            return scene
+        hit = False
+        for o in _by_roles(scene, trigger_role):
+            r0, c0, r1, c1 = o.bbox
+            if r0 <= action.row < r1 and c0 <= action.col < c1 and o.mask[action.row - r0, action.col - c0]:
+                hit = True; break
+        if not hit:
+            return scene
+        new = {}
+        for o in scene.objects:
+            key = (o.bbox[0], o.bbox[1])
+            if key in mapping:
+                tr, tc = mapping[key]
+                new[o.id] = o.moved(tr - o.bbox[0], tc - o.bbox[1])
+        return _replace(scene, new)
+    return effect
+
+
 def set_flag_on_click(role: str, key: str = "selected") -> Effect:
     """Clicking a `role` object records its id in scene.aux[key] (selection state)."""
     def effect(scene: Scene, action: Action) -> Optional[Scene]:
@@ -577,7 +600,7 @@ def merge_touching(role: str) -> Effect:
 MECHANISMS: dict[str, Callable] = {f.__name__: f for f in (
     move_role, move_role_diagonal, rotate_role, teleport_role, slide_until_blocked,
     cancel_move_if_overlap, cancel_move_if_outside, cancel_move_if_off_floor, push_role, pull_role, gravity,
-    toggle_color, recolor_on_click, move_on_click, set_flag_on_click, move_selected_on_click, counter_step, shrink_strip,
+    toggle_color, recolor_on_click, move_on_click, permute_on_click, set_flag_on_click, move_selected_on_click, counter_step, shrink_strip,
     collect_on_overlap, remove_on_click, spawn_on_button, hazard_kills, split_on_button, merge_touching,
     key_opens_door, door_blocks_without_key, switch_toggles_role, color_match_pass, sequence_lock,
     lives_decrement_on_flag, highlight_selected, timer_tick, noop_for, unknown_for)}

@@ -32,15 +32,15 @@ def test_levelup_filter_keeps_true_goal():
     roles = h.model.with_roles
     G = instantiate_all(roles(ts[0].before))
     target = next(g for g in G if g.name == "all_removed(2)")
-    # fabricate a level-up transition whose after-scene has no red item
+    # fabricate a level-up transition: the level's last state has no red item left (the next level's board has items again)
     p = Perception()
-    before = roles(p.parse(frame(0, agent=(40, 36), items=((40, 40),)), None))
-    after = roles(p.parse(frame(1, agent=(40, 40), items=()), None))
+    before = roles(p.parse(frame(0, agent=(40, 36), items=()), None))
+    after = roles(p.parse(frame(1, agent=(30, 30), items=((40, 40),)), None))
     from pbg.core.types import Transition, Diff
     lv = Transition(before, Action.button(4), after, Diff(is_noop=False), "LEVEL_UP", [], "g:1:99", 1, 99)
     kept = filter_by_levelup(G + [target], ts + [lv])
     assert any(g.name == "all_removed(2)" for g in kept)
-    assert all(g.name != "sort_by(row,color)" or g.is_goal(after) for g in kept)
+    assert all(g.name != "sort_by(row,color)" or g.is_goal(before) for g in kept)
 
 
 def test_planner_reaches_collectible_and_stops_on_mismatch():

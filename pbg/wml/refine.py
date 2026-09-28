@@ -133,7 +133,27 @@ class WorldModelLab:
         msgs = world_model_prompt(signatures=sigs, current_code=current_code, violated_rules=violated, observations=obs, semantics_text=sem_text,
                                   scene_text=scene_text(scene), hidden_state_hint=self.hidden_state_suspected, level_note=level_note)
         log_json = [self._t_json(t) for t in log]
-        for k in range(K):
+        # K candidates are generated in parallel threads (each: one generation + at most one follow-up)
+        results: list[list[Hypothesis]] = [[] for _ in range(K)]
+        workers = [threading.Thread(target=self._one_candidate, args=(k, msgs, log, log_json, results), daemon=True) for k in range(K)]
+        for w in workers:
+            w.start()
+        for w in workers:
+            w.join()
+        for r in results:
+            out.extend(r)
+        return out
+
+    def _one_candidate(self, k: int, msgs: list[dict], log: list[Transition], log_json: list[dict], results: list) -> None:
+        out: list[Hypothesis] = []
+        try:
+            self._generate_candidate(k, msgs, log, log_json, out)
+        except Exception as e:
+            self.log(f"llm candidate {k} crashed: {e!r}")
+        results[k] = out
+
+    def _generate_candidate(self, k: int, msgs: list[dict], log: list[Transition], log_json: list[dict], out: list[Hypothesis]) -> None:
+        for _ in range(1):
             if self.llm.exhausted():
                 break
             try:
@@ -188,7 +208,6 @@ class WorldModelLab:
                 except Exception as e:
                     self.log(f"llm repair failed: {e!r}")
                     break
-        return out
 
     @staticmethod
     def _mismatch_lines(model, log: list[Transition], ids: list[str]) -> list[str]:

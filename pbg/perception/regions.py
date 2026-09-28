@@ -101,15 +101,17 @@ def find_regions(grid: np.ndarray, *, min_area_ratio: float = 0.05, ui_strip_max
     for s in stats:
         r0, c0, r1, c1 = s["bbox"]
         th, ln = min(r1 - r0, c1 - c0), max(r1 - r0, c1 - c0)
-        if th > ui_strip_max_thickness or ln < 12 or s["area"] < 6:
-            continue
         color = int(grid[s["rows"][0], s["cols"][0]])
         if color == global_bg:
+            continue
+        # anything lying entirely in the outermost row/column is a HUD element (counters that start at 1 px and grow)
+        outermost = (r1 - r0 == 1 and (r0 == 0 or r1 == h)) or (c1 - c0 == 1 and (c0 == 0 or c1 == w))
+        if not outermost and (th > ui_strip_max_thickness or ln < 12 or s["area"] < 6):
             continue
         line = grid[r0, c0:c1] if (c1 - c0) >= (r1 - r0) else grid[r0:r1, c0]
         at_edge = r0 <= 2 or c0 <= 2 or r1 >= h - 2 or c1 >= w - 2
         # periodic along the axis (tick marks), or a solid bar hugging a grid edge (gauge / timer)
-        if _is_periodic(line) or at_edge:
+        if outermost or _is_periodic(line) or at_edge:
             # a strip region spans the whole edge band so every piece of the gauge (bar, ticks, remainder) shares it
             if (c1 - c0) >= (r1 - r0):
                 bbox = (r0, 0, r1, w)

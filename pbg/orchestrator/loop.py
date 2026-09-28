@@ -155,7 +155,7 @@ class Orchestrator:
                             events.emit("HYPOTHESIZE", "HYPOTHESIZE", f"llm job started in background (round {wml.async_rounds}, log {len(s.transitions)})", budget_used=budget.used())
                 budget.llm_calls = wml.llm_calls + goal_inf.__dict__.get("llm_calls", 0)
                 roles_fn = (lambda sc, m=H[0].model: m.with_roles(sc)) if H and isinstance(H[0].model, RuleModel) else None
-                G = goal_inf.refine(s.transitions, G, self.memory.priors("goals"), s.level, s.scene, roles_fn=roles_fn)
+                G = goal_inf.refine(s.transitions, G, self.memory.priors("goals"), s.level, s.scene, roles_fn=roles_fn, model=H[0].model if H else None)
                 exp = None
                 if not budget.low() and budget.allows("experiment", level=s.level) and experiments_this_round < 6:
                     exp = wml.most_informative_action(H, s.scene, s.available_actions(), semantics=semantics, extra_clicks=planner.responsive,
@@ -296,7 +296,7 @@ def _mark_touched(touched: set, scene: Scene, H: list[Hypothesis]) -> None:
         return
     from ..goal.templates import _adjacent
     s = H[0].model.with_roles(scene)
-    for a in s.by_role("agent"):
+    for a in [o for o in s.objects if o.role and "agent" in o.role]:
         for o in s.objects:
             if o.id != a.id and (a.overlaps(o) or _adjacent(a, o)):
                 touched.add(o.identity())

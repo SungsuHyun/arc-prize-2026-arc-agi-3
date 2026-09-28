@@ -68,6 +68,15 @@ def build_model():
         Rule("noop_button", lambda s, a: a.type == "BUTTON" and a.id == 5, noop_for((5,))),
     ]
     return RuleModel(rules, role_fn, default="unknown")
+```
+# Hidden state example: clicking a board block selects it (a cursor appears), button 7 recolours the selected block.
+# State that is not visible as an object goes into scene.aux and is read back by later rules:
+```python
+    rules = [
+        Rule("select", lambda s, a: a.type == "CLICK", set_flag_on_click("piece", key="selected")),
+        Rule("recolour_selected", lambda s, a: a.type == "BUTTON" and a.id == 7, recolour_selected_effect),  # reads s.aux["selected"]
+        Rule("key_then_door", lambda s, a: a.type == "BUTTON", key_opens_door("agent", "key", "door", flag="has_key")),
+    ]
 ```"""
 
 
@@ -80,8 +89,22 @@ def core_sources() -> str:
     return "\n\n".join(parts)
 
 
+API_SUMMARY = '''
+# Data model (summary of core/types.py, core/contracts.py)
+Action: .type in {"BUTTON","CLICK","RESET"}; .id (BUTTON 1..7); .row/.col (CLICK, grid cells); .key -> "ACTION1".."CLICK"
+Region: .id "R0".. (re-numbered every frame), .bg_color, .bbox (r0,c0,r1,c1 exclusive), .kind_hint in {board,panel,ui_strip,unknown}, .area, .center
+Object: .id (tracking id), .color, .colors (tuple, multi-colour objects), .bbox, .mask (bbox-sized bool), .area, .shape_sig (translation-invariant hash),
+        .region (Region.id), .role (set by role_fn), .center, .height, .width; .moved(dr,dc) -> copy shifted; .recolored(c) -> copy; .overlaps(other) -> bool
+Scene: .regions, .objects, .grid_shape, .aux (dict: hidden state you may add; scene.aux["_before"] = pre-action scene inside effects);
+       .by_role(role) -> objects; .get(id); .region(id); .in_region(id); .copy(objects=..., aux=...); .render() -> grid (numpy int8)
+Rule(name, applies(scene, action)->bool, effect(scene, action)->Scene|None, confidence=0.5)
+RuleModel(rules, role_fn, default="unknown")   # predict() applies matching rules in order; None == UNKNOWN
+Prediction check: multiset of (color, bbox, shape_sig) of objects not in ui_strip regions and not role "indicator" must equal the real next frame.
+'''
+
+
 def system_prompt() -> str:
-    return CONTRACT + "\n\n# Reference: the data types and interfaces (verbatim)\n" + core_sources()
+    return CONTRACT + "\n" + API_SUMMARY
 
 
 def world_model_prompt(*, signatures: str, current_code: Optional[str], violated_rules: list[str], observations: list[str],

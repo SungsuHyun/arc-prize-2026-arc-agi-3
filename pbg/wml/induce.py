@@ -14,7 +14,7 @@ import numpy as np
 from ..core.contracts import Rule, RuleModel
 from ..core.types import Action, Scene, Transition
 from ..memory.priors.mechanisms import (cancel_move_if_off_floor, cancel_move_if_outside, cancel_move_if_overlap, collect_on_overlap,
-                                        move_on_click, move_role, noop_for, push_role, recolor_on_click, remove_on_click, unknown_for)
+                                        move_on_click, move_role, noop_for, permute_on_click, push_role, recolor_on_click, remove_on_click, unknown_for)
 from ..env.calibrate import object_under
 
 
@@ -231,7 +231,35 @@ def induce_click_hypotheses(log: list[Transition], semantics: dict, available: l
                     if ob is not None:
                         trig_movers.setdefault(key, Counter())[ob.color] += 1
     click_moves = {k: c.most_common(1)[0][0] for k, c in trig.items() if c.most_common(1)[0][1] >= 2}
-    if not any(eff.get("recolor") or eff.get("remove") for eff in effects.values()) and not click_moves:
+    # learned permutations: per trigger class, the top-left -> top-left mapping of every moved object, if consistent
+    votes: dict[tuple, dict] = {}
+    last_level = max(t.level for t in clicks)
+    for t in [x for x in clicks if x.level == last_level and not x.status_change]:   # level-specific positions; a level-up frame is the next board
+        oid = object_under(t.before, t.action.row, t.action.col)
+        o = t.before.get(oid) if oid is not None else None
+        if o is None or not t.diff.moved:
+            continue
+        key = (o.color, o.shape_sig, tuple(o.bbox)); ui = strip_ids(t)     # a permutation belongs to ONE trigger object
+        reshaped = {x[0] for x in t.diff.reshaped}
+        m = votes.setdefault(key, {})
+        for i, (dr, dc) in t.diff.moved:
+            ob = t.before.get(i)
+            if ob is None or i in ui or i == oid or i in reshaped:
+                continue
+            src = (ob.bbox[0], ob.bbox[1]); dst = (ob.bbox[0] + dr, ob.bbox[1] + dc)
+            m.setdefault(src, Counter())[dst] += 1
+    # majority vote per source position (tracking noise on small marks must not kill the whole permutation)
+    perms: dict[tuple, dict] = {}
+    for key, m in votes.items():
+        mapping = {}; agree = total = 0
+        for src, c in m.items():
+            dst, n = c.most_common(1)[0]
+            agree += n; total += sum(c.values())
+            if n >= 1:
+                mapping[src] = dst
+        if len(mapping) >= 2 and agree >= 0.6 * total:
+            perms[key] = mapping
+    if not any(eff.get("recolor") or eff.get("remove") for eff in effects.values()) and not click_moves and not perms:
         return []
     recolor_colors = {c for c, eff in effects.items() if eff.get("recolor") and eff["recolor"] >= max(eff.get("other", 0), 1)}
     remove_colors = {c for c, eff in effects.items() if eff.get("remove") and eff["remove"] >= max(eff.get("other", 0), 1)}
@@ -253,6 +281,7 @@ def induce_click_hypotheses(log: list[Transition], semantics: dict, available: l
 
     trigger_roles = {k: f"custom:trigger{i}" for i, k in enumerate(click_moves)}
     mover_colors = {k: {c for c, _ in trig_movers.get(k, Counter()).most_common(3)} for k in click_moves}
+    perm_boxes: dict = {k[2]: f"custom:trigger_at_{k[2][0]}_{k[2][1]}" for k in perms}
 
     def role_fn(scene: Scene) -> dict[int, str]:
         roles = {}
@@ -260,6 +289,8 @@ def induce_click_hypotheses(log: list[Transition], semantics: dict, available: l
         for o in scene.objects:
             if o.region in strips:
                 roles[o.id] = strips_role
+            elif tuple(o.bbox) in perm_boxes:
+                roles[o.id] = perm_boxes[tuple(o.bbox)]
             elif (o.color, o.shape_sig) in trigger_roles:
                 roles[o.id] = trigger_roles[(o.color, o.shape_sig)]
             elif any(o.color in mc for mc in mover_colors.values()):
@@ -273,8 +304,16 @@ def induce_click_hypotheses(log: list[Transition], semantics: dict, available: l
         return roles
 
     rules = []
+    perm_rules = []
+    for n, (k, m) in enumerate(perms.items()):
+        role = perm_boxes[k[2]]
+        perm_rules.append(Rule(f"click_perm_{n}", lambda s, a: a.type == "CLICK", permute_on_click(role, dict(m)), source="induced"))
+    perm_classes = {(k[0], k[1]) for k in perms}
     for k, (dr, dc) in click_moves.items():
+        if k in perm_classes:
+            continue      # permutations explain these triggers better than a uniform shift
         rules.append(Rule(f"click_move_{trigger_roles[k]}", lambda s, a: a.type == "CLICK", move_on_click(trigger_roles[k], "custom:moved", dr, dc), source="induced"))
+    rules = perm_rules + rules
     if cycle and len(cycle) >= 2:
         rules.append(Rule("click_recolor", lambda s, a: a.type == "CLICK", recolor_on_click("custom:toggle", tuple(cycle)), source="induced"))
     if remove_colors:

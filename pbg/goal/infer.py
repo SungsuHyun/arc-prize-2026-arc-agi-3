@@ -16,7 +16,7 @@ class GoalInference:
         self.demoted: dict[str, float] = {}
 
     def refine(self, log: list[Transition], current: list[GoalInstance], priors: Optional[dict], level: int, scene: Scene,
-               *, roles_fn=None, ctx: Optional[dict] = None) -> list[GoalInstance]:
+               *, roles_fn=None, ctx: Optional[dict] = None, model=None) -> list[GoalInstance]:
         usage = (priors or {}).get("usage_stats") if priors else None
         s = roles_fn(scene) if roles_fn else scene
         fresh = instantiate_all(s, ctx, usage)
@@ -36,7 +36,7 @@ class GoalInference:
         if not G and self.llm is not None:
             G = self.propose_with_llm(s, log)
         before = list(G)
-        G = filter_by_levelup(G, log, roles_fn=roles_fn)
+        G = filter_by_levelup(G, log, roles_fn=roles_fn, model=model)
         if not G and before:
             # the level-up filter removed every candidate (true goal not in the library yet): keep them at half confidence
             for g in before:
@@ -81,8 +81,13 @@ class GoalInference:
         goal = self.sandbox.load_goal(code)
         if goal is None:
             return []
-        goal.origin = "llm"; goal.code = code
-        return [goal] if not goal.is_goal(scene) else []
+        goal.origin = "llm"; goal.code = code; goal.confidence = 0.3      # a proposal, ranked below template goals until the level-up filter confirms it
+        if goal.is_goal(scene):
+            return []
+        p = goal.progress(scene)
+        if not (0.0 <= p < 1.0):
+            return []
+        return [goal]
 
     @staticmethod
     def _summ(t: Transition) -> str:

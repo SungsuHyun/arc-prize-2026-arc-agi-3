@@ -52,6 +52,11 @@ def _roles(scene: Scene) -> set[str]:
     return {o.role for o in scene.objects if o.role and o.role != "unknown"}
 
 
+def _agents(s: Scene) -> list:
+    """Objects whose role is 'agent' or a custom variant containing 'agent' (agent_left, custom:agent2 ...)."""
+    return [o for o in s.objects if o.role and "agent" in o.role]
+
+
 def _shape_multiset(scene: Scene, region: str) -> Counter:
     return Counter((o.color, o.shape_sig) for o in scene.in_region(region))
 
@@ -69,17 +74,17 @@ def _targets(s: Scene, b: str) -> list:
 def t_reach(scene: Scene, ctx: dict) -> list[GoalInstance]:
     out = []
     roles = _roles(scene)
-    if "agent" not in roles:
+    if not _agents(scene):
         return out
     strips = {r.id for r in scene.regions if r.kind_hint == "ui_strip"}
-    targets = sorted(roles - {"agent", "wall", "decoration", "indicator"})
+    targets = sorted(r for r in roles - {"wall", "decoration", "indicator"} if "agent" not in r)
     targets += sorted({f"color:{o.color}" for o in scene.objects if o.role in (None, "unknown") and o.region not in strips})
     a = "agent"
     for b in targets:
         def is_goal(s, b=b):
-            return any(x.overlaps(y) or _adjacent(x, y) for x in s.by_role(a) for y in _targets(s, b))
+            return any(x.overlaps(y) or _adjacent(x, y) for x in _agents(s) for y in _targets(s, b))
         def progress(s, b=b):
-            xs, ys = s.by_role(a), _targets(s, b)
+            xs, ys = _agents(s), _targets(s, b)
             if not xs or not ys:
                 return 0.0
             d = min(_dist(x.center, y.center) for x in xs for y in ys)
@@ -274,20 +279,192 @@ def t_sequence(scene: Scene, ctx: dict) -> list[GoalInstance]:
     return [GoalInstance(f"sequence({len(order)})", "sequence", {"actions": list(order)}, is_goal, progress)]
 
 
+def _frames(scene: Scene) -> list:
+    """Frame-like objects: hollow (mask has an interior hole) and larger than 3x3."""
+    out = []
+    for o in scene.objects:
+        if o.height >= 3 and o.width >= 3 and o.area < o.height * o.width * 0.8:
+            inner = o.mask[1:-1, 1:-1]
+            if inner.size and not inner.all():
+                out.append(o)
+    return out
+
+
+def t_inside_frame(scene: Scene, ctx: dict) -> list[GoalInstance]:
+    """Every piece of colour c sits inside a frame (a hollow object whose bbox contains the piece). Pieces = objects of
+    a colour that also has at least one frame with a matching colour or a frame of any colour."""
+    frames = _frames(scene)
+    if not frames:
+        return []
+    strips = {r.id for r in scene.regions if r.kind_hint == "ui_strip"}
+    frame_ids = {f.id for f in frames}
+    pieces_by_color: dict = {}
+    for o in scene.objects:
+        if o.id in frame_ids or o.region in strips or o.area < 2 or o.height >= 12:
+            continue
+        pieces_by_color.setdefault(o.color, []).append(o)
+    out = []
+    frame_colors = {f.color for f in frames}
+    for color, pieces in pieces_by_color.items():
+        if len(pieces) > 16:
+            continue
+        def inside(p, f):
+            return f.bbox[0] <= p.bbox[0] and f.bbox[1] <= p.bbox[1] and p.bbox[2] <= f.bbox[2] and p.bbox[3] <= f.bbox[3]
+        def is_goal(s, color=color):
+            fs = _frames(s); ps = [o for o in s.objects if o.color == color and o.id not in {f.id for f in fs} and o.height < 12]
+            return bool(ps) and all(any(inside(p, f) for f in fs) for p in ps)
+        def progress(s, color=color):
+            fs = _frames(s); ps = [o for o in s.objects if o.color == color and o.id not in {f.id for f in fs} and o.height < 12]
+            if not ps or not fs:
+                return 0.0
+            done = sum(1 for p in ps if any(inside(p, f) for f in fs))
+            near = sum(min(_dist(p.center, f.center) for f in fs) for p in ps if not any(inside(p, f) for f in fs))
+            return (done + max(0.0, 1.0 - near / (_max_dist(s) * max(1, len(ps) - done))) * 0.5) / len(ps)
+        clue = 0.15 if color in frame_colors else 0.0
+        out.append(GoalInstance(f"inside_frame({color})", "inside_frame", {"color": color}, is_goal, progress, clue=clue))
+    return out
+
+
+def _mark_groups(scene: Scene) -> dict:
+    """(colour, size) -> {(top, left)} of small square marks (1x1 .. 3x3) that occur at least four times."""
+    strips = {r.id for r in scene.regions if r.kind_hint == "ui_strip"}
+    marks: dict = {}
+    for o in scene.objects:
+        if o.height == o.width and o.height <= 3 and o.area == o.height * o.width and o.region not in strips:
+            marks.setdefault((o.color, o.height), set()).add((o.bbox[0], o.bbox[1]))
+    return {k: v for k, v in marks.items() if len(v) >= 4}
+
+
+def _marked_slots(scene: Scene) -> list[tuple[int, tuple[int, int, int, int]]]:
+    """Slots marked by four small square corner marks of one colour: returns [(colour, interior bbox)]."""
+    strips = {r.id for r in scene.regions if r.kind_hint == "ui_strip"}
+    marks = _mark_groups(scene)
+    mark_keys = set(marks)
+    piece_dims = {(o.height, o.width) for o in scene.objects if 2 <= o.area <= 64 and o.region not in strips and (o.color, o.height) not in mark_keys}
+    slots = []
+    for (color, k), pts in marks.items():
+        if len(pts) < 4 or len(pts) > 64:
+            continue
+        rows = sorted({r for r, _ in pts}); cols = sorted({c for _, c in pts})
+        for i, r0 in enumerate(rows):
+            for r1 in rows[i + 1:]:
+                if r1 - r0 < k + 1 or r1 - r0 > 16:
+                    continue
+                for j, c0 in enumerate(cols):
+                    for c1 in cols[j + 1:]:
+                        if c1 - c0 < k + 1 or c1 - c0 > 16:
+                            continue
+                        if {(r0, c0), (r0, c1), (r1, c0), (r1, c1)} <= pts:
+                            inner = (r0 + k, c0 + k, r1, c1)
+                            if (inner[2] - inner[0], inner[3] - inner[1]) in piece_dims:
+                                slots.append((color, inner))   # interior sized like a piece
+    return slots
+
+
+def t_fill_marked_slots(scene: Scene, ctx: dict) -> list[GoalInstance]:
+    """Every corner-marked slot holds a piece (of the marker colour when such pieces exist) — lp85-style targets."""
+    slots = _marked_slots(scene)
+    if not slots:
+        return []
+    mark_sizes = set()
+    for (c, k), pts in ((k_, v) for k_, v in _mark_groups(scene).items()):
+        mark_sizes.add((c, k))
+    mark_keys = mark_sizes
+    def pieces(s):
+        strips = {r.id for r in s.regions if r.kind_hint == "ui_strip"}
+        return [o for o in s.objects if 2 <= o.area <= 64 and o.region not in strips
+                and not (o.height == o.width and o.height <= 3 and (o.color, o.height) in mark_keys)]
+    def inside(p, b):
+        return b[0] <= p.bbox[0] and b[1] <= p.bbox[1] and p.bbox[2] <= b[2] and p.bbox[3] <= b[3]
+    colors = {c for c, _ in slots}
+    piece_colors = {o.color for o in pieces(scene)}
+    by_color = bool(colors & piece_colors)
+    def filled(s, slot):
+        color, b = slot
+        return any(inside(p, b) and (p.color == color or not by_color) for p in pieces(s))
+    def is_goal(s):
+        sl = _marked_slots(s)
+        return bool(sl) and all(filled(s, x) for x in sl)
+    def progress(s):
+        sl = _marked_slots(s)
+        if not sl:
+            return 0.0
+        done = sum(1 for x in sl if filled(s, x))
+        ps = pieces(s); near = 0.0
+        for color, b in sl:
+            if filled(s, (color, b)):
+                continue
+            cands = [p for p in ps if p.color == color] if by_color else ps
+            if cands:
+                cr, cc = (b[0] + b[2] - 1) // 2, (b[1] + b[3] - 1) // 2
+                near += 1.0 - min(_dist(p.center, (cr, cc)) for p in cands) / _max_dist(s)
+        return (done + 0.5 * near) / len(sl)
+    return [GoalInstance("fill_marked_slots", "fill_marked_slots", {"slots": len(slots), "by_color": by_color}, is_goal, progress, clue=0.2)]
+
+
+def t_same_cell(scene: Scene, ctx: dict) -> list[GoalInstance]:
+    """Two agent-like objects (or two objects of one colour that both move) end on the same relative position."""
+    ag = _agents(scene)
+    if len(ag) != 2:
+        return []
+    def rel(o, s):
+        reg = s.region(o.region)
+        r0, c0 = (reg.bbox[0], reg.bbox[1]) if reg else (0, 0)
+        return (o.bbox[0] - r0, o.bbox[1] - c0)
+    def is_goal(s):
+        a = _agents(s)
+        return len(a) == 2 and (a[0].overlaps(a[1]) or rel(a[0], s) == rel(a[1], s))
+    def progress(s):
+        a = _agents(s)
+        if len(a) != 2:
+            return 0.0
+        d = min(_dist(a[0].center, a[1].center), _dist(rel(a[0], s), rel(a[1], s)))
+        return 1.0 - d / _max_dist(s)
+    return [GoalInstance("same_cell(agents)", "same_cell", {}, is_goal, progress, clue=0.1)]
+
+
+def _layout(scene: Scene, rid: str) -> frozenset:
+    """Colour layout of a region's objects relative to the region origin (for pattern matching between regions)."""
+    reg = scene.region(rid)
+    if reg is None:
+        return frozenset()
+    r0, c0 = reg.bbox[0], reg.bbox[1]
+    return frozenset((o.color, o.bbox[0] - r0, o.bbox[1] - c0, o.shape_sig) for o in scene.in_region(rid))
+
+
+def t_pattern_match(scene: Scene, ctx: dict) -> list[GoalInstance]:
+    """The objects of one region reproduce the colour/shape layout of another region (board copies the panel)."""
+    regs = [r for r in scene.regions if r.kind_hint in ("board", "panel") and r.id != "R0"]
+    out = []
+    for src in regs:
+        for dst in regs:
+            if src.id == dst.id or not scene.in_region(src.id) or not scene.in_region(dst.id):
+                continue
+            def is_goal(s, a=src.id, b=dst.id):
+                la, lb = _layout(s, a), _layout(s, b)
+                return bool(lb) and la == lb
+            def progress(s, a=src.id, b=dst.id):
+                la, lb = _layout(s, a), _layout(s, b)
+                return len(la & lb) / len(lb) if lb else 0.0
+            same_size = abs(src.area - dst.area) < 0.2 * max(src.area, dst.area)
+            out.append(GoalInstance(f"pattern_match({src.id},{dst.id})", "pattern_match", {"src": src.id, "dst": dst.id}, is_goal, progress, clue=0.15 if same_size else 0.0))
+    return out
+
+
 def t_explore(scene: Scene, ctx: dict) -> list[GoalInstance]:
     """Curiosity fallback (not a win condition): bring the agent next to an object it has not touched yet. `ctx['touched']`
     is the set of object identities already reached. Used by the orchestrator when no real goal yields a plan."""
-    if "agent" not in _roles(scene):
+    if not _agents(scene):
         return []
     touched = set(ctx.get("touched", ()))
     def targets(s):
-        return [o for o in s.objects if o.role not in ("agent", "wall", "indicator", "decoration") and o.identity() not in touched
+        return [o for o in s.objects if not (o.role and "agent" in o.role) and o.role not in ("wall", "indicator", "decoration") and o.identity() not in touched
                 and s.region(o.region) is not None and s.region(o.region).kind_hint != "ui_strip"]
     def is_goal(s):
-        ag = s.by_role("agent")
+        ag = _agents(s)
         return any(a.overlaps(o) or _adjacent(a, o) for a in ag for o in targets(s))
     def progress(s):
-        ag, ts = s.by_role("agent"), targets(s)
+        ag, ts = _agents(s), targets(s)
         if not ag or not ts:
             return 0.0
         return 1.0 - min(_dist(a.center, o.center) for a in ag for o in ts) / _max_dist(s)
@@ -302,13 +479,13 @@ def _adjacent(a, b) -> bool:
 
 
 # confidence tiers: role-based templates are more specific than colour/geometry ones (spec §9 usage-stats prior 0.5)
-BASE_CONFIDENCE = {"reach": 0.5, "all_collected": 0.5, "match_shapes": 0.45, "enclose": 0.4, "align": 0.35, "all_removed": 0.3,
-                   "fill_region": 0.3, "count_equals": 0.2, "sort_by": 0.2, "sequence": 0.3, "explore": 0.0}
+BASE_CONFIDENCE = {"reach": 0.5, "all_collected": 0.5, "inside_frame": 0.5, "fill_marked_slots": 0.5, "same_cell": 0.5, "pattern_match": 0.45, "match_shapes": 0.45,
+                   "enclose": 0.4, "align": 0.35, "all_removed": 0.3, "fill_region": 0.3, "count_equals": 0.2, "sort_by": 0.2, "sequence": 0.3, "explore": 0.0}
 
 TEMPLATES: dict[str, Callable[[Scene, dict], list[GoalInstance]]] = {
     "reach": t_reach, "match_shapes": t_match_shapes, "all_removed": t_all_removed, "all_collected": t_all_collected,
     "fill_region": t_fill_region, "sort_by": t_sort_by, "count_equals": t_count_equals, "align": t_align, "enclose": t_enclose,
-    "sequence": t_sequence, "explore": t_explore}
+    "sequence": t_sequence, "inside_frame": t_inside_frame, "fill_marked_slots": t_fill_marked_slots, "same_cell": t_same_cell, "pattern_match": t_pattern_match, "explore": t_explore}
 
 
 def instantiate_all(scene: Scene, ctx: Optional[dict] = None, usage_stats: Optional[dict] = None) -> list[GoalInstance]:
