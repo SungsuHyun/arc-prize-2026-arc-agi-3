@@ -252,3 +252,4 @@ check_rule(재생 검증)·define_goal(하네스가 평가·기각하는 술어)
 | 2 | 5f90ea4 (inert 그룹·계획 자동 실행·거부 라벨 안내·위험 회피) | 0.746 | 3/25 (tn36 10액션, lp85 L2, vc33 L2) | 2/25 | budget 7, stuck_repeating 6, no_win_hypothesis 4, hypotheses_refuted 4 |
 
 plans_ignored와 game_over_loop는 줄었고 stuck_repeating·hypotheses_refuted가 남는다. 1회차씩이라 차이는 잡음 범위 안이다.
+| 매트릭스: 선택 모드, INIT thinking 없음 | 5f90ea4 | **1.061** | 3/25 (lp85 L3 16.7, vc33 L2 9.4 — L1 6액션, r11l L1 7액션) | 2/25 | budget 9, stuck_repeating 6, no_win_hypothesis 4 |
