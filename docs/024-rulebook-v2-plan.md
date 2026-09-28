@@ -253,6 +253,27 @@ check_rule(재생 검증)·define_goal(하네스가 평가·기각하는 술어)
 
 plans_ignored와 game_over_loop는 줄었고 stuck_repeating·hypotheses_refuted가 남는다. 1회차씩이라 차이는 잡음 범위 안이다.
 | 매트릭스: 선택 모드, INIT thinking 없음 | 5f90ea4 | **1.061** | 3/25 (lp85 L3 16.7, vc33 L2 9.4 — L1 6액션, r11l L1 7액션) | 2/25 | budget 9, stuck_repeating 6, no_win_hypothesis 4 |
+| 4 | fa76dcb + INIT thinking 없음 | 0.94 | 4/25 (ar25 2.78, tn36, lp85 L2, vc33 L2) | 2/25 | budget 7, predictor_blind 7, stuck_repeating 4 |
+
+INIT thinking 없는 선택 모드가 두 번(1.06, 0.94) 모두 thinking 있는 회차(0.67–0.77)보다 높고 빠르다 → 로컬 기본값도 INIT thinking 없음으로(a022953).
+남은 상위 실패는 predictor_blind(효과 가족 밖, 7게임)와 stuck_repeating(4)이다.
+
+**5회차 준비 — predictor_blind·stuck_repeating 대응(2c89afe)**. 4회차 로그에서 본 것:
+- s5i5: 같은 색 버튼 두 개가 같은 색 물체를 **키우거나 줄인다**(11–12셀). 오프셋 모델·버튼 순열 모델 둘 다 2회 틀리고 침묵("effect model was wrong 2x").
+- sb26: SPACE가 색 0 물체를 오른쪽으로 8칸 옮기고 색 2 막대를 1px 줄인다(21셀) — 키 효과는 이동·noop·게이지 외에는 모델이 없었다.
+- cd82: 키가 "1x 무효, 6x 보드 변경"으로 조건부 → unknown만 반복.
+- su15: ACTION7을 98회 눌렀다. 모델은 "아무 일도 안 일어난다"를 알면서 눌렀고(R2 확인 85회), 단조 반복 거부는 **대안 후보가 모두 tested**라 발동하지 않았다.
+
+조치:
+1. **효과 요약 예측**(`clicks.effect_summary`): 전이를 색별 (커짐/작아짐, 지배 변위)로 요약하고 버튼 bbox·(색, 영역)·키 이름별로 집계.
+   같은 요약이 2회 이상·60% 이상이면 "colour 14 grows (3/3 times so far)"로 예측(kind `effects`, 색 집합·부호·변위 ±1로 검증).
+   오프셋·마커·버튼 모델이 답이 없을 때만 쓰고, 마커 게임(클릭 위치가 결과를 정함)과 지지 2회짜리 이동 요약은 제외(r11l에서 12회 오탐 → 제외 후 0).
+   모델 없는 s5i5가 이 예측만으로 L1을 통과했다(155액션).
+2. **전색 이동 규칙**: 색 k 물체 **전부**가 같은 (dr, dc)로 움직이는 클릭. 컨베이어 버튼(트랙 위 물체만 이동)은 제외해야 했다(lp85 회귀 2건 → 0).
+3. 물체 2개 이상을 옮기는 **키**를 버튼처럼 칸 순열로 학습(`add_key_press`).
+4. 조건부 키가 5회 이상 무효이고 무효가 유효의 4배 이상이면 **noop 예측**(반복 거부 대상이 됨).
+5. 단조 반복 거부의 대안이 없으면 최근 12결정에 없던 후보, 그것도 없으면 가장 덜 쓴 후보로 대체.
+회귀(재생 평가 tn36·lp85·r11l): ok 183 / mismatch 3 — 변화 없음.
 
 ### 11.4 리더보드: v8 = **0.10** (2026-09-28)
 
@@ -280,7 +301,3 @@ plans_ignored와 game_over_loop는 줄었고 stuck_repeating·hypotheses_refuted
   lp85 L1뿐). 처리량 약 2배. → v11 = 같은 코드의 제출용 빌드, 2026-09-29 00:00 UTC 할당량에 자동 제출 예약.
 - 캐글 v12(압축 프롬프트 + "then" 배치, 제출용): 스모크 3.53 — tn36 L1(70액션, 결정 42회, 배치 후속 28), lp85 L2(104액션, 결정 47회, 배치 후속 53).
   **2026-09-29 00:00 UTC 자동 제출 예약**(v8의 0.10과 비교해 처리량 개선의 효과를 잰다).
-| 4 | fa76dcb + INIT thinking 없음 | 0.94 | 4/25 (ar25 2.78, tn36, lp85 L2, vc33 L2) | 2/25 | budget 7, predictor_blind 7, stuck_repeating 4 |
-
-INIT thinking 없는 선택 모드가 두 번(1.06, 0.94) 모두 thinking 있는 회차(0.67–0.77)보다 높고 빠르다 → 로컬 기본값도 INIT thinking 없음으로.
-남은 상위 실패는 predictor_blind(효과 가족 밖, 7게임)와 stuck_repeating(4)이다.
