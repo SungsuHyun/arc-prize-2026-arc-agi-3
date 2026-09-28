@@ -1,0 +1,125 @@
+# 027. pbg — SW 개발 명세서 기반 자율 추론 시스템 구현
+
+- **날짜**: 2026-09-28
+- **관련 파일/커밋**: `pbg/` (72개 .py, 약 5,700줄), `Makefile` (pbg-* 타깃), `.github/workflows/pbg-ci.yml`, 커밋 1d1ff64
+- **명세**: claude.ai 문서 "픽셀 보드 게임 자율 추론 시스템 — SW 개발 명세서" (19절)
+
+## 목적
+
+사용자가 작성한 SW 개발 명세서를 그대로 구현한다. 명세의 핵심: LLM은 가설·목표 코드 **생성**만 하고 **판정은 코드**가
+한다(로그 전체 검증), 지식은 실행 가능한 코드로 저장, LLM 호출은 이벤트(예측 오차·탐색 완료·정체)에서만, 규칙은 객체 ID가
+아니라 **역할**로 표현, 복수 가설을 신뢰도와 함께 유지. 기존 `rulebook/`·`arcnav/` 라인과 독립된 새 패키지로 만든다.
+
+## 방법
+
+### 구조 (명세 §19 → `pbg/`)
+
+| 명세 모듈 | 코드 | 비고 |
+|---|---|---|
+| §4 데이터 모델·계약 | `core/types.py`, `core/contracts.py`, `core/budget.py`, `core/events.py` | Action/Frame/Region/Object/Scene/Diff/Transition, WorldModel/Rule/Goal/Hypothesis, `RuleModel`(규칙 순차 적용), `scene_equal` |
+| §5 Env Wrapper | `env/wrapper.py`(ArcadeEnv), `env/replay.py`(ReplayEnv), `env/calibrate.py` | 다중 프레임 안정 판정, 결정성 점수, raw.jsonl 기록, step은 예외를 던지지 않음 |
+| §6 Perception | `perception/{regions,segment,track,diff,summarize,render}.py` | 영역 분할·4연결 컴포넌트·헝가리안 추적·병합 확정(3회 공동 이동)·Diff·한 줄 요약·PNG |
+| §7 Probe | `probe/protocol.py`, `probe/semantics.py` | 초기/국소/재탐색(walk) 프로토콜, MOVE/TOGGLE/SPAWN/REMOVE/SELECT/NOOP/UNKNOWN 분류 |
+| §8 World Model Lab | `wml/{refine,evaluate,sandbox,sandbox_worker,experiment,context,induce}.py`, `wml/prompts/` | 로그 전체 검증, 승격 조건, 규칙별 confidence, 정보이득 실험, 숨은 상태 감지, 서브프로세스 샌드박스(CPU 2초·256MB·정적 검사) |
+| §9 Goal Inference | `goal/templates/`, `goal/filter.py`, `goal/infer.py` | 템플릿 10종 + explore(탐색 보조), 레벨업 역추론 필터, 신뢰도, LLM 템플릿 제안 |
+| §10 Planner | `planner/{astar,beam,mcts,execute,stuck,common}.py` | 다중 가설 공통 접두사, 실행 감시(불일치 즉시 중단), 정체 감지기 |
+| §11 Memory | `memory/store.py`, `memory/priors/mechanisms/`(34개), `memory/promote.py` | episodic/semantic/priors 3층, usage_stats, 2게임 이상 재사용 시 프라이어 승격 |
+| §12 Orchestrator | `orchestrator/{loop,session,states,transfer}.py` | PROBE→HYPOTHESIZE→PLAN→EXECUTE 상태 기계, budget.yaml 예산 정책, events.jsonl |
+| §13 전이 | `orchestrator/transfer.py` | 레벨 신규성 점수, 구조 벡터 코사인 유사도로 유사 게임 모델 이식(confidence 0.3) |
+| §14 LLM | `llm/gateway.py`, `llm/cache.py`, `llm/llm.yaml` | 벤더 중립 OpenAI 호환, 등급, 타임아웃, 캐시, 비용 계측, 컨텍스트 선별(`wml/context.py`) |
+| §16 평가 | `harness/{online_runner,replay_runner,scene_at,attribution,metrics}.py`, `data/holdout.txt` | 리플레이 하네스, 병목 귀속, 홀드아웃 분리 |
+| §13 린트, §5 로그 수집 | `tools/{lint_no_game_id,collect_human_log,import_run_logs}.py` | CI 린트, 터미널 사람 플레이 기록, 이전 rulebook 실행 기록을 raw.jsonl로 재실행 |
+| 테스트 | `tests/unit/`(26), `tests/integration/`(2) | 합성 보드 + 오프라인 엔진 |
+
+### 명령
+
+```bash
+make pbg GAME=ls20,tn36 MINUTES=5 NOLLM=1 FRESH=1     # 온라인 실행 (experiments/pbg/results/run-*.json)
+make pbg GAME=ls20 MINUTES=8                          # 로컬 vLLM(:1234) 사용
+make pbg-replay LOG=pbg/data/human_logs/agent/ls20/raw.jsonl [LLM=1]   # 로그 위 모듈 파이프라인
+make pbg-import-logs RUN=20260928-030547-16108        # rulebook 실행 기록 → 리플레이 로그
+make pbg-test                                         # 린트 + 28 테스트
+make pbg-metrics RUN=experiments/pbg/results/run-....json
+```
+
+### 명세에서 벗어나거나 보탠 결정
+
+- **결정론적 가설 유도(`wml/induce.py`)를 LLM 앞에 둔다.** 명세는 후보를 LLM이 만들지만, 프라이어 라이브러리와 ActionSemantics만으로
+  이동·벽·바닥·수집·밀기, 클릭 재색칠/제거/이동 규칙을 조합해 후보를 만들고 같은 검증기로 채점한다. LLM 없이도 동작하는
+  기준선이 생기고, 실험 선택(정보이득)에 필요한 복수 가설이 확보된다.
+- **평가에서 ui_strip 객체와 모델이 `indicator`로 지정한 객체는 무시**한다(§8 비교 기준의 실용적 완화). 게이지·카운터가 매 액션마다
+  바뀌어 모든 예측을 오답으로 만들기 때문. 카운터는 목표 템플릿(count_equals)에서만 쓴다.
+- **Perception 안정화**: 전역 배경 = 그리드 테두리의 최빈색(보드 색이 더 많아도 프레임 색이 배경), 영역은 이전 Scene에서
+  이어받아 레벨 내에서 축소되지 않음(에이전트가 배경 컴포넌트를 쪼개는 문제), ui_strip은 가장자리 전체 띠, 병합된 다색
+  객체는 부품 단위로 추적하고 병합 확정 시 과거 Scene을 재적합(§15 "로그의 과거 Scene도 재파싱").
+- **NOOP 판정은 서로 다른 두 상태에서 관측돼야** 한다(한 번 막혔던 방향이 영구 no-op이 되는 것 방지). 초기 프로토콜의 2단계는
+  모든 버튼을 다시 누른다.
+- **explore 목표**: 실제 목표로 계획이 없고 모델이 미검증일 때, 아직 닿지 않은 객체로 가는 계획을 실행해 증거를 모은다(§10의
+  "모델 오류 가능성 → 실험" 분기의 구체화). 재탐색 예산 소진 시 RESET 후 재탐색 예산을 다시 부여하고 3회까지 반복.
+- **샌드박스**: 검증은 rlimit 서브프로세스, 검증 통과 코드만 프로세스 내(제한 builtins)에 적재해 Planner가 predict()를 수천 번
+  호출할 수 있게 함. 클릭 캘리브레이션은 엔진 API가 셀 좌표를 받으므로 계약 확인으로 대체하고, 런타임 오정렬 감시기를 둠.
+- **LLM 등급 설정**: 로컬 Qwen3.6-27B는 thinking ON이면 6,000 토큰을 전부 추론에 쓰고 빈 응답을 돌려줌(164초) → 기본 thinking OFF,
+  max_tokens 5,000, 타임아웃 300초(명세 60초는 원격 고성능 모델 기준). 빈 응답은 캐시하지 않음. 프롬프트에 worked example과
+  "코드만, 긴 주석 금지" 조항 추가. 점수가 1.0 미만인 후보에는 예측 vs 관측 불일치를 돌려주는 critique 라운드 1회.
+
+## 결과
+
+### 모듈 단위 (리플레이 하네스, `pbg-import-logs`로 만든 6게임 로그)
+
+| 항목 | 값 | 명세 기준 |
+|---|---|---|
+| parse+diff (64×64) | 평균 3 ms, 최대 8 ms(tn36 47객체) | 10 ms 이하 ✓ |
+| 추적 ID 유지율 | ls20 1.00, tn36 1.00, lp85 0.99 | 98% 이상 ✓ |
+| ls20 유도 모델 score (78전이 로그) | 0.64 (열쇠·문 상호작용 미설명) | — |
+| ls20 초기 프로브(8액션) 후 유도 모델 score | 1.00, 승격 조건(20전이)은 미달 | — |
+| tn36 클릭 유도 모델 score | 0.51 (레벨 1 제거, 레벨 2 재색칠 혼재) | — |
+| LLM 후보(ls20, 12회 호출, 282초) | 최고 0.51 (유도 0.64보다 낮음) | 5회 이내 1.0 ✗ |
+
+### 온라인 스모크 (오프라인 엔진, LLM 없음, 4~5분/게임)
+
+| 게임 | 레벨 | 액션 | 점수 | 비고 |
+|---|---|---|---|---|
+| tn36 | 1/7 | 17 (레벨 1) | 3.57 | 클릭 모델 score 1.0 → 4클릭 계획 실행 → 레벨 클리어 |
+| ls20 | 0/7 | 287 | 0 | 이동 모델 1.0, reach/explore 계획은 실행되나 열쇠→문 절차를 목표 템플릿이 표현 못 함 |
+| lp85 | 0/8 | 116 | 0 | 클릭이 행을 순환 이동시키는 규칙(click_move) 0.92, match_shapes 계획 탐색 시간 초과 |
+
+20개 개발 게임(홀드아웃 5개 제외) 4분 기준선은 아래 표(실행 후 갱신).
+
+| 게임 | 레벨 | 액션 | 점수 | 종료 | 최상위 가설(score) |
+|---|---|---|---|---|---|
+| ar25 | 0/8 | 22 | 0.00 | timeout | induced:move+walls+floor+collect+push (0.273) |
+| bp35 | 0/9 | 32 | 0.00 | GAME_OVER | induced:move+walls+floor+collect+push (0.056) |
+| cd82 | 0/6 | 100 | 0.00 | GAME_OVER | induced:move+walls+collect (0.303) |
+| cn04 | 0/6 | 75 | 0.00 | GAME_OVER | induced:move+walls+floor+collect+push (0.108) |
+| dc22 | 0/6 | 116 | 0.00 | timeout | induced:move+walls+floor+collect+push (0.0) |
+| ft09 | 0/6 | 64 | 0.00 | timeout | induced:click (0.547) |
+| g50t | 0/7 | 73 | 0.00 | timeout | induced:move+walls+floor+collect+push (0.082) |
+| ka59 | 0/7 | 74 | 0.00 | timeout | induced:move+walls+floor+collect+push (0.662) |
+| lf52 | 0/10 | 68 | 0.00 | GAME_OVER | - |
+| lp85 | 0/8 | 198 | 0.00 | timeout | induced:click (0.939) |
+| ls20 | 0/7 | 133 | 0.00 | GAME_OVER | induced:move+walls+floor+collect+push (0.818) |
+| m0r0 | 0/6 | 17 | 0.00 | timeout | induced:move+walls+floor+collect+push (0.176) |
+| r11l | 0/6 | 60 | 0.00 | GAME_OVER | induced:click (0.475) |
+| re86 | 0/8 | 20 | 0.00 | timeout | induced:move+walls+floor+collect+push (0.2) |
+| s5i5 | 0/8 | 50 | 0.00 | GAME_OVER | induced:click (0.529) |
+| sb26 | 0/8 | 209 | 0.00 | GAME_OVER | induced:click (0.393) |
+| sp80 | 0/6 | 30 | 0.00 | GAME_OVER | induced:move+walls+floor+collect+push (0.379) |
+| su15 | 0/9 | 876 | 0.00 | timeout | induced:click (0.045) |
+| tn36 | 1/7 | 110 | 1.52 | GAME_OVER | induced:click (0.944) |
+| vc33 | 0/7 | 50 | 0.00 | GAME_OVER | induced:click (0.894) |
+
+평균 점수 0.076, 레벨 클리어 1/145, 병목 귀속: world_model_lab 18, perception/probe 1, planner 1 (`make pbg-metrics`). 실행 파일 `experiments/pbg/results/run-20260928-065736-93905.json`.
+
+### 테스트
+
+`make pbg-test`: 린트 0건, 26 유닛 + 2 통합(25게임 첫 프레임 파싱 ≤20 ms, ls20 오케스트레이터 60액션 예산 내 실행) 통과.
+
+## 결론 / 다음 단계
+
+- 명세의 모듈 경계·인터페이스·제어 흐름·예산 정책·이벤트 로그·홀드아웃·린트는 모두 구현됐고 LLM 없이 end-to-end로 돈다.
+  LLM 경로도 생성→정적 검사→서브프로세스 검증→적재→평가→critique까지 동작한다.
+- 수용 기준 중 미달: §8 "20게임에서 LLM 5회 이내 score 1.0"(로컬 27B는 0.5 수준), §9·§10은 사람 로그가 없어 미측정
+  (`make pbg-human-log`로 수집 가능, 현재는 rulebook 실행 기록을 대신 사용).
+- 다음: (1) 목표 템플릿에 절차형 목표(열쇠→문, 순서 잠금) 추가 또는 LLM 템플릿 제안 활성화, (2) 클릭 게임 계획의 상태 공간 축소
+  (행/열 단위 추상 상태), (3) 프롬프트에 규칙별 위반 전이를 넣는 부분 교체(§13) 실측, (4) 사람 로그 2회/게임 확보 후 §9·§10 지표,
+  (5) Kaggle 노트북 패키징(본 명세 범위 밖, `scripts/build_rulebook_notebook.py` 방식 재사용).
