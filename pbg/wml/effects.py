@@ -135,10 +135,11 @@ def _trigger_key(t: Transition):
     return None
 
 
-def _resolve_vanish_appear(comps_by_obs: list[list[tuple]]) -> list[list[tuple]]:
-    """A bar that vanished / appeared is the extreme case of a resize seen in the trigger's other observations: rewrite
-    it with that resize's axis, extent and delta (its full length must equal |delta|)."""
-    resizes = [c for obs in comps_by_obs for c in obs if c[0] == "resize"]
+def _resolve_vanish_appear(comps_by_obs: list[list[tuple]], global_resizes: Optional[list] = None) -> list[list[tuple]]:
+    """A bar that vanished / appeared is the extreme case of a resize: rewrite it with the axis, extent and delta of a
+    resize of the same band seen anywhere in the log; failing that, with the axis and magnitude of the resizes in the
+    same observation (a two-row bar that vanishes when its neighbours change by 2 shrank by 2)."""
+    resizes = list(global_resizes or []) + [c for obs in comps_by_obs for c in obs if c[0] == "resize"]
     out = []
     for obs in comps_by_obs:
         new = []
@@ -147,7 +148,14 @@ def _resolve_vanish_appear(comps_by_obs: list[list[tuple]]) -> list[list[tuple]]
                 color, bbox = c[1], c[2]
                 r0, c0, r1, c1 = bbox
                 match = None
-                for rz in resizes:
+                same_obs = [x for x in obs if x[0] == "resize"]
+                if not match and same_obs:
+                    axis = same_obs[0][2]; mag = abs(same_obs[0][6]); anchors = {x[5] for x in same_obs}
+                    if axis == "col" and (r1 - r0) == mag and (r0 in anchors or r1 in anchors):
+                        match = ("resize", color, "col", c0, c1, r1 if r1 in anchors else r0, -mag if c[0] == "vanish" else mag)
+                    if axis == "row" and (c1 - c0) == mag and (c0 in anchors or c1 in anchors):
+                        match = ("resize", color, "row", r0, r1, c1 if c1 in anchors else c0, -mag if c[0] == "vanish" else mag)
+                for rz in ([] if match else resizes):
                     _, col, axis, lo, hi, anchor, delta = rz
                     if col != color:
                         continue
@@ -180,8 +188,9 @@ def learn_effect_table(log: list[Transition], min_obs: int = 2, prior_classes: O
         else:
             obs[k].append(comps)
     table: dict = {}
+    global_resizes = [c for lst in obs.values() for comps in lst for c in comps if c[0] == "resize"]
     for k, lst in obs.items():
-        lst = _resolve_vanish_appear(lst)
+        lst = _resolve_vanish_appear(lst, global_resizes)
         need = min_obs
         if prior_classes and k[0] == "CLICK" and f"c{k[1]}:{k[2]}" in prior_classes:
             need = 1
