@@ -192,6 +192,7 @@ class Object:
     role: Optional[str] = None
     color_mask: Optional[np.ndarray] = None   # bbox-sized int8 (-1 outside) for multi-colour objects
     parts: Optional[list] = None              # components a fused object was built from (tracking only, not serialised)
+    composite: bool = False                   # adjacent components whose union is a filled rectangle (a pattern / canvas / button)
 
     @property
     def center(self) -> tuple[int, int]:
@@ -235,6 +236,9 @@ class Object:
 
     def identity(self) -> tuple:
         """What evaluation compares (spec §8): role-free object identity."""
+        if self.color_mask is not None and len(self.colors) >= 2:
+            # multi-colour objects differ by their colour layout too (a half-stamped canvas is not a blank one)
+            return (int(self.color), tuple(int(x) for x in self.bbox), self.shape_sig, hashlib.sha1(self.color_mask.tobytes()).hexdigest()[:8])
         return (int(self.color), tuple(int(x) for x in self.bbox), self.shape_sig)
 
     def to_json(self) -> dict:

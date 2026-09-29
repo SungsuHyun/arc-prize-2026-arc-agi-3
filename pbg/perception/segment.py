@@ -131,3 +131,66 @@ def fuse(objects: list[Object], grid, regions: list[Region]) -> Object:
     parts = [p for o in objects for p in (o.parts or [o])]
     return Object(min(o.id for o in objects), int(color), colors, (r0, c0, r1, c1), mask, int(mask.sum()), shape_signature(mask), reg.id,
                   color_mask=cmask, parts=parts)
+
+
+def parts_adjacent(a: Object, b: Object) -> bool:
+    """Do two components touch (4-neighbourhood) anywhere?"""
+    r0 = max(a.bbox[0], b.bbox[0]) - 1; c0 = max(a.bbox[1], b.bbox[1]) - 1
+    r1 = min(a.bbox[2], b.bbox[2]) + 1; c1 = min(a.bbox[3], b.bbox[3]) + 1
+    if r1 <= r0 or c1 <= c0:
+        return False
+    def paste(o):
+        m = np.zeros((r1 - r0, c1 - c0), dtype=bool)
+        ar0, ac0 = max(o.bbox[0], r0), max(o.bbox[1], c0); ar1, ac1 = min(o.bbox[2], r1), min(o.bbox[3], c1)
+        if ar1 > ar0 and ac1 > ac0:
+            m[ar0 - r0:ar1 - r0, ac0 - c0:ac1 - c0] = o.mask[ar0 - o.bbox[0]:ar1 - o.bbox[0], ac0 - o.bbox[1]:ac1 - o.bbox[1]]
+        return m
+    ma, mb = paste(a), paste(b)
+    grown = ma.copy()
+    grown[1:, :] |= ma[:-1, :]; grown[:-1, :] |= ma[1:, :]; grown[:, 1:] |= ma[:, :-1]; grown[:, :-1] |= ma[:, 1:]
+    return bool((grown & mb).any())
+
+
+def rect_composites(objs: list[Object], adj: Optional[list[tuple[int, int]]], regions: list[Region], excluded=(), *,
+                    min_side: int = 2, min_area: int = 6, max_parts: int = 6) -> list[list[Object]]:
+    """Adjacent different-colour components whose union is a FILLED rectangle: a two-colour target pattern, a half-stamped
+    canvas, a framed button. Thin parts (1 px lines, corner marks) and ui strips never take part; `excluded` are parts seen
+    moving on their own (an agent standing next to a wall is not a pattern). Adjacency is taken from the segmentation
+    when given, else from the masks."""
+    by = {o.id: o for o in objs}
+    strip = {r.id for r in regions if r.kind_hint == "ui_strip"}
+    def ok(o: Object) -> bool:
+        return o.id not in excluded and o.parts is None and o.area >= min_area and min(o.height, o.width) >= min_side and o.region not in strip
+    elig = [o for o in objs if ok(o)]
+    nbr: dict[int, set[int]] = {}
+    if adj is None:
+        pairs = [(a.id, b.id) for i, a in enumerate(elig) for b in elig[i + 1:] if parts_adjacent(a, b)]
+    else:
+        pairs = [(a, b) for a, b in adj if a in by and b in by and ok(by[a]) and ok(by[b])]
+    for a, b in pairs:
+        nbr.setdefault(a, set()).add(b); nbr.setdefault(b, set()).add(a)
+    def is_rect(ids) -> bool:
+        os_ = [by[i] for i in ids]
+        r0 = min(o.bbox[0] for o in os_); c0 = min(o.bbox[1] for o in os_); r1 = max(o.bbox[2] for o in os_); c1 = max(o.bbox[3] for o in os_)
+        return sum(o.area for o in os_) == (r1 - r0) * (c1 - c0)
+    seen: set[int] = set(); out: list[list[int]] = []
+    for start in sorted(nbr):
+        if start in seen:
+            continue
+        stack = [start]; cl: set[int] = set()
+        while stack:
+            x = stack.pop()
+            if x in cl:
+                continue
+            cl.add(x); stack.extend(nbr[x] - cl)
+        seen |= cl
+        if 2 <= len(cl) <= max_parts and is_rect(cl):
+            out.append(sorted(cl)); continue
+        used: set[int] = set()
+        for a in sorted(cl):
+            if a in used:
+                continue
+            for b in sorted(nbr[a]):
+                if b not in used and is_rect({a, b}):
+                    out.append([a, b]); used |= {a, b}; break
+    return [[by[i] for i in ids] for ids in out]

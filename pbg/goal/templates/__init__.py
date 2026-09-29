@@ -6,6 +6,8 @@ from collections import Counter
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
+import numpy as np
+
 from ...core.types import Action, Scene
 
 
@@ -541,6 +543,51 @@ def t_pattern_match(scene: Scene, ctx: dict) -> list[GoalInstance]:
     return out
 
 
+def _layout_of(o) -> "np.ndarray":
+    return o.color_mask if o.color_mask is not None else np.where(o.mask, o.color, -1).astype(np.int8)
+
+
+def _find_by_id_or_bbox(s: Scene, oid: int, bbox):
+    o = s.get(oid)
+    if o is not None and (o.height, o.width) == (bbox[2] - bbox[0], bbox[3] - bbox[1]):
+        return o
+    return next((x for x in s.objects if tuple(x.bbox) == tuple(bbox)), None)
+
+
+def t_match_pattern(scene: Scene, ctx: dict) -> list[GoalInstance]:
+    """A multi-colour rectangular object (the target pattern) must be reproduced by another object of the same size (the canvas):
+    stamp / paint / colour-fill games. Both directions are instantiated; the level-up filter and the clue (the canvas starts
+    uniform) decide which is the target."""
+    pats = [o for o in scene.objects if o.color_mask is not None and len(o.colors) >= 2 and o.area == o.height * o.width
+            and min(o.height, o.width) >= 3 and scene.region(o.region) is not None and scene.region(o.region).kind_hint != "ui_strip"]
+    out = []
+    for tgt in pats:
+        for cv in scene.objects:
+            if cv.id == tgt.id or (cv.height, cv.width) != (tgt.height, tgt.width) or cv.area != tgt.area:
+                continue
+            if scene.region(cv.region) is not None and scene.region(cv.region).kind_hint == "ui_strip":
+                continue
+            def is_goal(s, a=tgt.id, ab=tgt.bbox, b=cv.id, bb=cv.bbox):
+                A, B = _find_by_id_or_bbox(s, a, ab), _find_by_id_or_bbox(s, b, bb)
+                return A is not None and B is not None and A.area == B.area and bool(np.array_equal(_layout_of(A), _layout_of(B)))
+            def progress(s, a=tgt.id, ab=tgt.bbox, b=cv.id, bb=cv.bbox):
+                A, B = _find_by_id_or_bbox(s, a, ab), _find_by_id_or_bbox(s, b, bb)
+                if A is None or B is None or A.area != B.area:
+                    return 0.0
+                la, lb = _layout_of(A), _layout_of(B)
+                return float((la == lb).mean()) if la.shape == lb.shape else 0.0
+            def estimate(s, a=tgt.id, ab=tgt.bbox, b=cv.id, bb=cv.bbox):
+                A, B = _find_by_id_or_bbox(s, a, ab), _find_by_id_or_bbox(s, b, bb)
+                if A is None or B is None or A.area != B.area:
+                    return None
+                la, lb = _layout_of(A), _layout_of(B)
+                return float(len({int(v) for v in la[la != lb]})) if la.shape == lb.shape else None   # >= one action per colour still missing
+            clue = 0.15 if len(cv.colors) == 1 else 0.0
+            out.append(GoalInstance(f"match_pattern({tgt.id}->{cv.id})", "match_pattern", {"target": tgt.id, "canvas": cv.id}, is_goal, progress,
+                                    clue=clue, estimate_fn=estimate))
+    return out
+
+
 def t_explore(scene: Scene, ctx: dict) -> list[GoalInstance]:
     """Curiosity fallback (not a win condition): bring the agent next to an object it has not touched yet. `ctx['touched']`
     is the set of object identities already reached. Used by the orchestrator when no real goal yields a plan."""
@@ -569,13 +616,13 @@ def _adjacent(a, b) -> bool:
 
 
 # confidence tiers: role-based templates are more specific than colour/geometry ones (spec §9 usage-stats prior 0.5)
-BASE_CONFIDENCE = {"reach": 0.5, "all_collected": 0.5, "inside_frame": 0.5, "fill_marked_slots": 0.5, "same_cell": 0.5, "pattern_match": 0.45, "match_shapes": 0.45,
+BASE_CONFIDENCE = {"reach": 0.5, "all_collected": 0.5, "inside_frame": 0.5, "fill_marked_slots": 0.5, "same_cell": 0.5, "pattern_match": 0.45, "match_pattern": 0.5, "match_shapes": 0.45,
                    "enclose": 0.4, "align": 0.35, "all_removed": 0.3, "fill_region": 0.3, "count_equals": 0.2, "sort_by": 0.2, "sequence": 0.3, "explore": 0.0}
 
 TEMPLATES: dict[str, Callable[[Scene, dict], list[GoalInstance]]] = {
     "reach": t_reach, "match_shapes": t_match_shapes, "all_removed": t_all_removed, "all_collected": t_all_collected,
     "fill_region": t_fill_region, "sort_by": t_sort_by, "count_equals": t_count_equals, "align": t_align, "enclose": t_enclose,
-    "sequence": t_sequence, "inside_frame": t_inside_frame, "fill_marked_slots": t_fill_marked_slots, "same_cell": t_same_cell, "pattern_match": t_pattern_match, "explore": t_explore}
+    "sequence": t_sequence, "inside_frame": t_inside_frame, "fill_marked_slots": t_fill_marked_slots, "same_cell": t_same_cell, "pattern_match": t_pattern_match, "match_pattern": t_match_pattern, "explore": t_explore}
 
 
 def instantiate_all(scene: Scene, ctx: Optional[dict] = None, usage_stats: Optional[dict] = None) -> list[GoalInstance]:

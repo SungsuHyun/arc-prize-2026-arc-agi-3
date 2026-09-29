@@ -7,7 +7,7 @@ from typing import Iterable, Optional
 
 from ..core.types import Scene, Transition
 
-CLASSES = ("MOVE", "TOGGLE", "SPAWN", "REMOVE", "SELECT", "NOOP", "UNKNOWN")
+CLASSES = ("MOVE", "TRANSFORM", "TOGGLE", "SPAWN", "REMOVE", "SELECT", "NOOP", "UNKNOWN")
 
 
 def _ui_ids(scene: Scene) -> set[int]:
@@ -29,6 +29,10 @@ def classify_one(t: Transition) -> tuple[str, dict]:
     c = core_diff(t)
     if not (c["moved"] or c["recolored"] or c["reshaped"] or c["appeared"] or c["disappeared"]):
         return ("NOOP", {"counters": c["counters"]}) if t.diff.is_noop or c["counters"] or t.diff.pixel_changes == 0 else ("UNKNOWN", {"pixels": t.diff.pixel_changes})
+    reshaped_ids = {x[0] for x in c["reshaped"]}
+    if reshaped_ids and all(i in reshaped_ids for i, _ in c["moved"]) and not c["appeared"] and not c["disappeared"]:
+        # every moved object also changed shape: a rotation / flip / re-drawing, not a translation
+        return "TRANSFORM", {"targets": sorted(reshaped_ids), "counters": c["counters"]}
     if c["moved"] and not c["appeared"] and not c["disappeared"]:
         disp = Counter(v for _, v in c["moved"])
         (dr, dc), n = disp.most_common(1)[0]
@@ -103,6 +107,9 @@ def classify_actions(log: Iterable[Transition], prior: Optional[ActionSemantics]
                     movers.update(i["movers"])
             entry.update(displacement=[dr, dc], movers=[m for m, _ in movers.most_common(4)], effect=f"obj {[m for m, _ in movers.most_common(2)]} by ({dr:+d},{dc:+d})",
                          displacement_consistency=f"{k}/{len(non_noop)}")
+        elif cls == "TRANSFORM":
+            tg = Counter(x for c, i, _ in non_noop if c == "TRANSFORM" for x in i["targets"])
+            entry.update(effect=f"transforms objects {[t for t, _ in tg.most_common(3)]} (rotation/flip/redraw)", targets=[t for t, _ in tg.most_common(6)])
         elif cls == "TOGGLE":
             pairs = Counter((a, b) for c, i, _ in non_noop if c == "TOGGLE" for _, a, b in i["targets"])
             entry.update(effect="recolor " + ", ".join(f"{a}->{b}" for (a, b), _ in pairs.most_common(3)), targets=sorted({x[0] for c, i, _ in non_noop if c == "TOGGLE" for x in i["targets"]}))

@@ -12,7 +12,7 @@ from ..core.types import Frame, Object, Scene, Transition
 from .diff import compute_diff
 from .regions import find_regions, stabilize_regions
 from .render import grid_png, render_scene
-from .segment import fuse, segment_objects
+from .segment import fuse, rect_composites, segment_objects
 from .summarize import scene_text, summarize
 from .track import Tracker
 
@@ -37,8 +37,9 @@ class Perception:
         self._pair_moves: dict[tuple[int, int], int] = {}   # (id_a, id_b) -> co-movement count
         self._merged: list[tuple[int, int]] = []             # confirmed merges (id_a, id_b)
         self._groups: list[set[int]] = []
+        self._solo: set[int] = set()                         # part ids seen moving on their own: never part of a composite
         self.timings: list[float] = []
-        self.merge_confirmed = False
+        self.merge_confirmed = False                         # a merge was confirmed OR a composite dissolved: callers refit past transitions
 
     # ── main entry points ──
     def parse(self, frame: Frame, prev: Optional[Scene]) -> Scene:
@@ -57,6 +58,9 @@ class Perception:
             o.id = assign[i]; tracked.append(o)
         # merge candidates: adjacent different-colour components, by tracking id
         cand = {(min(assign[a], assign[b]), max(assign[a], assign[b])) for a, b in adj}
+        # rectangle composites (target pattern, canvas, framed button): fused right away, dissolved if a part moves alone
+        grouped = {i for g in self._groups for i in g}
+        tracked = self._fuse_composites(tracked, [(assign[a], assign[b]) for a, b in adj], grid, regions, grouped)
         # confirmed merges: fuse groups whose members are all present
         if self._groups:
             by_id = {o.id: o for o in tracked}
@@ -90,6 +94,49 @@ class Perception:
                     self._merged.append((a, b)); self._add_group(a, b); new = True
         return new
 
+    def _fuse_composites(self, objs: list[Object], adj, grid, regions, extra_excluded=()) -> list[Object]:
+        comps = rect_composites(objs, adj, regions, self._solo | set(extra_excluded), min_side=int(self.cfg.get("composite_min_side", 2)),
+                                min_area=int(self.cfg.get("composite_min_area", 6)))
+        if not comps:
+            return objs
+        consumed = {m.id for c in comps for m in c}
+        fused = []
+        for c in comps:
+            f = fuse(c, grid, regions); f.composite = True; fused.append(f)
+        return sorted([o for o in objs if o.id not in consumed] + fused, key=lambda o: o.id)
+
+    def _dissolve(self, scene: Scene) -> Scene:
+        """Break composites that contain a part seen moving on its own; the remaining parts may re-form a composite."""
+        if not self._solo or not any(o.composite and any(p.id in self._solo for p in o.parts) for o in scene.objects):
+            return scene
+        objs: list[Object] = []; freed: list[Object] = []
+        for o in scene.objects:
+            if o.composite and any(p.id in self._solo for p in o.parts):
+                freed.extend(o.parts)
+            else:
+                objs.append(o)
+        objs = self._fuse_composites(objs + freed, None, None, scene.regions)
+        return scene.copy(objects=sorted(objs, key=lambda o: o.id))
+
+    def _solo_movers(self, before: Scene, after: Scene) -> set[int]:
+        """Parts of a composite that moved while another part of the same composite stayed put."""
+        def parts_map(scene):
+            return {p.id: p for o in scene.objects for p in (o.parts or [o])}
+        pb, pa = parts_map(before), parts_map(after)
+        new: set[int] = set()
+        for scene_c, other in ((before, pa), (after, pb)):
+            for o in scene_c.objects:
+                if not o.composite:
+                    continue
+                disp = {}
+                for p in o.parts:
+                    q = other.get(p.id)
+                    if q is not None and q.shape_sig == p.shape_sig and q.area == p.area:
+                        disp[p.id] = (q.bbox[0] - p.bbox[0], q.bbox[1] - p.bbox[1])
+                if len(disp) >= 2 and any(v == (0, 0) for v in disp.values()):
+                    new |= {i for i, v in disp.items() if v != (0, 0)}
+        return new - self._solo
+
     def apply_groups(self, scene: Scene) -> Scene:
         """Fuse confirmed groups inside an already-parsed scene (used to refit earlier scenes after a confirmation)."""
         if not self._groups:
@@ -109,7 +156,7 @@ class Perception:
         """Re-fuse confirmed groups in past transitions (spec §15: reparse past scenes after a merge). Returns #changed."""
         n = 0
         for t in transitions:
-            b, a = self.apply_groups(t.before), self.apply_groups(t.after)
+            b, a = self._dissolve(self.apply_groups(t.before)), self._dissolve(self.apply_groups(t.after))
             if len(b.objects) != len(t.before.objects) or len(a.objects) != len(t.after.objects):
                 t.before, t.after = b, a
                 t.diff = compute_diff(b, a, before_grid=None if t.before_frame is None else t.before_frame.grid,
@@ -143,6 +190,13 @@ class Perception:
         passed in: when a merge is confirmed here both scenes are re-fused and `t.after` is the canonical current scene."""
         bg = None if before_frame is None else before_frame.grid; ag = None if after_frame is None else after_frame.grid
         d = self.diff(before, after, bg, ag)
+        solo = self._solo_movers(before, after)
+        if solo:
+            # a composite's part moved alone (an agent next to a wall, a marker under a button): it was never a pattern
+            self._solo |= solo
+            before, after = self._dissolve(before), self._dissolve(after)
+            d = compute_diff(before, after, before_grid=bg, after_grid=ag, noop_pixel_threshold=int(self.cfg["noop_pixel_threshold"]))
+            self.merge_confirmed = True
         if self.merge_confirmed:
             # a merge was just confirmed: fuse both scenes of this transition so the diff sees one object
             before, after = self.apply_groups(before), self.apply_groups(after)

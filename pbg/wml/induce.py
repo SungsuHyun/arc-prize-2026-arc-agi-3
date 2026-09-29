@@ -256,7 +256,11 @@ def induce_hypotheses(log: list[Transition], semantics: dict, available: list[Ac
     """Return (name, model) candidates built from priors. Several variants so evaluate() can pick the best."""
     if not log:
         return []
-    moves = {k: tuple(v["displacement"]) for k, v in semantics.items() if not k.startswith("_") and isinstance(v, dict) and v.get("class") == "MOVE" and v.get("displacement")}
+    def consistent(v) -> bool:      # a translation must repeat its displacement; rotations mislabelled as moves do not
+        dc = v.get("displacement_consistency", "1/1").split("/")
+        return int(dc[0]) >= 2 and int(dc[0]) * 2 >= int(dc[1])
+    moves = {k: tuple(v["displacement"]) for k, v in semantics.items()
+             if not k.startswith("_") and isinstance(v, dict) and v.get("class") == "MOVE" and v.get("displacement") and consistent(v)}
     hints = infer_roles_static(log, semantics)
     agent_keys = set(hints["agent"]); agent_colors = set(hints["agent_colors"])
     if not moves or not agent_keys:

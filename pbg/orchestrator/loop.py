@@ -49,9 +49,10 @@ class Result:
 class Orchestrator:
     def __init__(self, *, memory: Memory, llm=None, budget_cfg: Optional[dict] = None, perception_cfg: Optional[dict] = None, log=None,
                  events_dir: Optional[Path] = None, use_llm: bool = True, max_seconds: Optional[float] = None, planner_kwargs: Optional[dict] = None,
-                 max_levels: int = 20, max_resets: int = 6):
+                 max_levels: int = 20, max_resets: int = 6, min_plan_score: float = 0.6):
         self.memory, self.llm = memory, llm
         self.max_resets = max_resets
+        self.min_plan_score = min_plan_score
         self.budget_cfg, self.perception_cfg = budget_cfg, perception_cfg
         self.log = log or (lambda *a, **k: None)
         self.events_dir = events_dir
@@ -86,7 +87,7 @@ class Orchestrator:
         plan: Optional[list[Action]] = None
         touched: set = set(); exploring = False
         last_refine_n = -1; resets_without_progress = 0; game_overs = 0
-        tried_experiments: set = set(); bumped: set = set(); clicked: set = set()
+        tried_experiments: set = set(); bumped: set = set(); clicked: set = set(); gated_rounds = 0
         idle_iters = 0; last_used = -1
         while not s.finished():
             if budget.used() == last_used:
@@ -193,7 +194,8 @@ class Orchestrator:
                 roles_fn = (lambda sc, m=H[0].model: m.with_roles(sc)) if H and isinstance(H[0].model, RuleModel) else None
                 G = goal_inf.refine(s.transitions, G, self.memory.priors("goals"), s.level, s.scene, roles_fn=roles_fn, model=H[0].model if H else None)
                 exp = None
-                if not budget.low() and budget.allows("experiment", level=s.level) and experiments_this_round < 6:
+                model_ok = bool(H) and H[0].score >= self.min_plan_score
+                if model_ok and not budget.low() and budget.allows("experiment", level=s.level) and experiments_this_round < 6:
                     exp = wml.most_informative_action(H, s.scene, s.available_actions(), semantics=semantics, extra_clicks=planner.responsive,
                                                       exclude=tried_experiments, state_key=_state_key(s.scene))   # never repeat an experiment from the same state
                 if exp is not None:
@@ -210,6 +212,20 @@ class Orchestrator:
             elif state == "PLAN":
                 if wml._job is not None and not wml.job_running():
                     events.emit("PLAN", "HYPOTHESIZE", "llm job finished -> merge candidates", budget_used=budget.used()); state = "HYPOTHESIZE"; continue
+                if H and H[0].score < self.min_plan_score and not (H[0].verified):
+                    # quality gate: a model that explains < 60% of the log is not worth executing plans on; gather evidence instead
+                    if wml.job_running() and budget.cap("reprobe", s.level) <= 0:
+                        events.emit("PLAN", "HYPOTHESIZE", f"model score {H[0].score:.2f} below gate; waiting for the llm job", budget_used=budget.used())
+                        wml.wait_job(120.0); state = "HYPOTHESIZE"; continue
+                    if budget.cap("reprobe", s.level) > 0:
+                        events.emit("PLAN", "PROBE", f"model score {H[0].score:.2f} below gate -> walk probe", budget_used=budget.used()); state = "PROBE"; continue
+                    if not self.use_llm or not wml.job_running():
+                        # nothing left to learn from cheaply: ask the LLM for a goal/model or let the low-quality plan through once
+                        gated_rounds += 1
+                        if gated_rounds > 3:
+                            events.emit("PLAN", "PLAN", "gate lifted after 3 rounds without new evidence", budget_used=budget.used())
+                        else:
+                            events.emit("PLAN", "HYPOTHESIZE", "below gate, reprobe spent, no llm job -> hypothesize", budget_used=budget.used()); state = "HYPOTHESIZE"; continue
                 if not H or not G:
                     if not H and s.transitions:
                         # nothing explains the log: fall back to probing with untried actions / clicks
