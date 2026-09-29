@@ -96,7 +96,7 @@ class Orchestrator:
         last_refine_n = -1; resets_without_progress = 0; game_overs = 0
         tried_experiments: set = set(); bumped: set = set(); clicked: set = set(); gated_rounds = 0
         idle_iters = 0; last_used = -1
-        walk_dry = 0; last_action = None; fresh_level = False; llm_waits_this_level = 0
+        walk_dry = 0; last_action = None; fresh_level = False; llm_waits_this_level = 0; level_note = ""
         while not s.finished():
             knowledge.clicks.extend(s.transitions[-8:])
             if budget.used() == last_used:
@@ -142,11 +142,6 @@ class Orchestrator:
                     reprobe_rounds += 1
                     if walk_dry >= 2:
                         cap = 0     # the click map has nothing untried or responsive left: do not walk, wait/reset instead
-                    if cap <= 0 and wml.job_running():
-                        # nothing cheap left to try: wait for the pending LLM candidates rather than spend actions (spec §15)
-                        events.emit(state, "HYPOTHESIZE", "reprobe budget exhausted, waiting for the llm job", budget_used=budget.used())
-                        wml.wait_job(min(240.0, max(0.0, (s.deadline - time.time()) if s.deadline else 240.0)))
-                        state = "HYPOTHESIZE"; continue
                     if cap > 0 and not _walk_useful(knowledge, s) and H:
                         # nothing new to click: one goal-directed step (the responsive action whose predicted outcome raises the
                         # top goal's progress the most, never the inverse of the last action) instead of a round-robin walk
@@ -159,6 +154,18 @@ class Orchestrator:
                                 semantics = classify_actions(s.transitions, semantics); knowledge.clicks.extend(s.transitions[-3:])
                                 state = "HYPOTHESIZE"; experiments_this_round = 0; continue
                         walk_dry += 1; cap = 0
+                    if cap <= 0 and wml.job_running():
+                        # nothing cheap left to try: wait for the pending LLM candidates rather than spend actions (spec §15)
+                        events.emit(state, "HYPOTHESIZE", "reprobe budget exhausted, waiting for the llm job", budget_used=budget.used())
+                        wml.wait_job(min(240.0, max(0.0, (s.deadline - time.time()) if s.deadline else 240.0)))
+                        state = "HYPOTHESIZE"; continue
+                    if cap <= 0 and self.use_llm and not wml.job_running() and llm_waits_this_level < 2 and budget.allows_llm():
+                        # nothing cheap left and no LLM job in flight: ask (K=2) and wait once before resetting
+                        best = H[0] if H else None
+                        if wml.start_llm_job(s.transitions, best, self.memory.priors("mechanisms"), scene=s.scene, semantics=semantics, level_note=level_note, K=2):
+                            llm_waits_this_level += 1
+                            events.emit(state, "HYPOTHESIZE", "reprobe budget exhausted -> llm job started, waiting", budget_used=budget.used())
+                            wml.wait_job(120.0); state = "HYPOTHESIZE"; continue
                     if cap <= 0:
                         # re-exploration budget exhausted: reset as the last resort (spec §15); the reprobe allowance
                         # starts again after the reset (a new attempt), and the game is only abandoned after 3 resets
