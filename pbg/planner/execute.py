@@ -119,7 +119,16 @@ class Planner:
         if not plans:
             info.reason = "no plan under any (hypothesis, goal) pair"
             self.last_info = info
-            self.log(f"planner: no plan ({time.perf_counter() - t0:.2f}s) H={len(H)} G={len(G)}")
+            # diagnostics: which hypotheses were tried and how many successors the root state has under each
+            diag = []
+            for h in ranked[:5]:
+                try:
+                    succ = make_successor(h.model, self._actions_fn(available, semantics), self.observed)
+                    n_succ = sum(1 for _ in succ(scene))
+                except Exception as e:
+                    n_succ = f"err:{type(e).__name__}"
+                diag.append(f"{h.name}:w={h.plan_weight():.2f},succ={n_succ}")
+            self.log(f"planner: no plan ({time.perf_counter() - t0:.2f}s) H={len(H)} G={len(G)} top_goals={[g.name for g in G[:3]]} {' '.join(diag)}")
             return None
         plans.sort(key=lambda x: (-x[0], len(x[1])))
         best = plans[0]

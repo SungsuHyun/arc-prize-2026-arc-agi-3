@@ -130,7 +130,9 @@ def make_hypothesis(model: WorldModel, res: EvalResult, code: str = "", name: st
 def dedupe(H: list[Hypothesis]) -> list[Hypothesis]:
     seen: dict[str, Hypothesis] = {}
     for h in H:
-        key = h.prediction_key or h.name
+        # prior-composed variants are deduplicated by name only: an LLM model that predicts the same log can still
+        # generalise differently (a permutation table vs a uniform shift), and the composed one must stay available
+        key = f"induced:{h.name}" if h.origin == "induced" else (h.prediction_key or h.name)
         if key in seen:
             keep = h if h.sort_key() > seen[key].sort_key() else seen[key]
             keep.recent_mismatches = max(h.recent_mismatches, seen[key].recent_mismatches)   # live mispredictions are not forgotten

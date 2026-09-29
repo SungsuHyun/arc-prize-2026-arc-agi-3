@@ -38,14 +38,18 @@ class WorldModelLab:
     def refine(self, log: list[Transition], current: list[Hypothesis], priors: Optional[dict], *, scene: Scene, semantics: dict,
                available: list[Action], level_note: str = "", use_llm: bool = True, K: Optional[int] = None, knowledge=None) -> list[Hypothesis]:
         H: list[Hypothesis] = []
-        # 1. re-verify what we already have on the (grown) log
+        # 1. re-verify what we already have on the (grown) log; prior-composed models are rebuilt from the full log
+        #    below (a stale permutation table must not linger), their live misprediction penalties carry over by name
+        induced_pen = {h.name: h.recent_mismatches for h in current if h.origin == "induced"}
         for h in current:
+            if h.origin == "induced":
+                continue
             res = evaluate(h.model, log)
             H.append(make_hypothesis(h.model, res, h.code, h.name, h.origin, recent_mismatches=h.recent_mismatches))
         # 2. deterministic induction from semantics + priors
         for name, model in induce_hypotheses(log, semantics, available, knowledge):
             res = evaluate(model, log)
-            H.append(make_hypothesis(model, res, induced_code(name), name, "induced"))
+            H.append(make_hypothesis(model, res, induced_code(name), name, "induced", recent_mismatches=induced_pen.get(name, 0)))
         H = dedupe(H); H.sort(key=lambda h: h.sort_key(), reverse=True)
         best = H[0] if H else None
         # 3. LLM candidates when nothing is perfect — synchronously here, or in the background via start_llm_job()
