@@ -29,7 +29,11 @@ class LevelKnowledge:
     # ── goal confidence prior for THIS game (stronger than the global usage stats) ──
     def goal_stats(self, global_stats: Optional[dict] = None) -> dict:
         out = dict(global_stats or {})
-        for name, wins in self.goal_wins.items():
+        wins_by = dict(self.goal_wins)
+        for a, b in (("align_color", "align_all_colors"), ("align_all_colors", "align_color")):
+            if a in wins_by and b not in wins_by:
+                wins_by[b] = wins_by[a]          # one family: a single pair and the conjunction of pairs
+        for name, wins in wins_by.items():
             fails = self.goal_fails.get(name, 0)
             # a template that completed a level of this game starts the next level at 0.75 (+clue, +structure bonus),
             # a failed one lower; kept below 1.0 so the structure bonus (same axis as the winning goal) can still rank

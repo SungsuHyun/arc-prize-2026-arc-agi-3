@@ -564,6 +564,9 @@ def t_align_color(scene: Scene, ctx: dict) -> list[GoalInstance]:
     that colour (slider / pointer games). One colour, two or three units, at least one of them part of a larger object."""
     strips = {r.id for r in scene.regions if r.kind_hint == "ui_strip"}
     colors = {c for o in scene.objects if o.region not in strips for c in o.colors}
+    pairs = [c for c in colors if len(_color_units(scene, c)) == 2 and all((u[2] - u[0]) * (u[3] - u[1]) <= 100 for u in _color_units(scene, c))]
+    if len(pairs) >= 2:
+        return []             # several marker/tip pairs: the win is their conjunction (align_all_colors), not one of them
     out = []
     for c in sorted(colors):
         units = _color_units(scene, c)

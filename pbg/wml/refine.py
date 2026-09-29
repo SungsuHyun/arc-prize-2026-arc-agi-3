@@ -40,7 +40,7 @@ class WorldModelLab:
         H: list[Hypothesis] = []
         # 1. re-verify what we already have on the (grown) log; prior-composed models are rebuilt from the full log
         #    below (a stale permutation table must not linger), their live misprediction penalties carry over by name
-        induced_pen = {h.name: h.recent_mismatches for h in current if h.origin == "induced"}
+        induced_pen = {h.name: (h.recent_mismatches, h.prediction_key) for h in current if h.origin == "induced"}
         for h in current:
             if h.origin == "induced":
                 continue
@@ -49,7 +49,9 @@ class WorldModelLab:
         # 2. deterministic induction from semantics + priors
         for name, model in induce_hypotheses(log, semantics, available, knowledge):
             res = evaluate(model, log)
-            H.append(make_hypothesis(model, res, induced_code(name), name, "induced", recent_mismatches=induced_pen.get(name, 0)))
+            pen, pkey = induced_pen.get(name, (0, None))
+            # a rebuilt model that predicts the log differently is a new model: it does not inherit the old one's mispredictions
+            H.append(make_hypothesis(model, res, induced_code(name), name, "induced", recent_mismatches=pen if pkey == res.prediction_key else 0))
         H = dedupe(H); H.sort(key=lambda h: h.sort_key(), reverse=True)
         best = H[0] if H else None
         # 3. LLM candidates when nothing is perfect — synchronously here, or in the background via start_llm_job()
