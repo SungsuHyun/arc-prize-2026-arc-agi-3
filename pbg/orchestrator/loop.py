@@ -426,6 +426,8 @@ def _walk_useful(knowledge, s) -> bool:
         st = cmap.status(key)
         if st == "untried" or (st == "responsive" and key not in tried_here):
             return True
+        if st == "responsive" and cmap.n[key] < 3:
+            return True        # induction needs repeated observations of a reacting trigger (one click is not a rule)
     return False
 
 
