@@ -250,7 +250,9 @@ class Orchestrator:
                     events.emit("PLAN", "HYPOTHESIZE", "llm job finished -> merge candidates", budget_used=budget.used()); state = "HYPOTHESIZE"; continue
                 if H and not H[0].usable(self.min_plan_score) and not H[0].verified:
                     # quality gate: a model that explains < 60% of the log is not worth executing plans on; gather evidence instead
-                    if wml.job_running() and budget.cap("reprobe", s.level) <= 0:
+                    if wml.job_running() and budget.cap("reprobe", s.level) <= 0 and llm_waits_this_level < 1:
+                        # one wait per level at most: after that the loop acts (goal-directed step) instead of idling
+                        llm_waits_this_level += 1
                         events.emit("PLAN", "HYPOTHESIZE", f"model score {H[0].score:.2f}/change {H[0].change_score:.2f} below gate; waiting for the llm job", budget_used=budget.used())
                         wml.wait_job(120.0); state = "HYPOTHESIZE"; continue
                     if budget.cap("reprobe", s.level) > 0:
@@ -259,7 +261,7 @@ class Orchestrator:
                         why = "walk probe" if _walk_useful(knowledge, s) else "goal-directed step"
                         events.emit("PLAN", "PROBE", f"model score {H[0].score:.2f}/change {H[0].change_score:.2f} below gate -> {why}", budget_used=budget.used()); state = "PROBE"; continue
                     a = _goal_directed_action(knowledge, s, H, G, last_action) if H else None
-                    if a is not None and llm_waits_this_level >= 1:
+                    if a is not None:
                         t_ = s.act(a, "reprobe")
                         if t_ is not None:
                             last_action = a
