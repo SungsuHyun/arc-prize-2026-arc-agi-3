@@ -421,13 +421,22 @@ def _walk_useful(knowledge, s) -> bool:
     from ..probe.clickmap import click_key
     cmap = knowledge.clicks
     tried_here = cmap.tried_level.get(s.level, set())
+    # clicks per trigger OBJECT on this level (two buttons of one class are two triggers to learn)
+    per_obj: dict = {}
+    for t in s.level_log():
+        if t.action.type == "CLICK":
+            for o in t.before.objects:
+                if o.bbox[0] <= t.action.row < o.bbox[2] and o.bbox[1] <= t.action.col < o.bbox[3]:
+                    per_obj[tuple(o.bbox)] = per_obj.get(tuple(o.bbox), 0) + 1
     for a in cmap.rank(s.scene, level=s.level, include_inert=False, limit=64):
         key = click_key(s.scene, a.row, a.col)
         st = cmap.status(key)
         if st == "untried" or (st == "responsive" and key not in tried_here):
             return True
-        if st == "responsive" and cmap.n[key] < 3:
-            return True        # induction needs repeated observations of a reacting trigger (one click is not a rule)
+        if st == "responsive":
+            box = next((tuple(o.bbox) for o in s.scene.objects if o.bbox[0] <= a.row < o.bbox[2] and o.bbox[1] <= a.col < o.bbox[3]), None)
+            if box is not None and per_obj.get(box, 0) < 2:
+                return True    # induction needs repeated observations of each reacting trigger (one click is not a rule)
     return False
 
 
