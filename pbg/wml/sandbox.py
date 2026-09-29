@@ -42,7 +42,7 @@ def static_check(code: str, allow_getattr: bool = False) -> None:
             names = [a.name for a in node.names] if isinstance(node, ast.Import) else [node.module or ""]
             for n in names:
                 root = n.split(".")[0]
-                if n not in ALLOWED_IMPORTS and root not in {"numpy", "dataclasses", "typing", "itertools", "math", "core", "collections", "functools"}:
+                if n not in ALLOWED_IMPORTS and root not in {"numpy", "dataclasses", "typing", "itertools", "math", "core", "pbg", "collections", "functools"}:
                     raise StaticCheckError(f"import not allowed: {n}")
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in ("eval", "exec", "compile", "open", "__import__", "getattr", "globals", "locals"):
             raise StaticCheckError(f"call not allowed: {node.func.id}")
@@ -81,9 +81,23 @@ def _namespace() -> dict:
                "dataclass": dataclasses.dataclass, "field": dataclasses.field})
     real_import = __import__
 
+    class _Api:
+        """One module that exposes every API name: `from core.types import RuleModel` and `from pbg.core.contracts import
+        Scene` both work, whichever module the model believes a name lives in."""
+        pass
+    api = _Api()
+    for mod in (types, contracts, mechanisms):
+        for k in getattr(mod, "__all__", None) or [n for n in dir(mod) if not n.startswith("_")]:
+            setattr(api, k, getattr(mod, k))
+    for k in ("Rule", "RuleModel", "Scene", "Action", "Object", "Region", "Transition"):
+        if hasattr(types, k) or hasattr(contracts, k):
+            setattr(api, k, getattr(contracts, k, getattr(types, k, None)))
+    api.types = api.contracts = api.mechanisms = api; api.core = api
+
     def safe_import(name, globals=None, locals=None, fromlist=(), level=0):
-        if name in ("core", "core.types", "core.contracts", "core.mechanisms"):
-            return {"core": _CoreShim(types, contracts, mechanisms), "core.types": types, "core.contracts": contracts, "core.mechanisms": mechanisms}[name]
+        root = name.split(".")[0]
+        if root in ("core", "pbg") or name in ("core", "core.types", "core.contracts", "core.mechanisms"):
+            return api
         if name.split(".")[0] in ("numpy", "dataclasses", "typing", "itertools", "math", "collections", "functools"):
             return real_import(name, globals, locals, fromlist, level)
         raise ImportError(f"import not allowed in sandbox: {name}")

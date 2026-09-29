@@ -112,6 +112,7 @@ class HypothesisPolicy:
                 out.append(Hypothesis(code, ns, n))
             except Exception as e:
                 self.log(f"hypothesis build failed: {e!r}")
+                self.load_errors.append(f"Your previous code loaded but build_model()/build_goal() raised {type(e).__name__}: {str(e)[:200]} -- fix it.")
         return out
 
     # ── planning on a verified hypothesis ──
