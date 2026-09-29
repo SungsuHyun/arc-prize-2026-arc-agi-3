@@ -23,7 +23,7 @@ SITE_PORT       ?= 8080
 EVAL_PORT       ?= 8090
 STEPS           ?= 200
 
-.PHONY: help setup pbg pbg-replay pbg-test pbg-lint pbg-import-logs pbg-human-log pbg-metrics pbg-postmortem pbg-dataset arcnav rulebook rulebook-bench rulebook-notebook rulebook-submit play-local pull-sample notebook submit status kaggle-log wheels llm-venv smoke-local verify-local serve exp-new exp-run exp-summary bench dashboard site site-publish eval-site eval-site-install eval-site-uninstall clean _check-kaggle
+.PHONY: help setup pbg pbg-replay pbg-test pbg-lint pbg-import-logs pbg-human-log pbg-metrics pbg-postmortem pbg-dataset pbg-notebook pbg-submit arcnav rulebook rulebook-bench rulebook-notebook rulebook-submit play-local pull-sample notebook submit status kaggle-log wheels llm-venv smoke-local verify-local serve exp-new exp-run exp-summary bench dashboard site site-publish eval-site eval-site-install eval-site-uninstall clean _check-kaggle
 
 _check-kaggle:
 	@if [ ! -s .kaggle/access_token ]; then \
@@ -70,6 +70,12 @@ rulebook-submit: rulebook-notebook _check-kaggle ## Build and push the rulebook 
 
 pbg: ## pbg system (perception -> probe -> world-model lab -> goal -> planner, docs/027): make pbg [GAME=ls20,tn36] [MINUTES=10] [JOBS=2] [TAG=x] [NOLLM=1] [BUDGET=2000] [FRESH=1] [LLM=opus] [POLICY=hypothesis] [EXPLORE=20]
 	$(if $(LLM),PBG_LLM_CONFIG=pbg/llm/llm-$(LLM).yaml,) $(VENV_PY) -m pbg.harness.online_runner --games $(or $(GAME),ls20) --minutes $(or $(MINUTES),10) --jobs $(or $(JOBS),2) --tag "$(TAG)" $(if $(NOLLM),--no-llm,) $(if $(BUDGET),--budget $(BUDGET),) $(if $(FRESH),--fresh,) $(if $(POLICY),--policy $(POLICY),) $(if $(EXPLORE),--explore $(EXPLORE),)
+
+pbg-notebook: ## Build notebooks/pbg/pbg_submission.ipynb (pbg hypothesis policy + in-notebook vLLM): make pbg-notebook [EXPLORE=20]
+	$(VENV_PY) scripts/build_pbg_notebook.py --explore $(or $(EXPLORE),20)
+
+pbg-submit: pbg-notebook _check-kaggle ## Build and push the pbg kernel (commit = 2-game smoke); then submit a version: kaggle competitions submit -k sungsuhyun/arc3-pbg -v N
+	$(KAGGLE) kernels push -p notebooks/pbg/
 
 pbg-replay: ## Replay harness over recorded logs (perception/semantics/induction/goals/plans, no live env): make pbg-replay [LOG=pbg/data/human_logs/agent/ls20/raw.jsonl] [LLM=1]
 	$(VENV_PY) -m pbg.harness.replay_runner $(or $(LOG),pbg/data/human_logs/agent/ls20/raw.jsonl) $(if $(LLM),--llm,)

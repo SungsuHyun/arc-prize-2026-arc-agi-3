@@ -102,7 +102,7 @@ def run(game_ids: list[str], cfg: dict, *, out_dir: Path = DEFAULT_OUT, memory_r
         llm_cfg = load_llm_config()
         if cfg.get("llm"):
             llm_cfg.update(cfg["llm"])
-        llm = LLMGateway(llm_cfg, cache_dir=memory_root / "llm_cache", max_calls=int(load_budget_config().get("llm_calls_max", 60)) * len(game_ids))
+        llm = LLMGateway(llm_cfg, cache_dir=memory_root / "llm_cache", max_calls=int(cfg.get("llm_calls_per_game") or load_budget_config().get("llm_calls_max", 60)) * len(game_ids))
     lock = threading.Lock(); started = dt.datetime.now(dt.timezone.utc)
     write_run_meta(log_dir, experiment="pbg", run_id=run_id, tag=tag, started=started, game_ids=game_ids, params={k: v for k, v in cfg.items() if k != "llm"})
     import faulthandler
