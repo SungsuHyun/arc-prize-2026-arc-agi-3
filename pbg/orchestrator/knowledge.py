@@ -25,6 +25,8 @@ class LevelKnowledge:
         # re-instantiate the rule (the displacement must be one already seen for the class)
         self.click_rules: dict[str, dict] = {}
         self.effect_rules: dict[str, dict] = {}    # trigger class -> {signatures: [...], n}: joint effects seen on earlier levels
+        self.hyp_triggers: set = set()             # this level: trigger bboxes confirmed by their test click
+        self.hyp_inert: set = set()                # this level: click classes hypothesised passive
 
     # ── goal confidence prior for THIS game (stronger than the global usage stats) ──
     def goal_stats(self, global_stats: Optional[dict] = None) -> dict:
@@ -39,6 +41,14 @@ class LevelKnowledge:
             # a failed one lower; kept below 1.0 so the structure bonus (same axis as the winning goal) can still rank
             out[name] = {"games_used": 4 * (wins + fails), "games_verified": 3 * (wins + fails) if wins else 0}
         return out
+
+    def apply_hypotheses(self, res) -> None:
+        hyp = getattr(res, "hypotheses", None)
+        if hyp is None:
+            return
+        self.hyp_triggers = set(hyp.confirmed_triggers())
+        self.hyp_inert = set(hyp.non_interactive_classes()) if hyp.confirmed_triggers() else set()
+        self.clicks.skip_untried = set(self.hyp_inert)
 
     def record_rules(self, model) -> int:
         """Harvest class-level click rules from a verified model (rules carry `meta` set by the induction)."""

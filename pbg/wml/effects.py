@@ -173,7 +173,7 @@ def _resolve_vanish_appear(comps_by_obs: list[list[tuple]], global_resizes: Opti
     return out
 
 
-def learn_effect_table(log: list[Transition], min_obs: int = 2, prior_classes: Optional[dict] = None) -> dict:
+def learn_effect_table(log: list[Transition], min_obs: int = 2, prior_classes: Optional[dict] = None, confirmed: Optional[set] = None) -> dict:
     """trigger key -> list of components (the consistent joint effect), plus per-trigger evidence counts."""
     obs: dict = defaultdict(list); noops: Counter = Counter()
     for t in log:
@@ -194,6 +194,8 @@ def learn_effect_table(log: list[Transition], min_obs: int = 2, prior_classes: O
         need = min_obs
         if prior_classes and k[0] == "CLICK" and f"c{k[1]}:{k[2]}" in prior_classes:
             need = 1
+        if confirmed and k[0] == "CLICK" and k[3] in confirmed:
+            need = 1          # a trigger hypothesis confirmed by its test click: the observed effect is the rule
         if len(lst) < need:
             continue
         cnt: Counter = Counter()
@@ -323,7 +325,7 @@ def class_signature(comps: list[tuple]) -> list:
 def induce_effect_model(log: list[Transition], semantics: dict, available: list[Action], knowledge=None,
                         click_map=None) -> list[tuple[str, RuleModel]]:
     prior = getattr(knowledge, "effect_rules", None) if knowledge is not None else None
-    table = learn_effect_table(log, prior_classes=prior)
+    table = learn_effect_table(log, prior_classes=prior, confirmed=getattr(knowledge, "hyp_triggers", None))
     if not table:
         return []
     cmap = click_map if click_map is not None else getattr(knowledge, "clicks", None)

@@ -96,7 +96,7 @@ class Orchestrator:
         last_refine_n = -1; resets_without_progress = 0; game_overs = 0
         tried_experiments: set = set(); bumped: set = set(); clicked: set = set(); gated_rounds = 0
         idle_iters = 0; last_used = -1
-        walk_dry = 0; last_action = None
+        walk_dry = 0; last_action = None; fresh_level = False
         while not s.finished():
             knowledge.clicks.extend(s.transitions[-8:])
             if budget.used() == last_used:
@@ -124,6 +124,7 @@ class Orchestrator:
                 self.memory.record_level_note(game_id, last_level, {"level": last_level, "actions_used": s.level_actions.get(last_level, 0),
                                                                      "novelty": novelty, "replaced_rules": [], "added_rules": []})
                 events.emit(state, "PLAN" if novelty == 0 else "PROBE", f"level {last_level} -> {s.level}, novelty {novelty}", budget_used=budget.used())
+                fresh_level = novelty > 0; knowledge.hyp_triggers = set(); knowledge.hyp_inert = set(); knowledge.clicks.skip_untried = set()
                 last_level = s.level; prev_level_scene = s.scene; level_start_step = s.step_idx; walk_dry = 0
                 knowledge.levels_seen.add(s.level); knowledge.demoted = dict(goal_inf.demoted); knowledge.save(self.memory.knowledge_path(game_id))
                 planner.stuck.reset(); no_plan_rounds = 0; reprobe_rounds = 0; resets_without_progress = 0; touched.clear(); clicked.clear()
@@ -177,6 +178,10 @@ class Orchestrator:
                         stop = "UNRESOLVED"; events.emit(state, "END", f"no progress after {self.max_resets} resets", budget_used=budget.used()); break
                 if kind == "initial":
                     res = probe.run_initial(cap, do_reset_probe=False)
+                elif fresh_level and any(a.type == "CLICK" for a in s.available_actions()):
+                    # new board: hypothesise roles/relations from the frame and test them with one click per trigger candidate
+                    fresh_level = False
+                    res = probe.run_hypothesis_probe(min(cap, 12))
                 else:
                     agent_ids = set()
                     if H and isinstance(H[0].model, RuleModel):
@@ -189,6 +194,11 @@ class Orchestrator:
                     walk_dry = walk_dry + 1 if res.actions_used == 0 else 0
                 semantics = classify_actions(s.transitions, semantics)
                 knowledge.clicks.extend(res.transitions); knowledge.save(self.memory.knowledge_path(game_id))
+                if getattr(res, "hypotheses", None) is not None:
+                    knowledge.apply_hypotheses(res)
+                    events.emit("PROBE", "PROBE", f"hypotheses: {res.hypotheses.summary()}", budget_used=budget.used())
+                    for v in (res.verdicts or [])[:12]:
+                        events.emit("PROBE", "PROBE", f"verdict: {v}", budget_used=budget.used())
                 self.memory.save_semantics(game_id, semantics.to_json())
                 events.emit("PROBE", "HYPOTHESIZE", f"{kind} probe done: {res.actions_used} actions, steps {res.steps_done}", budget_used=budget.used())
                 state = "HYPOTHESIZE"; experiments_this_round = 0

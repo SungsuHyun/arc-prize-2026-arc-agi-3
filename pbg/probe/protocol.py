@@ -19,6 +19,8 @@ BUTTON_ORDER = (1, 2, 3, 4, 5, 7)
 
 @dataclass
 class ProbeResult:
+    hypotheses: object = None       # BoardHypotheses of the clicked frame (click games)
+    verdicts: list = None           # one line per tested hypothesis
     transitions: list[Transition] = field(default_factory=list)
     semantics: ActionSemantics = field(default_factory=ActionSemantics)
     actions_used: int = 0
@@ -92,12 +94,11 @@ class Probe:
             if act(a, "button-repeat") is None:
                 break
         res.steps_done.append("repeat")
-        # 3. clicks (per-level absolute cap on top of the budget fraction: a board with 47 objects must not cost 47 clicks)
+        # 3. clicks: look first, then test -- role/relation hypotheses from the frame, one click per trigger candidate;
+        #    passive candidates (bars, markers, walls, movers) are clicked only if no trigger hypothesis holds
         if self._has_click():
             click_cap = min(budget_cap - res.actions_used - 2, int(getattr(self.s, "initial_click_cap", 16)))
-            for a in self._click_targets(self.s.scene, max(1, click_cap)):
-                if act(a, "click-target") is None:
-                    break
+            self._hypothesis_clicks(res, act, max(1, click_cap))
             res.steps_done.append("clicks")
         # 4. nothing changed so far -> accumulation / combination mechanisms
         if res.transitions and all(t.diff.is_noop for t in res.transitions):
@@ -123,6 +124,53 @@ class Probe:
                 res.steps_done.append("reset")
         res.semantics = classify_actions(res.transitions)
         res.stochastic = self.s.status().stochasticity_score > 0.0
+        return res
+
+    def _hypothesis_clicks(self, res: ProbeResult, act, cap: int) -> None:
+        from .hypotheses import BoardHypotheses
+        hyp = BoardHypotheses(self.s.scene)
+        res.hypotheses = hyp; res.verdicts = []
+        n = 0
+        for a in hyp.test_actions():
+            if n >= cap:
+                break
+            t = act(a, "hypothesis-test")
+            if t is None:
+                return
+            n += 1
+            v = hyp.observe(t)
+            if v:
+                res.verdicts.append(v)
+        if not hyp.confirmed_triggers():
+            for a in hyp.fallback_actions():
+                if n >= cap:
+                    break
+                t = act(a, "hypothesis-fallback")
+                if t is None:
+                    return
+                n += 1
+                v = hyp.observe(t)
+                if v:
+                    res.verdicts.append(v)
+
+    def run_hypothesis_probe(self, budget_cap: int) -> ProbeResult:
+        """Level start: role/relation hypotheses on the new board and the clicks that test them (no walk)."""
+        res = ProbeResult(); level = self.s.level
+
+        def act(a: Action, why: str) -> Optional[Transition]:
+            if res.actions_used >= budget_cap or self.s.level != level or self.s.finished():
+                res.stopped_early = True
+                return None
+            t = self.s.act(a, "reprobe")
+            if t is None:
+                res.stopped_early = True
+                return None
+            res.actions_used += 1; res.transitions.append(t)
+            return t
+        if self._has_click():
+            self._hypothesis_clicks(res, act, budget_cap)
+        res.steps_done.append("hypotheses")
+        res.semantics = classify_actions(res.transitions)
         return res
 
     def run_walk(self, budget_cap: int, *, max_per_dir: int = 12, agent_ids: set = frozenset(), dirs: Optional[dict] = None,

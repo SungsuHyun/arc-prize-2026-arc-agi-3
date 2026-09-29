@@ -41,6 +41,7 @@ class ClickMap:
         self.effects: dict[str, Counter] = {}   # class -> Counter of (moved colour, displacement) / 'recolor' / 'remove' / 'spawn'
         self.seen_ids: set[str] = set()         # transition ids already counted
         self.tried_level: dict[int, set[str]] = {}   # level -> classes clicked on that level
+        self.skip_untried: set[str] = set()          # classes hypothesised passive on this level: never probed as 'untried'
 
     # ── building ──
     def add(self, t: Transition) -> None:
@@ -103,6 +104,8 @@ class ClickMap:
             a = Action.click(*o.center)
             st = self.status(key)
             if st == "untried":
+                if key in self.skip_untried:
+                    continue
                 untried.append(a)
             elif st == "responsive":
                 resp.append(a)
@@ -121,7 +124,7 @@ class ClickMap:
             if r.kind_hint == "ui_strip":
                 continue
             a = Action.click(*r.center)
-            if self.status(click_key(scene, a.row, a.col)) == "untried" and not any(x == a for x in untried + resp):
+            if self.status(click_key(scene, a.row, a.col)) == "untried" and not any(x == a for x in untried + resp) and not self.skip_untried:
                 bg.append(a)
         for rc in extra:
             a = Action.click(int(rc[0]), int(rc[1]))
