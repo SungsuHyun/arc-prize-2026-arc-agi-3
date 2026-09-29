@@ -189,6 +189,14 @@ function localTime(iso) {
   const p = n => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
+// navigator.clipboard exists only on https/localhost; over a LAN address fall back to a hidden textarea + execCommand
+async function copyText(text) {
+  try { if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(text); return true; } } catch {}
+  try {
+    const ta = document.createElement("textarea"); ta.value = text; ta.setAttribute("readonly", ""); ta.style.position = "fixed"; ta.style.opacity = "0";
+    document.body.appendChild(ta); ta.select(); const ok = document.execCommand("copy"); ta.remove(); return ok;
+  } catch { return false; }
+}
 function runLabel(r) {
   const d = localTime(r.started_at);
   const st = r.status === "running" ? "● 진행 중  " : r.status === "aborted" ? "✕ 중단  " : "";
@@ -272,7 +280,7 @@ function renderGames() {
     const done = g.levels_completed ?? 0, tot = g.levels_total || "?";
     const tail = state.detail.status === "finished" ? fmt(g.score, 1) : (g.stop_reason === "waiting" ? "대기" : g.stop_reason === "no action record" ? "기록 없음" : state.detail.status === "running" ? '<span class="live"></span>' : "중단");
     el.innerHTML = `<div class="head"><span><b>${esc(g.game_id)}</b><span class="hash" title="이 게임 실행의 hash — 클릭하면 복사 (#h/${esc(g.hash)})">${esc(g.hash || "")}</span></span><span class="meta">L ${done}/${tot} · ${g.actions ?? "?"}a · ${tail}</span></div><div class="levels"></div>`;
-    el.querySelector(".hash").onclick = e => { e.stopPropagation(); navigator.clipboard?.writeText(g.hash); $("notes").textContent = `hash ${g.hash} 복사됨 (${location.origin}/#h/${g.hash})`; };
+    el.querySelector(".hash").onclick = e => { e.stopPropagation(); copyText(g.hash).then(ok => { $("notes").textContent = ok ? `${g.hash} 복사됨` : `복사 실패 — 직접 선택하세요: ${g.hash}`; }); };
     const lv = el.querySelector(".levels");
     for (const L of g.levels) {
       const c = document.createElement("span");
@@ -402,7 +410,7 @@ function renderDetail() {
   const L = (g.levels || []).find(x => x.level === state.level) || {};
   const lvinfo = state.data.levels[String(state.level)] || {};
   const kind = s.kind === "step" ? (s.tag || "obs") : s.kind;
-  let h = `<h2>${esc(state.game)} · level ${state.level} <span class="hash">${esc(g.hash || "")}</span></h2>
+  let h = `<h2>${esc(state.game)} · level ${state.level} <span class="hash" id="dhash" title="클릭하면 hash 복사">${esc(g.hash || "")}</span></h2>
   <div class="lvsum">
     <div><div class="n" style="color:${L.completed ? "var(--ok)" : L.reason === "in progress" ? "var(--accent)" : "var(--bad)"}">${L.completed ? "완료" : L.reason === "in progress" ? "진행 중" : "미완료"}</div><div class="l">${L.reason === "in progress" ? "" : esc(L.reason || "")}</div></div>
     <div><div class="n">${L.actions ?? lvinfo.steps ?? "?"}</div><div class="l">actions (기준 ${L.baseline ?? "?"})</div></div>
@@ -422,6 +430,7 @@ function renderDetail() {
     }
   }
   $("detail").innerHTML = h;
+  const dh = $("dhash"); if (dh) dh.onclick = () => copyText(g.hash).then(ok => { $("notes").textContent = ok ? `${g.hash} 복사됨` : `복사 실패 — 직접 선택하세요: ${g.hash}`; });
 }
 
 function play() { if (state.timer) return stop(); $("play").textContent = "⏸"; state.timer = setInterval(() => { if (state.i >= state.steps.length - 1) return stop(); goto(state.i + 1); }, +$("speed").value); }
