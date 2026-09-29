@@ -65,7 +65,8 @@ def play_game(arc, game_id: str, cfg: dict, log_dir: Path, memory: Memory, llm, 
         from ..hypothesis.policy import HypothesisPolicy
         if llm is None:
             return {"game_id": game_id, "error": "the hypothesis policy needs an LLM"}
-        orch = HypothesisPolicy(memory=memory, llm=llm, log=log, events_dir=log_dir, max_seconds=cfg["max_minutes"] * 60, budget_cfg=cfg.get("budget_cfg"))
+        orch = HypothesisPolicy(memory=memory, llm=llm, log=log, events_dir=log_dir, max_seconds=cfg["max_minutes"] * 60, budget_cfg=cfg.get("budget_cfg"),
+                                explore=int(cfg.get("explore") or 0))
     else:
         orch = Orchestrator(memory=memory, llm=llm, budget_cfg=cfg.get("budget_cfg"), log=log, events_dir=log_dir, use_llm=not cfg.get("no_llm"),
                             max_seconds=cfg["max_minutes"] * 60, planner_kwargs=cfg.get("planner", {}), max_levels=int(cfg.get("max_levels", 20)))
@@ -162,11 +163,12 @@ def main(argv=None) -> None:
     ap.add_argument("--out", default=str(DEFAULT_OUT)); ap.add_argument("--memory", default=str(DEFAULT_MEMORY))
     ap.add_argument("--minutes", type=float, default=10); ap.add_argument("--jobs", type=int, default=2); ap.add_argument("--budget", type=int)
     ap.add_argument("--no-llm", action="store_true", help="priors-only induction, no model calls")
+    ap.add_argument("--explore", type=int, default=0, help="hypothesis policy: explore level 1 for at most N actions before the first hypothesis (docs/029)")
     ap.add_argument("--fresh", action="store_true", help="wipe this run's games from memory first")
     ap.add_argument("--quiet", action="store_true"); ap.add_argument("--max-levels", type=int, default=20)
     a = ap.parse_args(argv)
     logging.basicConfig(level=logging.WARNING)
-    cfg = {"max_minutes": a.minutes, "jobs": a.jobs, "budget": a.budget, "no_llm": a.no_llm, "verbose": not a.quiet, "max_levels": a.max_levels, "policy": a.policy}
+    cfg = {"max_minutes": a.minutes, "jobs": a.jobs, "budget": a.budget, "no_llm": a.no_llm, "verbose": not a.quiet, "max_levels": a.max_levels, "policy": a.policy, "explore": a.explore}
     arc = make_arcade()
     games = sorted(e.game_id.split("-")[0] for e in arc.get_environments()) if a.games == "all" else [g.strip() for g in a.games.split(",") if g.strip()]
     if a.fresh:

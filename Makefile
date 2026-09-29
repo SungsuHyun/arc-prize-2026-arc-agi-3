@@ -68,8 +68,8 @@ rulebook-notebook: ## Build notebooks/rulebook/rulebook_submission.ipynb (rulebo
 rulebook-submit: rulebook-notebook _check-kaggle ## Build and push the rulebook kernel (commit = 2-game smoke; leaderboard submit is manual on the web)
 	$(KAGGLE) kernels push -p notebooks/rulebook/
 
-pbg: ## pbg system (perception -> probe -> world-model lab -> goal -> planner, docs/027): make pbg [GAME=ls20,tn36] [MINUTES=10] [JOBS=2] [TAG=x] [NOLLM=1] [BUDGET=2000] [FRESH=1] [LLM=opus] [POLICY=hypothesis]
-	$(if $(LLM),PBG_LLM_CONFIG=pbg/llm/llm-$(LLM).yaml,) $(VENV_PY) -m pbg.harness.online_runner --games $(or $(GAME),ls20) --minutes $(or $(MINUTES),10) --jobs $(or $(JOBS),2) --tag "$(TAG)" $(if $(NOLLM),--no-llm,) $(if $(BUDGET),--budget $(BUDGET),) $(if $(FRESH),--fresh,) $(if $(POLICY),--policy $(POLICY),)
+pbg: ## pbg system (perception -> probe -> world-model lab -> goal -> planner, docs/027): make pbg [GAME=ls20,tn36] [MINUTES=10] [JOBS=2] [TAG=x] [NOLLM=1] [BUDGET=2000] [FRESH=1] [LLM=opus] [POLICY=hypothesis] [EXPLORE=30]
+	$(if $(LLM),PBG_LLM_CONFIG=pbg/llm/llm-$(LLM).yaml,) $(VENV_PY) -m pbg.harness.online_runner --games $(or $(GAME),ls20) --minutes $(or $(MINUTES),10) --jobs $(or $(JOBS),2) --tag "$(TAG)" $(if $(NOLLM),--no-llm,) $(if $(BUDGET),--budget $(BUDGET),) $(if $(FRESH),--fresh,) $(if $(POLICY),--policy $(POLICY),) $(if $(EXPLORE),--explore $(EXPLORE),)
 
 pbg-replay: ## Replay harness over recorded logs (perception/semantics/induction/goals/plans, no live env): make pbg-replay [LOG=pbg/data/human_logs/agent/ls20/raw.jsonl] [LLM=1]
 	$(VENV_PY) -m pbg.harness.replay_runner $(or $(LOG),pbg/data/human_logs/agent/ls20/raw.jsonl) $(if $(LLM),--llm,)

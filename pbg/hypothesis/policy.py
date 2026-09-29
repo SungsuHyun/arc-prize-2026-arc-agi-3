@@ -12,6 +12,7 @@ The mechanism priors are hints in the prompt, not a separate process. Everything
 from __future__ import annotations
 
 import threading
+import zlib
 import time
 from pathlib import Path
 from typing import Optional
@@ -30,6 +31,7 @@ from ..planner.astar import astar
 from ..planner.common import state_key
 from ..wml.sandbox import Sandbox
 from .contract import hypothesis_prompt
+from .explore import explore_level
 from .verify import Verdict, verify, pixel_equal, _boxes
 
 
@@ -83,12 +85,13 @@ class Hypothesis:
 class HypothesisPolicy:
     def __init__(self, *, memory: Memory, llm, log=None, events_dir: Optional[Path] = None, max_seconds: Optional[float] = None,
                  budget_cfg: Optional[dict] = None, perception_cfg: Optional[dict] = None, K: int = 2, min_acc: float = 0.8,
-                 max_rounds_per_level: int = 14, plan_time: float = 8.0):
+                 max_rounds_per_level: int = 14, plan_time: float = 8.0, explore: int = 0):
         self.memory, self.llm = memory, llm
         self.log = log or (lambda *a, **k: None)
         self.events_dir, self.max_seconds = events_dir, max_seconds
         self.budget_cfg, self.perception_cfg = budget_cfg, perception_cfg
         self.K, self.min_acc, self.max_rounds, self.plan_time = K, min_acc, max_rounds_per_level, plan_time
+        self.explore = int(explore)     # level-1 exploration cap before the first hypothesis (0 = off; docs/029)
         self.sandbox = Sandbox(log=self.log, allow_getattr=True)
         self.load_errors: list[str] = []
 
@@ -187,6 +190,11 @@ class HypothesisPolicy:
             return t
 
         events.emit("START", "LOOK", "hypothesis policy: look, hypothesise, test, verify, revise, plan", budget_used=0)
+        explored = None
+        if self.explore > 0 and s.level == 1:
+            # act first on level 1 (the cheapest level to spend actions on), hypothesise from what happened
+            explored = explore_level(s, act, cap=self.explore, seed=zlib.crc32(game_id.encode()),
+                                     emit=lambda m: events.emit("EXPLORE", "LOOK", m, budget_used=budget.used()))
         while not s.finished():
             if s.timed_out():
                 stop = "timeout"; break
@@ -303,7 +311,7 @@ class HypothesisPolicy:
                       [{"name": f"h{hyp.n}", "score": round(hyp.verdict.accuracy, 3) if hyp.verdict else 0.0, "coverage": round(hyp.verdict.coverage, 3) if hyp.verdict else 0.0,
                         "verified": bool(hyp.verdict and hyp.verdict.usable(self.min_acc)), "origin": "hypothesis"}] if hyp else [],
                       [{"name": getattr(hyp.goal, "name", "?"), "win": hyp.doc.get("win", "")}] if hyp and hyp.goal else [],
-                      {"rounds": n_hyp, "plans": plans_executed, "tests": tests_run}, round(time.time() - t_start, 1))
+                      {"rounds": n_hyp, "plans": plans_executed, "tests": tests_run, "explore": explored}, round(time.time() - t_start, 1))
 
 
 def _fallback_probe(s, tried: set) -> list:
