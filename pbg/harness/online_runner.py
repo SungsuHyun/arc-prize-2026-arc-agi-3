@@ -61,8 +61,14 @@ def play_game(arc, game_id: str, cfg: dict, log_dir: Path, memory: Memory, llm, 
     if raw_env is None:
         return {"game_id": game_id, "error": "could not create env"}
     env = ArcadeEnv(raw_env, game_id, log_dir=memory.episodic_dir(game_id), budget_total=cfg.get("budget"), replay_path=log_dir / f"{game_id}.actions.jsonl")
-    orch = Orchestrator(memory=memory, llm=llm, budget_cfg=cfg.get("budget_cfg"), log=log, events_dir=log_dir, use_llm=not cfg.get("no_llm"),
-                        max_seconds=cfg["max_minutes"] * 60, planner_kwargs=cfg.get("planner", {}), max_levels=int(cfg.get("max_levels", 20)))
+    if cfg.get("policy") == "hypothesis":
+        from ..hypothesis.policy import HypothesisPolicy
+        if llm is None:
+            return {"game_id": game_id, "error": "the hypothesis policy needs an LLM"}
+        orch = HypothesisPolicy(memory=memory, llm=llm, log=log, events_dir=log_dir, max_seconds=cfg["max_minutes"] * 60, budget_cfg=cfg.get("budget_cfg"))
+    else:
+        orch = Orchestrator(memory=memory, llm=llm, budget_cfg=cfg.get("budget_cfg"), log=log, events_dir=log_dir, use_llm=not cfg.get("no_llm"),
+                            max_seconds=cfg["max_minutes"] * 60, planner_kwargs=cfg.get("planner", {}), max_levels=int(cfg.get("max_levels", 20)))
     try:
         r = orch.play(env, game_id, budget_total=cfg.get("budget"))
         d = r.to_json(); d["llm"] = llm.stats() if llm else {}
@@ -152,6 +158,7 @@ def run(game_ids: list[str], cfg: dict, *, out_dir: Path = DEFAULT_OUT, memory_r
 def main(argv=None) -> None:
     ap = argparse.ArgumentParser(description="Play ARC-AGI-3 games with the pbg system")
     ap.add_argument("--games", default="ls20"); ap.add_argument("--tag", default="")
+    ap.add_argument("--policy", default="orchestrator", choices=["orchestrator", "hypothesis"], help="hypothesis: look/hypothesise/test/verify/revise/plan policy (needs an LLM)")
     ap.add_argument("--out", default=str(DEFAULT_OUT)); ap.add_argument("--memory", default=str(DEFAULT_MEMORY))
     ap.add_argument("--minutes", type=float, default=10); ap.add_argument("--jobs", type=int, default=2); ap.add_argument("--budget", type=int)
     ap.add_argument("--no-llm", action="store_true", help="priors-only induction, no model calls")
@@ -159,7 +166,7 @@ def main(argv=None) -> None:
     ap.add_argument("--quiet", action="store_true"); ap.add_argument("--max-levels", type=int, default=20)
     a = ap.parse_args(argv)
     logging.basicConfig(level=logging.WARNING)
-    cfg = {"max_minutes": a.minutes, "jobs": a.jobs, "budget": a.budget, "no_llm": a.no_llm, "verbose": not a.quiet, "max_levels": a.max_levels}
+    cfg = {"max_minutes": a.minutes, "jobs": a.jobs, "budget": a.budget, "no_llm": a.no_llm, "verbose": not a.quiet, "max_levels": a.max_levels, "policy": a.policy}
     arc = make_arcade()
     games = sorted(e.game_id.split("-")[0] for e in arc.get_environments()) if a.games == "all" else [g.strip() for g in a.games.split(",") if g.strip()]
     if a.fresh:

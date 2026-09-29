@@ -27,12 +27,17 @@ class StaticCheckError(ValueError):
     pass
 
 
-def static_check(code: str) -> None:
+def static_check(code: str, allow_getattr: bool = False) -> None:
     try:
         tree = ast.parse(code)
     except SyntaxError as e:
         raise StaticCheckError(f"syntax error: {e}")
     for node in ast.walk(tree):
+        if allow_getattr and isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in ("getattr", "hasattr"):
+            names = [a.value for a in node.args[1:2] if isinstance(a, ast.Constant) and isinstance(a.value, str)]
+            if any(n.startswith("__") for n in names):
+                raise StaticCheckError("dunder access not allowed: getattr")
+            continue
         if isinstance(node, (ast.Import, ast.ImportFrom)):
             names = [a.name for a in node.names] if isinstance(node, ast.Import) else [node.module or ""]
             for n in names:
@@ -89,19 +94,32 @@ class _CoreShim:
         self.types, self.contracts, self.mechanisms = types, contracts, mechanisms
 
 
-def load_in_process(code: str):
+def load_in_process(code: str, allow_getattr: bool = False):
     """Execute model code in a restricted namespace; returns the namespace (build_model / build_goal available)."""
-    static_check(code)
+    static_check(code, allow_getattr=allow_getattr)
     ns = _namespace()
+    if allow_getattr:
+        ns["__builtins__"] = dict(ns["__builtins__"]) if isinstance(ns.get("__builtins__"), dict) else ns.get("__builtins__")
+        if isinstance(ns["__builtins__"], dict):
+            ns["__builtins__"]["getattr"] = getattr; ns["__builtins__"]["hasattr"] = hasattr
     exec(compile(code, "<model>", "exec"), ns)   # noqa: S102 — after static checks, restricted builtins
     return ns
 
 
 class Sandbox:
-    def __init__(self, cpu_seconds: int = 2, memory_mb: int = 256, python: Optional[str] = None, log=None):
+    def __init__(self, cpu_seconds: int = 2, memory_mb: int = 256, python: Optional[str] = None, log=None, allow_getattr: bool = False):
         self.cpu_seconds, self.memory_mb = cpu_seconds, memory_mb
         self.python = python or sys.executable
         self.log = log or (lambda *a, **k: None)
+        self.allow_getattr = allow_getattr
+
+    def load_namespace(self, code: str):
+        """Validated in-process load; returns the module namespace or None (error logged)."""
+        try:
+            return load_in_process(code, allow_getattr=self.allow_getattr)
+        except Exception as e:
+            self.log(f"sandbox load failed: {type(e).__name__}: {str(e)[:200]}")
+            return None
 
     def validate(self, code: str, log_json: list[dict]) -> dict:
         """Run static checks + build + evaluate in a resource-limited subprocess. Returns {ok, score, coverage, violations, error}."""
@@ -125,7 +143,7 @@ class Sandbox:
     def load(self, code: str):
         """In-process load after validation. Returns the WorldModel or None (error logged)."""
         try:
-            ns = load_in_process(code)
+            ns = load_in_process(code, allow_getattr=self.allow_getattr)
             if "build_model" not in ns:
                 return None
             model = ns["build_model"]()
