@@ -227,6 +227,10 @@ class HypothesisPolicy:
             events.emit("HYPOTHESISE", "HYPOTHESISE", f"round {rounds}: {len(cands)} candidate(s) in {time.time() - t0:.0f}s", budget_used=budget.used())
             for c in cands:
                 events.emit("HYPOTHESISE", "HYPOTHESISE", c.summary(), budget_used=budget.used())
+                if self.events_dir:
+                    hd = self.events_dir / f"{game_id}.hypotheses"; hd.mkdir(exist_ok=True)
+                    (hd / f"h{c.n}_r{rounds}_acc{c.verdict.accuracy:.2f}.py").write_text(c.code + "\n\n# verdict: " + c.summary()
+                                                                                + "\n" + "\n".join("# " + l for ce in c.verdict.counterexamples[:2] for l in ce.splitlines()))
             if not cands:
                 continue
             best = cands[0]
