@@ -1,0 +1,843 @@
+{
+ "version": 243,
+ "plan": "1. Analyze the current state of the gauges in P0 to determine which blocks are misaligned. 2. For each misaligned block, calculate the required shift (left or right) to reach its target slot. 3. Execute shifts using the corresponding colour-8 (left) or colour-14 (right) buttons. 4. CRITICAL: Before shifting right, verify that the block will not move into the hazard zone (cols 58-63). If a block is near the right edge, shift it left first or ensure it wraps safely if the game logic allows (though evidence suggests hard reset). 5. Repeat until all gauge segments are filled and the level complete",
+ "entries": [
+  {
+   "id": "E1",
+   "section": "env",
+   "text": "P0 is a progress panel containing two gauges: colour 5 (top) and colour 14 (bottom), which track completion state.",
+   "kind": "other",
+   "params": {},
+   "status": "hypothesis",
+   "support": 0,
+   "counter": 0,
+   "source": "llm",
+   "note": "",
+   "level": 1
+  },
+  {
+   "id": "E2",
+   "section": "env",
+   "text": "P1 (rows 13-50, colour 4) is the main play area containing scattered 4x4 coloured blocks and smaller markers.",
+   "kind": "other",
+   "params": {},
+   "status": "hypothesis",
+   "support": 0,
+   "counter": 0,
+   "source": "llm",
+   "note": "",
+   "level": 1
+  },
+  {
+   "id": "E3",
+   "section": "env",
+   "text": "P2 (rows 51-63, colour 3) is a bottom border panel, likely decorative or an exit zone.",
+   "kind": "other",
+   "params": {},
+   "status": "hypothesis",
+   "support": 0,
+   "counter": 0,
+   "source": "llm",
+   "note": "",
+   "level": 1
+  },
+  {
+   "id": "E4",
+   "section": "env",
+   "text": "Column 0 (colour 14) is a vertical HUD strip that likely tracks score, moves, or selected state.",
+   "kind": "other",
+   "params": {},
+   "status": "hypothesis",
+   "support": 0,
+   "counter": 0,
+   "source": "llm",
+   "note": "",
+   "level": 1
+  },
+  {
+   "id": "E5",
+   "section": "env",
+   "text": "4x4 blocks (colours 1,2,8,9,10,11,15) are primary interactive objects to be manipulated.",
+   "kind": "other",
+   "params": {},
+   "status": "hypothesis",
+   "support": 0,
+   "counter": 0,
+   "source": "llm",
+   "note": "",
+   "level": 1
+  },
+  {
+   "id": "E6",
+   "section": "env",
+   "text": "2x2 blocks (colour 4) and 4px markers (colour 11) are likely secondary objects or static obstacles.",
+   "kind": "other",
+   "params": {},
+   "status": "hypothesis",
+   "support": 0,
+   "counter": 0,
+   "source": "llm",
+   "note": "",
+   "level": 1
+  },
+  {
+   "id": "R1",
+   "section": "rules",
+   "text": "Clicking a 4x4 block (e.g., colour 1 at row 19) selects or collects it.",
+   "kind": "click",
+   "params": {
+    "color": 1
+   },
+   "status": "hypothesis",
+   "support": 1,
+   "counter": 0,
+   "source": "llm",
+   "note": "Clicking blocks does not select/collect them; clicking them did nothing in recent actions.",
+   "level": 1
+  },
+  {
+   "id": "R2",
+   "section": "rules",
+   "text": "Clicking colour-5 slots in P0 does nothing; they are part of the progress gauge.",
+   "kind": "click",
+   "params": {
+    "color": 5
+   },
+   "status": "confirmed",
+   "support": 2,
+   "counter": 0,
+   "source": "llm",
+   "note": "Clicking colour-5 slots did nothing in recent actions; they are static frame markers.",
+   "level": 1
+  },
+  {
+   "id": "R3",
+   "section": "rules",
+   "text": "Clicking colour-4 background or colour-11 markers produces no state change.",
+   "kind": "noop",
+   "params": {
+    "action": "MOUSE"
+   },
+   "status": "hypothesis",
+   "support": 0,
+   "counter": 0,
+   "source": "llm",
+   "note": "",
+   "level": 1
+  },
+  {
+   "id": "R4",
+   "section": "rules",
+   "text": "The colour-14 and colour-5 strips in P0 act as gauges that change length/state as blocks are shifted into correct positions.",
+   "kind": "gauge",
+   "params": {
+    "color": 14,
+    "per_action": 0
+   },
+   "status": "hypothesis",
+   "support": 0,
+   "counter": 0,
+   "source": "llm",
+   "note": "",
+   "level": 1
+  },
+  {
+   "id": "W1",
+   "section": "win",
+   "text": "Level completes when all 8 colour-5 slots in P0 are filled with collected blocks.",
+   "kind": "collect_all",
+   "params": {
+    "collect": 5
+   },
+   "status": "refuted",
+   "support": 0,
+   "counter": 0,
+   "source": "llm",
+   "note": "Level 1 completed without filling P0 slots; completion is triggered by block alignment, not slot filling.",
+   "level": 1
+  },
+  {
+   "id": "W2",
+   "section": "win",
+   "text": "Alternatively, level completes when all 4x4 blocks are removed from P1 via matching or collection.",
+   "kind": "other",
+   "params": {},
+   "status": "refuted",
+   "support": 0,
+   "counter": 0,
+   "source": "llm",
+   "note": "Blocks do not vanish via matching/collection in the traditional sense; they shift into place.",
+   "level": 1
+  },
+  {
+   "id": "R5",
+   "section": "rules",
+   "text": "clicking colour 8 in P1 (P1 = the colour-4 area): changes the playfield (36/36), effect not yet modelled",
+   "kind": "click",
+   "params": {
+    "color": 8,
+    "region": 1
+   },
+   "status": "confirmed",
+   "support": 36,
+   "counter": 0,
+   "source": "harness",
+   "note": "induced from transitions",
+   "level": 1
+  },
+  {
+   "id": "R6",
+   "section": "rules",
+   "text": "the colour-8 button at rows 29-36 cols 2-7 shifts every block on its track one slot (0 slot transitions solved from 5 presses; blocks return to their slot after a full cycle)",
+   "kind": "button",
+   "params": {
+    "color": 8,
+    "region": 1,
+    "bbox": [
+     29,
+     2,
+     36,
+     7
+    ]
+   },
+   "status": "confirmed",
+   "support": 5,
+   "counter": 0,
+   "source": "harness",
+   "note": "induced from transitions",
+   "level": 1
+  },
+  {
+   "id": "R7",
+   "section": "rules",
+   "text": "clicking colour 9 in P1 (P1 = the colour-4 area) changes nothing (1 clicks)",
+   "kind": "click",
+   "params": {
+    "color": 9,
+    "region": 1,
+    "changes": []
+   },
+   "status": "hypothesis",
+   "support": 1,
+   "counter": 0,
+   "source": "harness",
+   "note": "induced from transitions",
+   "level": 1
+  },
+  {
+   "id": "R8",
+   "section": "rules",
+   "text": "clicking colour 2 in P1 (P1 = the colour-4 area) changes nothing (1 clicks)",
+   "kind": "click",
+   "params": {
+    "color": 2,
+    "region": 1,
+    "changes": []
+   },
+   "status": "hypothesis",
+   "support": 1,
+   "counter": 0,
+   "source": "harness",
+   "note": "induced from transitions",
+   "level": 1
+  },
+  {
+   "id": "W5",
+   "section": "win",
+   "text": "Level completes when all blocks are shifted into their correct target positions, causing the progress gauges (colours 5 and 14 in P0) to reach their maximum length/state.",
+   "kind": "inside",
+   "params": {
+    "condition": "all_blocks_aligned"
+   },
+   "status": "refuted",
+   "support": 0,
+   "counter": 0,
+   "source": "llm",
+   "note": "Level did not complete when gauges were full; instead, a game over occurred due to a hazard.",
+   "level": 2
+  },
+  {
+   "id": "E7",
+   "section": "env",
+   "text": "role of colour 8 in P1: shift_left_button",
+   "kind": "other",
+   "params": {},
+   "status": "hypothesis",
+   "support": 0,
+   "counter": 0,
+   "source": "llm",
+   "note": "",
+   "level": 2
+  },
+  {
+   "id": "E8",
+   "section": "env",
+   "text": "role of colour 4 in P1: background",
+   "kind": "other",
+   "params": {},
+   "status": "hypothesis",
+   "support": 0,
+   "counter": 0,
+   "source": "llm",
+   "note": "",
+   "level": 2
+  },
+  {
+   "id": "E9",
+   "section": "env",
+   "text": "role of colour 11 in P1: block",
+   "kind": "other",
+   "params": {},
+   "status": "hypothesis",
+   "support": 0,
+   "counter": 0,
+   "source": "llm",
+   "note": "",
+   "level": 2
+  },
+  {
+   "id": "E10",
+   "section": "env",
+   "text": "role of colour 10 in P1: block",
+   "kind": "other",
+   "params": {},
+   "status": "hypothesis",
+   "support": 0,
+   "counter": 0,
+   "source": "llm",
+   "note": "",
+   "level": 2
+  },
+  {
+   "id": "E11",
+   "section": "env",
+   "text": "role of colour 9 in P1: block",
+   "kind": "other",
+   "params": {},
+   "status": "hypothesis",
+   "support": 0,
+   "counter": 0,
+   "source": "llm",
+   "note": "",
+   "level": 2
+  },
+  {
+   "id": "E12",
+   "section": "env",
+   "text": "role of colour 2 in P1: block",
+   "kind": "other",
+   "params": {},
+   "status": "hypothesis",
+   "support": 0,
+   "counter": 0,
+   "source": "llm",
+   "note": "",
+   "level": 2
+  },
+  {
+   "id": "E13",
+   "section": "env",
+   "text": "role of colour 1 in P1: block",
+   "kind": "other",
+   "params": {},
+   "status": "hypothesis",
+   "support": 0,
+   "counter": 0,
+   "source": "llm",
+   "note": "",
+   "level": 2
+  },
+  {
+   "id": "E14",
+   "section": "env",
+   "text": "role of colour 15 in P1: block",
+   "kind": "other",
+   "params": {},
+   "status": "hypothesis",
+   "support": 0,
+   "counter": 0,
+   "source": "llm",
+   "note": "",
+   "level": 2
+  },
+  {
+   "id": "E15",
+   "section": "env",
+   "text": "role of colour 5 in P0: gauge_segment",
+   "kind": "other",
+   "params": {},
+   "status": "hypothesis",
+   "support": 0,
+   "counter": 0,
+   "source": "llm",
+   "note": "",
+   "level": 2
+  },
+  {
+   "id": "E16",
+   "section": "env",
+   "text": "role of colour 14 in P1: shift_right_button",
+   "kind": "other",
+   "params": {},
+   "status": "hypothesis",
+   "support": 0,
+   "counter": 0,
+   "source": "llm",
+   "note": "",
+   "level": 2
+  },
+  {
+   "id": "W6",
+   "section": "win",
+   "text": "PROCEDURE: 1. Identify the target position for each block by observing which gauge segments (col 5/14 in P0) are empty. 2. Use colour-8 buttons to shift tracks left and colour-14 buttons to shift tracks right. 3. Align all blocks such that every gauge segment is filled. 4. Avoid shifting blocks into the 'hazard zone' at the right edge of the playfield (cols ~58-63), as this triggers a game over/reset.",
+   "kind": "other",
+   "params": {},
+   "status": "refuted",
+   "support": 0,
+   "counter": 0,
+   "source": "llm",
+   "note": "Procedure failed because it did not account for the hazard zone causing game over.",
+   "level": 2
+  },
+  {
+   "id": "R9",
+   "section": "rules",
+   "text": "clicking colour 11 in P1 (P1 = the colour-4 area) changes nothing (1 clicks)",
+   "kind": "click",
+   "params": {
+    "color": 11,
+    "region": 1,
+    "changes": []
+   },
+   "status": "hypothesis",
+   "support": 1,
+   "counter": 0,
+   "source": "harness",
+   "note": "induced from transitions",
+   "level": 2
+  },
+  {
+   "id": "R10",
+   "section": "rules",
+   "text": "the colour-8 button at rows 25-28 cols 13-15 shifts every block on its track one slot (10 slot transitions solved from 13 presses; blocks return to their slot after a full cycle)",
+   "kind": "button",
+   "params": {
+    "color": 8,
+    "region": 1,
+    "bbox": [
+     25,
+     13,
+     28,
+     15
+    ]
+   },
+   "status": "confirmed",
+   "support": 13,
+   "counter": 0,
+   "source": "harness",
+   "note": "induced from transitions",
+   "level": 2
+  },
+  {
+   "id": "R11",
+   "section": "rules",
+   "text": "clicking colour 14 in P1 (P1 = the colour-4 area): changes the playfield (59/59), effect not yet modelled",
+   "kind": "click",
+   "params": {
+    "color": 14,
+    "region": 1
+   },
+   "status": "confirmed",
+   "support": 59,
+   "counter": 0,
+   "source": "harness",
+   "note": "induced from transitions",
+   "level": 2
+  },
+  {
+   "id": "R12",
+   "section": "rules",
+   "text": "the colour-14 button at rows 25-28 cols 47-49 shifts every block on its track one slot (10 slot transitions solved from 12 presses; blocks return to their slot after a full cycle)",
+   "kind": "button",
+   "params": {
+    "color": 14,
+    "region": 1,
+    "bbox": [
+     25,
+     47,
+     28,
+     49
+    ]
+   },
+   "status": "confirmed",
+   "support": 12,
+   "counter": 0,
+   "source": "harness",
+   "note": "induced from transitions",
+   "level": 2
+  },
+  {
+   "id": "R13",
+   "section": "rules",
+   "text": "the colour-8 button at rows 34-37 cols 13-15 shifts every block on its track one slot (10 slot transitions solved from 4 presses; blocks return to their slot after a full cycle)",
+   "kind": "button",
+   "params": {
+    "color": 8,
+    "region": 1,
+    "bbox": [
+     34,
+     13,
+     37,
+     15
+    ]
+   },
+   "status": "confirmed",
+   "support": 4,
+   "counter": 0,
+   "source": "harness",
+   "note": "induced from transitions",
+   "level": 2
+  },
+  {
+   "id": "R14",
+   "section": "rules",
+   "text": "the colour-14 button at rows 34-37 cols 47-49 shifts every block on its track one slot (10 slot transitions solved from 6 presses; blocks return to their slot after a full cycle)",
+   "kind": "button",
+   "params": {
+    "color": 14,
+    "region": 1,
+    "bbox": [
+     34,
+     47,
+     37,
+     49
+    ]
+   },
+   "status": "confirmed",
+   "support": 6,
+   "counter": 0,
+   "source": "harness",
+   "note": "induced from transitions",
+   "level": 2
+  },
+  {
+   "id": "E17",
+   "section": "env",
+   "text": "role of colour 14 in P0: gauge_segment",
+   "kind": "other",
+   "params": {},
+   "status": "hypothesis",
+   "support": 0,
+   "counter": 0,
+   "source": "llm",
+   "note": "",
+   "level": 2
+  },
+  {
+   "id": "E18",
+   "section": "env",
+   "text": "role of colour 1,2,8,9,10,11,15 in P1: blocks",
+   "kind": "other",
+   "params": {},
+   "status": "hypothesis",
+   "support": 0,
+   "counter": 0,
+   "source": "llm",
+   "note": "",
+   "level": 2
+  },
+  {
+   "id": "R17",
+   "section": "rules",
+   "text": "clicking colour 10 in P1 (P1 = the colour-4 area) changes nothing (1 clicks)",
+   "kind": "click",
+   "params": {
+    "color": 10,
+    "region": 1,
+    "changes": []
+   },
+   "status": "hypothesis",
+   "support": 1,
+   "counter": 0,
+   "source": "harness",
+   "note": "induced from transitions",
+   "level": 2
+  },
+  {
+   "id": "R18",
+   "section": "rules",
+   "text": "the colour-8 button at rows 16-19 cols 19-21 shifts every block on its track one slot (26 slot transitions solved from 19 presses; blocks return to their slot after a full cycle)",
+   "kind": "button",
+   "params": {
+    "color": 8,
+    "region": 1,
+    "bbox": [
+     16,
+     19,
+     19,
+     21
+    ]
+   },
+   "status": "confirmed",
+   "support": 19,
+   "counter": 0,
+   "source": "harness",
+   "note": "induced from transitions",
+   "level": 2
+  },
+  {
+   "id": "R19",
+   "section": "rules",
+   "text": "the colour-14 button at rows 16-19 cols 38-40 shifts every block on its track one slot (26 slot transitions solved from 41 presses; blocks return to their slot after a full cycle)",
+   "kind": "button",
+   "params": {
+    "color": 14,
+    "region": 1,
+    "bbox": [
+     16,
+     38,
+     19,
+     40
+    ]
+   },
+   "status": "confirmed",
+   "support": 41,
+   "counter": 0,
+   "source": "harness",
+   "note": "induced from transitions",
+   "level": 2
+  },
+  {
+   "id": "R20",
+   "section": "rules",
+   "text": "Clicking colour-8 buttons in P1 shifts all blocks on their associated horizontal tracks one slot to the left (dx=-3).",
+   "kind": "move",
+   "params": {
+    "action": "LEFT",
+    "dx": -3,
+    "dy": 0,
+    "button_color": 8
+   },
+   "status": "hypothesis",
+   "support": 0,
+   "counter": 0,
+   "source": "llm",
+   "note": "",
+   "level": 2
+  },
+  {
+   "id": "R21",
+   "section": "rules",
+   "text": "Clicking colour-14 buttons in P1 shifts all blocks on their associated horizontal tracks one slot to the right (dx=+3).",
+   "kind": "move",
+   "params": {
+    "action": "RIGHT",
+    "dx": 3,
+    "dy": 0,
+    "button_color": 14
+   },
+   "status": "hypothesis",
+   "support": 0,
+   "counter": 0,
+   "source": "llm",
+   "note": "",
+   "level": 2
+  },
+  {
+   "id": "R22",
+   "section": "rules",
+   "text": "Blocks move in discrete 3-pixel slots along horizontal tracks defined by the grid structure. A full cycle returns blocks to their original position.",
+   "kind": "other",
+   "params": {},
+   "status": "hypothesis",
+   "support": 0,
+   "counter": 0,
+   "source": "llm",
+   "note": "",
+   "level": 2
+  },
+  {
+   "id": "E19",
+   "section": "env",
+   "text": "role of colour 1,2,9,10,11,15 in P1: block",
+   "kind": "other",
+   "params": {},
+   "status": "hypothesis",
+   "support": 0,
+   "counter": 0,
+   "source": "llm",
+   "note": "",
+   "level": 2
+  },
+  {
+   "id": "E20",
+   "section": "env",
+   "text": "role of colour 3 in P2: border",
+   "kind": "other",
+   "params": {},
+   "status": "hypothesis",
+   "support": 0,
+   "counter": 0,
+   "source": "llm",
+   "note": "",
+   "level": 2
+  },
+  {
+   "id": "R23",
+   "section": "rules",
+   "text": "clicking colour 15 in P1 (P1 = the colour-4 area) changes nothing (1 clicks)",
+   "kind": "click",
+   "params": {
+    "color": 15,
+    "region": 1,
+    "changes": []
+   },
+   "status": "hypothesis",
+   "support": 1,
+   "counter": 0,
+   "source": "harness",
+   "note": "induced from transitions",
+   "level": 2
+  },
+  {
+   "id": "R24",
+   "section": "rules",
+   "text": "Shifting a block into the rightmost edge of the playfield (cols 58-63) triggers a game over/reset.",
+   "kind": "hazard",
+   "params": {
+    "color": 4,
+    "bbox": [
+     11,
+     58,
+     51,
+     63
+    ]
+   },
+   "status": "hypothesis",
+   "support": 0,
+   "counter": 0,
+   "source": "llm",
+   "note": "",
+   "level": 2
+  },
+  {
+   "id": "W7",
+   "section": "win",
+   "text": "Level completes when all gauge segments (colours 5 and 14 in P0) are filled, provided no block is in the hazard zone.",
+   "kind": "collect_all",
+   "params": {
+    "collect": 5
+   },
+   "status": "hypothesis",
+   "support": 0,
+   "counter": 0,
+   "source": "llm",
+   "note": "",
+   "level": 2
+  },
+  {
+   "id": "E21",
+   "section": "env",
+   "text": "role of colour 3 in P0: border",
+   "kind": "other",
+   "params": {},
+   "status": "hypothesis",
+   "support": 0,
+   "counter": 0,
+   "source": "llm",
+   "note": "",
+   "level": 2
+  },
+  {
+   "id": "E22",
+   "section": "env",
+   "text": "role of colour 14 in P0 (col 0): hud_strip",
+   "kind": "other",
+   "params": {},
+   "status": "hypothesis",
+   "support": 0,
+   "counter": 0,
+   "source": "llm",
+   "note": "",
+   "level": 2
+  }
+ ],
+ "history": [
+  "+E1 (llm) P0 (rows 0-12, colour 3) is a target panel containing 8 colour-5 markers at row ",
+  "+E2 (llm) P1 (rows 13-50, colour 4) is the main play area containing scattered 4x4 coloure",
+  "+E3 (llm) P2 (rows 51-63, colour 3) is a bottom border panel, likely decorative or an exit",
+  "+E4 (llm) Column 0 (colour 14) is a vertical HUD strip that likely tracks score, moves, or",
+  "+E5 (llm) 4x4 blocks (colours 1,2,8,9,10,11,15) are primary interactive objects to be mani",
+  "+E6 (llm) 2x2 blocks (colour 4) and 4px markers (colour 11) are likely secondary objects o",
+  "+R1 (llm) Clicking a 4x4 block (e.g., colour 1 at row 19) selects or collects it.",
+  "+R2 (llm) Clicking a colour-5 slot in P0 places a selected block or cycles through targets",
+  "+R3 (llm) Clicking colour-4 background or colour-11 markers produces no state change.",
+  "+R4 (llm) The colour-14 HUD updates to reflect collected items or remaining actions.",
+  "+W1 (llm) Level completes when all 8 colour-5 slots in P0 are filled with collected blocks",
+  "+W2 (llm) Alternatively, level completes when all 4x4 blocks are removed from P1 via match",
+  "+R5 (harness) clicking colour 8 in P1 (P1 = the colour-4 area): changes the playfield (1/1), e",
+  "+R6 (harness) the colour-8 button at rows 29-36 cols 2-7 shifts every block on its track one s",
+  "+R7 (harness) clicking colour 9 in P1 (P1 = the colour-4 area) changes nothing (1 clicks)",
+  "+R8 (harness) clicking colour 2 in P1 (P1 = the colour-4 area) changes nothing (1 clicks)",
+  "+W3 (harness) level 1 was won by clicking colours in this order: [1, 5, 8, 8, 8, 9, 5, 2, 8, 8",
+  "+W4 (harness) every block sits inside the frame of its own colour (corner marks; seen with col",
+  "refute W1: Level 1 completed without filling P0 slots; blocks vanished ",
+  "refute W2: Blocks did not disappear via matching/collection but by alig",
+  "refute R1: Clicking blocks does not select/collect them; clicking them ",
+  "refute R2: Clicking colour-5 slots did nothing in recent actions; they ",
+  "edit R6: Clicking the colour-8 button shifts all movable blocks one s",
+  "+W5 (llm) Level completes when every block sits inside the frame of its own colour.",
+  "-W3",
+  "-W4",
+  "+E7 (llm) role of colour 8 in P1: shift_button",
+  "+E8 (llm) role of colour 4 in P1: background",
+  "+E9 (llm) role of colour 11 in P1: block",
+  "+E10 (llm) role of colour 10 in P1: block",
+  "+E11 (llm) role of colour 9 in P1: block",
+  "+E12 (llm) role of colour 2 in P1: block",
+  "+E13 (llm) role of colour 1 in P1: block",
+  "+E14 (llm) role of colour 15 in P1: block",
+  "+E15 (llm) role of colour 5 in P0: frame_marker",
+  "+E16 (llm) role of colour 14 in P1: block",
+  "+W6 (llm) PROCEDURE: Click the colour-8 shift button repeatedly until all blocks (colours ",
+  "+R9 (harness) clicking colour 11 in P1 (P1 = the colour-4 area) changes nothing (1 clicks)",
+  "+R10 (harness) the colour-8 button at rows 25-28 cols 13-15 shifts every block on its track one",
+  "+R11 (harness) clicking colour 14 in P1 (P1 = the colour-4 area): changes the playfield (1/1), ",
+  "+R12 (harness) the colour-14 button at rows 25-28 cols 47-49 shifts every block on its track on",
+  "+R13 (harness) the colour-8 button at rows 34-37 cols 13-15 shifts every block on its track one",
+  "+R14 (harness) the colour-14 button at rows 34-37 cols 47-49 shifts every block on its track on",
+  "edit E1: P0 is a progress panel containing two gauges: colour 5 (top)",
+  "edit R2: Clicking colour-5 slots in P0 does nothing; they are part of",
+  "edit R4: The colour-14 and colour-5 strips in P0 act as gauges that c",
+  "refute W1: Level 1 completed without filling P0 slots; completion is tr",
+  "refute W2: Blocks do not vanish via matching/collection in the traditio",
+  "edit W5: Level completes when all blocks are shifted into their corre",
+  "edit W6: PROCEDURE: Identify the track for each block by clicking the",
+  "+R15 (llm) Clicking the colour-14 button at rows 34-37 cols 47-49 shifts every block on its",
+  "+R16 (llm) Clicking the colour-8 button at rows 34-37 cols 13-15 shifts every block on its ",
+  "+E17 (llm) role of colour 14 in P0: progress_gauge",
+  "+E18 (llm) role of colour 1,2,8,9,10,11,15 in P1: blocks",
+  "+R17 (harness) clicking colour 10 in P1 (P1 = the colour-4 area) changes nothing (1 clicks)",
+  "+R18 (harness) the colour-8 button at rows 16-19 cols 19-21 shifts every block on its track one",
+  "+R19 (harness) the colour-14 button at rows 16-19 cols 38-40 shifts every block on its track on",
+  "refute R15: Duplicate of R14, which is already verified. R15 was a predi",
+  "refute R16: Duplicate of R13, which is already verified. R16 was a predi",
+  "edit W5: Level completes when all blocks are shifted into their corre",
+  "+R20 (llm) Clicking colour-8 buttons in P1 shifts all blocks on their associated horizontal",
+  "+R21 (llm) Clicking colour-14 buttons in P1 shifts all blocks on their associated horizonta",
+  "+R22 (llm) Blocks move in discrete 3-pixel slots along horizontal tracks defined by the gri",
+  "+E19 (llm) role of colour 1,2,9,10,11,15 in P1: block",
+  "+E20 (llm) role of colour 3 in P2: border",
+  "-R15 (superseded)",
+  "-R16 (superseded)",
+  "+R23 (harness) clicking colour 15 in P1 (P1 = the colour-4 area) changes nothing (1 clicks)",
+  "refute W5: Level did not complete when gauges were full; instead, a gam",
+  "refute W6: Procedure failed because it did not account for the hazard z",
+  "+R24 (llm) Shifting a block into the rightmost edge of the playfield (cols 58-63) triggers ",
+  "+W7 (llm) Level completes when all gauge segments (colours 5 and 14 in P0) are filled, pro",
+  "edit R20: Clicking colour-8 buttons in P1 shifts all blocks on their a",
+  "edit R21: Clicking colour-14 buttons in P1 shifts all blocks on their ",
+  "+E21 (llm) role of colour 3 in P0: border",
+  "+E22 (llm) role of colour 14 in P0 (col 0): hud_strip"
+ ]
+}
