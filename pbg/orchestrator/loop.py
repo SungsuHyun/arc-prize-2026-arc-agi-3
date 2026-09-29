@@ -194,7 +194,7 @@ class Orchestrator:
                 roles_fn = (lambda sc, m=H[0].model: m.with_roles(sc)) if H and isinstance(H[0].model, RuleModel) else None
                 G = goal_inf.refine(s.transitions, G, self.memory.priors("goals"), s.level, s.scene, roles_fn=roles_fn, model=H[0].model if H else None)
                 exp = None
-                model_ok = bool(H) and H[0].score >= self.min_plan_score
+                model_ok = bool(H) and H[0].usable(self.min_plan_score)
                 if model_ok and not budget.low() and budget.allows("experiment", level=s.level) and experiments_this_round < 6:
                     exp = wml.most_informative_action(H, s.scene, s.available_actions(), semantics=semantics, extra_clicks=planner.responsive,
                                                       exclude=tried_experiments, state_key=_state_key(s.scene))   # never repeat an experiment from the same state
@@ -206,19 +206,19 @@ class Orchestrator:
                 if H and H[0].verified and H[0].code and H[0].origin != "induced":
                     self.memory.promote_model(game_id, H[0].code, {"score": H[0].score, "coverage": H[0].coverage, "n": len(s.transitions)})
                 self.memory.save_hypotheses(game_id, [{"name": h.name, "score": h.score, "coverage": h.coverage, "code": h.code, "origin": h.origin} for h in H])
-                top = f"top h={H[0].name} score={H[0].score:.2f} cov={H[0].coverage:.2f}" if H else "no hypothesis"
+                top = f"top h={H[0].name} score={H[0].score:.2f} chg={H[0].change_score:.2f} cov={H[0].coverage:.2f}" if H else "no hypothesis"
                 events.emit("HYPOTHESIZE", "PLAN", f"{top}; goals={len(G)} top={G[0].name if G else None}", budget_used=budget.used())
                 state = "PLAN"
             elif state == "PLAN":
                 if wml._job is not None and not wml.job_running():
                     events.emit("PLAN", "HYPOTHESIZE", "llm job finished -> merge candidates", budget_used=budget.used()); state = "HYPOTHESIZE"; continue
-                if H and H[0].score < self.min_plan_score and not (H[0].verified):
+                if H and not H[0].usable(self.min_plan_score) and not H[0].verified:
                     # quality gate: a model that explains < 60% of the log is not worth executing plans on; gather evidence instead
                     if wml.job_running() and budget.cap("reprobe", s.level) <= 0:
-                        events.emit("PLAN", "HYPOTHESIZE", f"model score {H[0].score:.2f} below gate; waiting for the llm job", budget_used=budget.used())
+                        events.emit("PLAN", "HYPOTHESIZE", f"model score {H[0].score:.2f}/change {H[0].change_score:.2f} below gate; waiting for the llm job", budget_used=budget.used())
                         wml.wait_job(120.0); state = "HYPOTHESIZE"; continue
                     if budget.cap("reprobe", s.level) > 0:
-                        events.emit("PLAN", "PROBE", f"model score {H[0].score:.2f} below gate -> walk probe", budget_used=budget.used()); state = "PROBE"; continue
+                        events.emit("PLAN", "PROBE", f"model score {H[0].score:.2f}/change {H[0].change_score:.2f} below gate -> walk probe", budget_used=budget.used()); state = "PROBE"; continue
                     if not self.use_llm or not wml.job_running():
                         # nothing left to learn from cheaply: ask the LLM for a goal/model or let the low-quality plan through once
                         gated_rounds += 1

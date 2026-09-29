@@ -22,6 +22,7 @@ class EvalResult:
     prediction_key: str = ""
     n: int = 0
     per_class: dict[str, tuple[int, int]] = field(default_factory=dict)   # action key -> (correct, total)
+    change_score: float = 0.0   # accuracy on transitions where the board changed (a "nothing happens" model scores 0 here)
 
 
 def _applied_rules(model: WorldModel, t: Transition) -> list[str]:
@@ -45,7 +46,7 @@ def evaluate(model: WorldModel, log: Iterable[Transition], *, skip_reset: bool =
         log = [t for t in log if t.level == last]
     if not log:
         return EvalResult(0.0, 0.0, n=0)
-    correct = covered = 0
+    correct = covered = 0; ch_ok = 0
     viol: list[str] = []; unk: list[str] = []
     applied_total: dict[str, int] = {}; applied_bad: dict[str, int] = {}
     keys = []
@@ -61,6 +62,8 @@ def evaluate(model: WorldModel, log: Iterable[Transition], *, skip_reset: bool =
             continue
         covered += 1
         ok = _equal(pred, t.after, ignore_ui, t, model)
+        if not t.diff.is_noop and not _equal(t.before, t.after, ignore_ui, t, model):
+            ch_ok += int(ok)      # a change the evaluator can see (not a strip tick / 1-2 px mark)
         keys.append(hashlib.sha1(repr(sorted(o.identity() for o in pred.objects)).encode()).hexdigest()[:8])
         for name in _applied_rules(model, t):
             applied_total[name] = applied_total.get(name, 0) + 1
@@ -77,8 +80,9 @@ def evaluate(model: WorldModel, log: Iterable[Transition], *, skip_reset: bool =
                 r.confidence = conf[r.name]
                 r.evidence = [t.id for t in log if t.id not in viol and r.name in _applied_rules(model, t)][:50]
                 r.violated_by = [t.id for t in log if t.id in viol and r.name in _applied_rules(model, t)][:50]
+    ch_total_all = sum(1 for t in log if not t.diff.is_noop and not _equal(t.before, t.after, ignore_ui, t, model))
     return EvalResult(correct / len(log), covered / len(log), viol, unk, conf, hashlib.sha1("|".join(keys).encode()).hexdigest()[:12], len(log),
-                      {k: (v[0], v[1]) for k, v in per_class.items()})
+                      {k: (v[0], v[1]) for k, v in per_class.items()}, change_score=(ch_ok / ch_total_all) if ch_total_all else 1.0)
 
 
 def _equal(pred, obs, ignore_ui: bool, t: Transition, model=None) -> bool:
@@ -118,7 +122,8 @@ def promotable(res: EvalResult, min_transitions: int = 20, min_per_class: int = 
 
 
 def make_hypothesis(model: WorldModel, res: EvalResult, code: str = "", name: str = "", origin: str = "llm", recent_mismatches: int = 0) -> Hypothesis:
-    return Hypothesis(model, res.score, res.coverage, list(res.violations), code, name, promotable(res), res.prediction_key, origin, recent_mismatches)
+    return Hypothesis(model, res.score, res.coverage, list(res.violations), code, name, promotable(res), res.prediction_key, origin, recent_mismatches,
+                      change_score=res.change_score)
 
 
 def dedupe(H: list[Hypothesis]) -> list[Hypothesis]:

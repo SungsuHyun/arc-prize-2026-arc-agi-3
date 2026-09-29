@@ -114,6 +114,11 @@ class Hypothesis:
     prediction_key: str = ""    # hash of all predictions on the log (dedupe)
     origin: str = "llm"         # llm | induced | transferred | prior
     recent_mismatches: int = 0  # mispredictions during execution since the last re-verification that changed the model
+    change_score: float = 1.0   # accuracy on the log's non-noop transitions (a model that predicts "nothing happens" scores 0)
+
+    def usable(self, min_score: float = 0.6, min_change: float = 0.5) -> bool:
+        """Good enough to plan and run experiments with (orchestrator quality gate)."""
+        return self.score >= min_score and self.change_score >= min_change
 
     def sort_key(self) -> tuple:
         return (self.score, self.coverage)

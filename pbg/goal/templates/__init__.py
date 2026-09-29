@@ -582,9 +582,11 @@ def t_match_pattern(scene: Scene, ctx: dict) -> list[GoalInstance]:
                     return None
                 la, lb = _layout_of(A), _layout_of(B)
                 return float(len({int(v) for v in la[la != lb]})) if la.shape == lb.shape else None   # >= one action per colour still missing
-            clue = 0.15 if len(cv.colors) == 1 else 0.0
-            out.append(GoalInstance(f"match_pattern({tgt.id}->{cv.id})", "match_pattern", {"target": tgt.id, "canvas": cv.id}, is_goal, progress,
-                                    clue=clue, estimate_fn=estimate))
+            # the canvas is painted with the target's colours (blank or partly done); the name follows the canvas POSITION so the
+            # goal keeps its confidence when the tracker re-numbers a fully repainted canvas
+            clue = 0.2 if set(cv.colors) < set(tgt.colors) else (0.1 if set(cv.colors) == set(tgt.colors) else 0.0)
+            out.append(GoalInstance(f"match_pattern({tgt.id}->@{cv.bbox[0]},{cv.bbox[1]})", "match_pattern", {"target": tgt.id, "canvas": cv.id, "canvas_bbox": list(cv.bbox)},
+                                    is_goal, progress, clue=clue, estimate_fn=estimate))
     return out
 
 
