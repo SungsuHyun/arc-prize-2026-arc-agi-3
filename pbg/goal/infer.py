@@ -34,6 +34,9 @@ class GoalInference:
             elif g.origin == "llm":
                 by_name[g.name] = g
         G = list(by_name.values())
+        if self.knowledge is not None:
+            for g in G:
+                g.confidence = min(1.0, g.confidence + self.knowledge.goal_structure_bonus(g))
         for name, pen in self.demoted.items():
             for g in G:
                 if g.name == name:

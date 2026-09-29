@@ -252,7 +252,7 @@ def induce_multi_agent(log: list[Transition], semantics: dict, available: list[A
     return [("induced:multi_agent+floor", build(True)), ("induced:multi_agent", build(False))]
 
 
-def induce_hypotheses(log: list[Transition], semantics: dict, available: list[Action]) -> list[tuple[str, RuleModel]]:
+def induce_hypotheses(log: list[Transition], semantics: dict, available: list[Action], knowledge=None) -> list[tuple[str, RuleModel]]:
     """Return (name, model) candidates built from priors. Several variants so evaluate() can pick the best."""
     if not log:
         return []
@@ -264,10 +264,10 @@ def induce_hypotheses(log: list[Transition], semantics: dict, available: list[Ac
     hints = infer_roles_static(log, semantics)
     agent_keys = set(hints["agent"]); agent_colors = set(hints["agent_colors"])
     if not moves or not agent_keys:
-        return induce_click_hypotheses(log, semantics, available)
+        return induce_click_hypotheses(log, semantics, available, knowledge)
     dirs = {int(k.replace("ACTION", "")): d for k, d in moves.items() if k.startswith("ACTION")}
     if not dirs:
-        return induce_click_hypotheses(log, semantics, available)
+        return induce_click_hypotheses(log, semantics, available, knowledge)
     multi = induce_multi_agent(log, semantics, available)
     buttons = sorted({a.id for a in available if a.type == "BUTTON"})
     noop_buttons = tuple(b for b in buttons if f"ACTION{b}" in semantics and semantics[f"ACTION{b}"].get("class") == "NOOP")
@@ -343,7 +343,7 @@ def induce_hypotheses(log: list[Transition], semantics: dict, available: list[Ac
     return out + multi
 
 
-def induce_click_hypotheses(log: list[Transition], semantics: dict, available: list[Action]) -> list[tuple[str, RuleModel]]:
+def induce_click_hypotheses(log: list[Transition], semantics: dict, available: list[Action], knowledge=None) -> list[tuple[str, RuleModel]]:
     """Click games: what happens to the clicked object, by (colour) class -> recolour cycle / removal / no-op."""
     clicks = [t for t in log if t.action.type == "CLICK"]
     if not clicks:
@@ -401,6 +401,15 @@ def induce_click_hypotheses(log: list[Transition], semantics: dict, available: l
         if disp:
             trig_box.setdefault((o.color, o.shape_sig, tuple(o.bbox)), Counter())[disp.most_common(1)[0][0]] += 1
     uniform = {k: c.most_common(1)[0][0] for k, c in trig_box.items() if c.most_common(1)[0][1] >= 2 and c.most_common(1)[0][1] >= 0.8 * sum(c.values())}
+    # knowledge asset (earlier levels): a trigger class whose displacement set is known needs ONE consistent observation
+    prior_rules = getattr(knowledge, "click_rules", {}) if knowledge is not None else {}
+    for k, c in trig_box.items():
+        if k in uniform:
+            continue
+        pr = prior_rules.get(f"c{k[0]}:{k[1][:8]}")
+        d, n = c.most_common(1)[0]
+        if pr and list(d) in pr.get("displacements", []) and n >= 1 and n >= 0.8 * sum(c.values()):
+            uniform[k] = d
     # learned permutations: per trigger class, the top-left -> top-left mapping of every moved object, if consistent
     votes: dict[tuple, dict] = {}
     last_level = max(t.level for t in clicks)
@@ -518,7 +527,25 @@ def induce_click_hypotheses(log: list[Transition], semantics: dict, available: l
         rules2 += [Rule(f"click_perm_{n}", lambda s, a: a.type == "CLICK", permute_on_click(perm_boxes[k[2]], dict(m)), source="induced")
                    for n, (k, m) in enumerate(perms.items()) if k not in shift_keys]
         for k, (dr, dc) in shift_keys.items():
-            rules2.insert(0, Rule(f"click_shift_{perm_boxes[k[2]]}", lambda s, a: a.type == "CLICK", move_on_click(perm_boxes[k[2]], "custom:moved", dr, dc), source="induced"))
+            r_ = Rule(f"click_shift_{perm_boxes[k[2]]}", lambda s, a: a.type == "CLICK", move_on_click(perm_boxes[k[2]], "custom:moved", dr, dc), source="induced")
+            r_.meta = {"kind": "click_shift", "trigger_class": f"c{k[0]}:{k[1][:8]}", "displacement": [int(dr), int(dc)],
+                       "mover_colors": sorted(mover_colors.get((k[0], k[1]), set()))}
+            rules2.insert(0, r_)
+        if knowledge is not None and getattr(knowledge, "clicks", None) is not None:
+            # clicks on classes the click map knows to react but no rule explains -> UNKNOWN, not "nothing happens"
+            cmap = knowledge.clicks
+            explained = {perm_boxes[k[2]] for k in shift_keys} | {perm_boxes[k[2]] for k in perms if k not in shift_keys}
+            def unknown_click(scene: Scene, action: Action):
+                if action.type != "CLICK":
+                    return scene
+                from ..probe.clickmap import click_key
+                key = click_key(scene, action.row, action.col)
+                oid = object_under(scene, action.row, action.col)
+                o = scene.get(oid) if oid is not None else None
+                if cmap.status(key) == "responsive" and (o is None or o.role not in explained):
+                    return None
+                return scene
+            rules2.append(Rule("unknown_responsive_click", lambda s, a: a.type == "CLICK", unknown_click, source="induced"))
         m2 = RuleModel(rules2, role_fn, default="noop", name="induced:click-shift")
         m2.level_scoped = any(k not in shift_keys for k in perms)
         m2.position_graph = {k[2]: {src: (d["near"] if isinstance(d, dict) else d) for src, d in m.items()} for k, m in perms.items() if k not in shift_keys}

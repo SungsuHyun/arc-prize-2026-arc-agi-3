@@ -20,21 +20,51 @@ class LevelKnowledge:
         self.won_goals: list[dict] = []            # [{level, name, template, actions}]
         self.demoted: dict[str, float] = {}        # goal name -> penalty (carried into the next level)
         self.levels_seen: set[int] = set()
+        # class-level click rules verified on earlier levels: trigger class -> {mover colours, displacements seen, n}.
+        # Positions change between levels, classes do not: on a new level ONE click per trigger object is enough to
+        # re-instantiate the rule (the displacement must be one already seen for the class)
+        self.click_rules: dict[str, dict] = {}
 
     # ── goal confidence prior for THIS game (stronger than the global usage stats) ──
     def goal_stats(self, global_stats: Optional[dict] = None) -> dict:
         out = dict(global_stats or {})
         for name, wins in self.goal_wins.items():
             fails = self.goal_fails.get(name, 0)
-            # a template that completed a level of this game starts the next level at 0.85 (+clue), a failed one lower
-            out[name] = {"games_used": wins + fails, "games_verified": round(0.85 * (wins + fails)) if wins else 0}
+            # a template that completed a level of this game starts the next level at 0.75 (+clue, +structure bonus),
+            # a failed one lower; kept below 1.0 so the structure bonus (same axis as the winning goal) can still rank
+            out[name] = {"games_used": 4 * (wins + fails), "games_verified": 3 * (wins + fails) if wins else 0}
         return out
+
+    def record_rules(self, model) -> int:
+        """Harvest class-level click rules from a verified model (rules carry `meta` set by the induction)."""
+        n = 0
+        for r in getattr(model, "rules", lambda: [])():
+            meta = getattr(r, "meta", None)
+            if not meta or meta.get("kind") != "click_shift" or r.confidence < 0.9:
+                continue
+            e = self.click_rules.setdefault(meta["trigger_class"], {"mover_colors": [], "displacements": [], "n": 0})
+            for c in meta.get("mover_colors", []):
+                if c not in e["mover_colors"]:
+                    e["mover_colors"].append(c)
+            d = list(meta["displacement"])
+            if d not in e["displacements"]:
+                e["displacements"].append(d)
+            e["n"] += 1; n += 1
+        return n
+
+    def goal_structure_bonus(self, goal) -> float:
+        """+0.1 for a goal with the same template AND the same structural parameters (axis, kind) as a goal that won
+        an earlier level; ids and colours are level-specific and ignored."""
+        for w in self.won_goals:
+            if w.get("template") == goal.template and w.get("structure") == _structure(goal.params):
+                return 0.1
+        return 0.0
 
     def record_win(self, level: int, goal, actions: int) -> None:
         if goal is None:
             return
         self.goal_wins[goal.template] += 1
-        self.won_goals.append({"level": level, "name": goal.name, "template": goal.template, "actions": actions})
+        self.won_goals.append({"level": level, "name": goal.name, "template": goal.template, "actions": actions, "structure": _structure(goal.params)})
 
     def record_fail(self, goal) -> None:
         if goal is not None:
@@ -43,7 +73,7 @@ class LevelKnowledge:
     # ── persistence ──
     def to_json(self) -> dict:
         return {"clicks": self.clicks.to_json(), "goal_wins": dict(self.goal_wins), "goal_fails": dict(self.goal_fails),
-                "won_goals": self.won_goals, "demoted": self.demoted, "levels_seen": sorted(self.levels_seen)}
+                "won_goals": self.won_goals, "demoted": self.demoted, "levels_seen": sorted(self.levels_seen), "click_rules": self.click_rules}
 
     @classmethod
     def from_json(cls, d: dict) -> "LevelKnowledge":
@@ -51,7 +81,7 @@ class LevelKnowledge:
         k.clicks = ClickMap.from_json(d.get("clicks", {}))
         k.goal_wins = Counter(d.get("goal_wins", {})); k.goal_fails = Counter(d.get("goal_fails", {}))
         k.won_goals = list(d.get("won_goals", [])); k.demoted = dict(d.get("demoted", {}))
-        k.levels_seen = set(d.get("levels_seen", []))
+        k.levels_seen = set(d.get("levels_seen", [])); k.click_rules = dict(d.get("click_rules", {}))
         return k
 
     def save(self, path: Path) -> None:
@@ -65,4 +95,15 @@ class LevelKnowledge:
             return cls()
 
     def summary(self) -> str:
-        return f"clicks[{self.clicks.summary()}] wins={dict(self.goal_wins)} fails={dict(self.goal_fails)}"
+        return f"clicks[{self.clicks.summary()}] wins={dict(self.goal_wins)} fails={dict(self.goal_fails)} rules={list(self.click_rules)}"
+
+
+def _structure(params: dict) -> dict:
+    """Structural (level-independent) goal parameters: string values that are not roles/regions/ids."""
+    out = {}
+    for k, v in (params or {}).items():
+        if k in ("color", "target", "canvas", "canvas_bbox", "a", "b", "src", "dst", "id"):
+            continue
+        if isinstance(v, str) and not v.startswith(("custom:", "R")):
+            out[k] = v
+    return out

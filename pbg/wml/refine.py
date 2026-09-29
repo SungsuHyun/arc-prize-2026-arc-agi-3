@@ -36,14 +36,14 @@ class WorldModelLab:
 
     # ── public ──
     def refine(self, log: list[Transition], current: list[Hypothesis], priors: Optional[dict], *, scene: Scene, semantics: dict,
-               available: list[Action], level_note: str = "", use_llm: bool = True, K: Optional[int] = None) -> list[Hypothesis]:
+               available: list[Action], level_note: str = "", use_llm: bool = True, K: Optional[int] = None, knowledge=None) -> list[Hypothesis]:
         H: list[Hypothesis] = []
         # 1. re-verify what we already have on the (grown) log
         for h in current:
             res = evaluate(h.model, log)
             H.append(make_hypothesis(h.model, res, h.code, h.name, h.origin, recent_mismatches=h.recent_mismatches))
         # 2. deterministic induction from semantics + priors
-        for name, model in induce_hypotheses(log, semantics, available):
+        for name, model in induce_hypotheses(log, semantics, available, knowledge):
             res = evaluate(model, log)
             H.append(make_hypothesis(model, res, induced_code(name), name, "induced"))
         H = dedupe(H); H.sort(key=lambda h: h.sort_key(), reverse=True)

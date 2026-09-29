@@ -81,7 +81,12 @@ def find_regions(grid: np.ndarray, *, min_area_ratio: float = 0.05, ui_strip_max
     min_area = max(4, int(min_area_ratio * h * w))
     regions: list[Region] = [Region("R0", global_bg, (0, 0, h, w), "board")]
     masks: dict[str, tuple] = {}
-    big = [s for s in stats if s["area"] >= min_area]
+    # a block that touches the grid border is background-like (a side panel, a column next to a mover): it becomes a
+    # region at half the size threshold, so widening/narrowing it by a few pixels does not flip it between region and object
+    def touches_border(s) -> bool:
+        r0, c0, r1, c1 = s["bbox"]
+        return r0 == 0 or c0 == 0 or r1 == h or c1 == w
+    big = [s for s in stats if s["area"] >= min_area or (touches_border(s) and s["area"] >= min_area // 2 and s["area"] >= 64)]
     big.sort(key=lambda s: -s["area"])
     rid = 1
     for s in big:

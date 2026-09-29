@@ -197,7 +197,7 @@ class Orchestrator:
                 if len(s.transitions) != last_refine_n or (wml._job is not None and not wml.job_running()):
                     semantics = classify_actions(s.transitions, semantics)
                     H = wml.refine(s.transitions, H, self.memory.priors("mechanisms"), scene=s.scene, semantics=semantics, available=s.available_actions(),
-                                   level_note=level_note, use_llm=False)
+                                   level_note=level_note, use_llm=False, knowledge=knowledge)
                     last_refine_n = len(s.transitions)
                     best = H[0] if H else None
                     if allow_llm and (best is None or best.score < 1.0 or best.coverage < 1.0) and not wml.job_running():
@@ -231,8 +231,11 @@ class Orchestrator:
                     if wml.job_running() and budget.cap("reprobe", s.level) <= 0:
                         events.emit("PLAN", "HYPOTHESIZE", f"model score {H[0].score:.2f}/change {H[0].change_score:.2f} below gate; waiting for the llm job", budget_used=budget.used())
                         wml.wait_job(120.0); state = "HYPOTHESIZE"; continue
-                    if budget.cap("reprobe", s.level) > 0:
+                    if budget.cap("reprobe", s.level) > 0 and _walk_useful(knowledge, s):
                         events.emit("PLAN", "PROBE", f"model score {H[0].score:.2f}/change {H[0].change_score:.2f} below gate -> walk probe", budget_used=budget.used()); state = "PROBE"; continue
+                    if wml.job_running():
+                        events.emit("PLAN", "HYPOTHESIZE", "below gate, nothing new to click -> waiting for the llm job", budget_used=budget.used())
+                        wml.wait_job(120.0); state = "HYPOTHESIZE"; continue
                     if not self.use_llm or not wml.job_running():
                         # nothing left to learn from cheaply: ask the LLM for a goal/model or let the low-quality plan through once
                         gated_rounds += 1
@@ -283,7 +286,11 @@ class Orchestrator:
                         if wml.job_running() and budget.cap("reprobe", s.level) <= 0:
                             events.emit("PLAN", "HYPOTHESIZE", "no plan, reprobe spent -> waiting for the llm job", budget_used=budget.used())
                             wml.wait_job(120.0); no_plan_rounds = 0; continue
-                        events.emit("PLAN", "PROBE", "no plan after 6 rounds -> reprobe", budget_used=budget.used()); state = "PROBE"; no_plan_rounds = 0
+                        if _walk_useful(knowledge, s):
+                            events.emit("PLAN", "PROBE", "no plan after 6 rounds -> reprobe", budget_used=budget.used()); state = "PROBE"; no_plan_rounds = 0
+                        else:
+                            walk_dry += 1
+                            events.emit("PLAN", "HYPOTHESIZE", "no plan after 6 rounds, nothing new to click -> hypothesize", budget_used=budget.used()); no_plan_rounds = 0
                     continue
                 events.emit("PLAN", "EXECUTE", f"plan of {len(plan)}: {[a.label() for a in plan[:8]]}", budget_used=budget.used())
                 state = "EXECUTE"; exploring = False
@@ -298,6 +305,10 @@ class Orchestrator:
                     events.emit("EXECUTE", "PLAN", f"level up after {r.executed} actions", transition_id=r.t.id if r.t else None, budget_used=budget.used())
                     won = planner.last_info.goal if planner.last_info else None
                     knowledge.record_win(last_level, won, s.step_idx - level_start_step)
+                    used_h = planner.last_info.hypothesis if planner.last_info else None
+                    if used_h is not None and isinstance(used_h.model, RuleModel):
+                        n_rules = knowledge.record_rules(used_h.model)
+                        self.log(f"knowledge: {n_rules} class-level click rule(s) harvested from {used_h.name}")
                     if won is not None:
                         self.memory.record_usage(won.template, used=True, verified=True)
                     G = goal_inf.refine(s.transitions, G, self.memory.priors("goals"), s.level, s.scene)
@@ -387,3 +398,19 @@ def _state_key(scene: Scene) -> tuple:
     """State identity for experiment bookkeeping: objects outside ui strips (counters must not make states look new)."""
     strips = {r.id for r in scene.regions if r.kind_hint == "ui_strip"}
     return tuple(sorted(o.identity() for o in scene.objects if o.region not in strips))
+
+
+def _walk_useful(knowledge, s) -> bool:
+    """A walk probe is worth its actions only when the click map still has an untried class on this scene, or a
+    responsive class not yet re-checked on this level; button games always walk (buttons are cheap to re-press)."""
+    if not any(a.type == "CLICK" for a in s.available_actions()) or any(a.type == "BUTTON" for a in s.available_actions()):
+        return True
+    from ..probe.clickmap import click_key
+    cmap = knowledge.clicks
+    tried_here = cmap.tried_level.get(s.level, set())
+    for a in cmap.rank(s.scene, level=s.level, include_inert=False, limit=64):
+        key = click_key(s.scene, a.row, a.col)
+        st = cmap.status(key)
+        if st == "untried" or (st == "responsive" and key not in tried_here):
+            return True
+    return False

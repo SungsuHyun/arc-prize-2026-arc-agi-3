@@ -23,6 +23,7 @@ class Rule:
     evidence: list[str] = field(default_factory=list)     # supporting transition ids
     violated_by: list[str] = field(default_factory=list)  # failing transition ids (filled by evaluate)
     source: str = "llm"                                   # llm | prior | induced | transferred
+    meta: Optional[dict] = None                           # induction metadata (class-level description for the knowledge asset)
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"Rule({self.name}, conf={self.confidence:.2f})"
@@ -116,9 +117,11 @@ class Hypothesis:
     recent_mismatches: int = 0  # mispredictions during execution since the last re-verification that changed the model
     change_score: float = 1.0   # accuracy on the log's non-noop transitions (a model that predicts "nothing happens" scores 0)
 
-    def usable(self, min_score: float = 0.6, min_change: float = 0.5) -> bool:
-        """Good enough to plan and run experiments with (orchestrator quality gate)."""
-        return self.score >= min_score and self.change_score >= min_change
+    def usable(self, min_score: float = 0.6, min_change: float = 0.5, min_coverage: float = 0.5) -> bool:
+        """Good enough to plan and run experiments with (orchestrator quality gate): accurate where it predicts (score
+        and change accuracy over covered transitions) and predicting at least half of the log."""
+        covered_acc = self.score / self.coverage if self.coverage > 0 else 0.0
+        return covered_acc >= min_score and self.change_score >= min_change and self.coverage >= min_coverage
 
     def sort_key(self) -> tuple:
         return (self.score, self.coverage)

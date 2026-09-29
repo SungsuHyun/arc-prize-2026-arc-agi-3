@@ -75,6 +75,8 @@ class Tracker:
             for j, b in enumerate(cur):
                 br, bc = b.center
                 c = 10.0 * (a.color != b.color) + 5.0 * (a.shape_sig != b.shape_sig) + abs(ar - br) + abs(ac - bc)
+                if a.color != b.color and abs(ar - br) + abs(ac - bc) > 2:
+                    c = 1e6          # a different colour somewhere else is another object (a button never becomes the panel next to it)
                 if a.colors != b.colors and a.color == b.color:
                     c += 2.0
                 d = self.last_disp.get(a.id)

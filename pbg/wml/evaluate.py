@@ -80,7 +80,8 @@ def evaluate(model: WorldModel, log: Iterable[Transition], *, skip_reset: bool =
                 r.confidence = conf[r.name]
                 r.evidence = [t.id for t in log if t.id not in viol and r.name in _applied_rules(model, t)][:50]
                 r.violated_by = [t.id for t in log if t.id in viol and r.name in _applied_rules(model, t)][:50]
-    ch_total_all = sum(1 for t in log if not t.diff.is_noop and not _equal(t.before, t.after, ignore_ui, t, model))
+    unk_set = set(unk)
+    ch_total_all = sum(1 for t in log if t.id not in unk_set and not t.diff.is_noop and not _equal(t.before, t.after, ignore_ui, t, model))
     return EvalResult(correct / len(log), covered / len(log), viol, unk, conf, hashlib.sha1("|".join(keys).encode()).hexdigest()[:12], len(log),
                       {k: (v[0], v[1]) for k, v in per_class.items()}, change_score=(ch_ok / ch_total_all) if ch_total_all else 1.0)
 
