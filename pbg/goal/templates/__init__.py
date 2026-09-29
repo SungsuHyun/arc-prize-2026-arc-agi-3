@@ -564,7 +564,7 @@ def t_align_color(scene: Scene, ctx: dict) -> list[GoalInstance]:
     that colour (slider / pointer games). One colour, two or three units, at least one of them part of a larger object."""
     strips = {r.id for r in scene.regions if r.kind_hint == "ui_strip"}
     colors = {c for o in scene.objects if o.region not in strips for c in o.colors}
-    pairs = [c for c in colors if len(_color_units(scene, c)) == 2 and all((u[2] - u[0]) * (u[3] - u[1]) <= 100 for u in _color_units(scene, c))]
+    pairs = [c for c in colors if _marker_pair(_color_units(scene, c))]
     if len(pairs) >= 2:
         return []             # several marker/tip pairs: the win is their conjunction (align_all_colors), not one of them
     out = []
@@ -572,6 +572,8 @@ def t_align_color(scene: Scene, ctx: dict) -> list[GoalInstance]:
         units = _color_units(scene, c)
         if not 2 <= len(units) <= 3 or any((u[2] - u[0]) * (u[3] - u[1]) > 100 for u in units):
             continue          # a big unit is a bar or panel, not a marker
+        if len({(u[2] - u[0], u[3] - u[1]) for u in units}) == 1:
+            continue          # identical units (two buttons of one colour) are a set of controls, not a marker and a tip
         owners = [o for o in scene.objects if o.region not in strips and c in o.colors]
         if len(owners) < 2:
             continue
@@ -591,16 +593,18 @@ def t_align_color(scene: Scene, ctx: dict) -> list[GoalInstance]:
     return out
 
 
+def _marker_pair(units: list) -> bool:
+    """Two small units of one colour that differ in size: a marker and a mover's tip (two identical buttons are not)."""
+    return (len(units) == 2 and all((u[2] - u[0]) * (u[3] - u[1]) <= 100 for u in units)
+            and (units[0][2] - units[0][0], units[0][3] - units[0][1]) != (units[1][2] - units[1][0], units[1][3] - units[1][1]))
+
+
 def t_align_all_colors(scene: Scene, ctx: dict) -> list[GoalInstance]:
     """Every colour that has exactly two small units (a marker and a mover's tip) lines up on the same axis: the
     conjunction of align_color over colours (three movers, three markers). One colour -> same as align_color."""
     strips = {r.id for r in scene.regions if r.kind_hint == "ui_strip"}
     colors = sorted({c for o in scene.objects if o.region not in strips for c in o.colors})
-    pairs = []
-    for c in colors:
-        units = _color_units(scene, c)
-        if len(units) == 2 and all((u[2] - u[0]) * (u[3] - u[1]) <= 100 for u in units):
-            pairs.append(c)
+    pairs = [c for c in colors if _marker_pair(_color_units(scene, c))]
     if len(pairs) < 2:
         return []
     out = []
