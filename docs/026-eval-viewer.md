@@ -45,7 +45,7 @@ make eval-site            # http://0.0.0.0:8090/  (모든 인터페이스, EVAL_
 `make eval-site`는 감시 프로세스가 서버를 자식으로 띄우고, `scripts/serve_eval.py`, `scripts/eval_viewer/`,
 `rulebook/`, `arcnav/`의 .py/.html이 바뀌면 자식을 재시작한다(0.5초 폴링, 의존성 없음). 문법 오류로 죽으면
 다음 수정까지 기다렸다가 다시 띄운다. 페이지는 2초마다 `/api/health`의 시작 시각을 확인해 서버가 바뀌면
-스스로 새로고침하고 URL 해시로 같은 스텝으로 돌아온다. 디스크 재생 캐시는 유지되고 플레이 세션은 사라진다.
+스스로 새로고침하고 URL 해시로 같은 스텝으로 돌아온다. 디스크 재생 캐시는 유지된다.
 단일 프로세스로 띄우려면 `--no-reload`.
 
 ## 부팅 시 자동 시작 (systemd user service)
@@ -57,14 +57,11 @@ make eval-site            # http://0.0.0.0:8090/  (모든 인터페이스, EVAL_
 `journalctl --user -u arc-eval-site -f`, 제거는 `make eval-site-uninstall`. 같은 포트에 `make eval-site`를
 따로 띄우면 바인드 충돌이 나므로 서비스가 있을 때는 수동 실행 대신 `systemctl --user restart arc-eval-site`.
 
-## 직접 플레이 모드
+## 직접 플레이 모드 (2026-09-29 제거)
 
-헤더의 "직접 플레이"를 누르면 왼쪽에 environment_files의 25개 게임이 뜨고, 고르면 오프라인 엔진으로
-새 판이 시작된다. 조작은 화살표·Space·7(ACTION7)·R(리셋) 키 또는 화면 버튼, MOUSE가 허용된 게임은
-보드 클릭(클릭 좌표 → row/col 변환). 액션 배너와 오른쪽 "내 액션" 목록에 매 액션의 결과(바뀐 셀 수,
-LEVEL COMPLETED, GAME OVER)가 표시된다. 시간은 재지 않고 아무것도 기록하지 않는다.
-서버 API: `POST /api/play/new {game_id}`, `POST /api/play/<sid>/step {action}`, `POST /api/play/<sid>/reset`
-(세션은 메모리에만, 최대 32개).
+처음에는 헤더의 "직접 플레이"로 environment_files 게임을 오프라인 엔진에서 사람이 직접 둘 수 있었다
+(`POST /api/play/...`, 세션은 메모리에만). 뷰어를 기록된 실행의 재생 전용으로 두기 위해 이 모드와 API
+(`/api/play/*`, `/api/games`)를 뺐다. 사람 플레이 로그가 필요하면 `make pbg-human-log GAME=..`(터미널)를 쓴다.
 
 ## 2026-09-29 추가: 이름 Replay, pbg 라인, 진행 중 실행
 
