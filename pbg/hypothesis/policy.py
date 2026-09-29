@@ -71,6 +71,7 @@ class HypothesisPolicy:
         self.budget_cfg, self.perception_cfg = budget_cfg, perception_cfg
         self.K, self.min_acc, self.max_rounds, self.plan_time = K, min_acc, max_rounds_per_level, plan_time
         self.sandbox = Sandbox(log=self.log, allow_getattr=True)
+        self.load_errors: list[str] = []
 
     # ── hypothesising ──
     def _generate(self, msgs: list[dict], k: int, out: list) -> None:
@@ -82,15 +83,19 @@ class HypothesisPolicy:
                 self.log(f"hypothesis candidate {k}: no code block"); return
             ns = self.sandbox.load_namespace(code)
             if ns is None or "build_model" not in ns:
-                self.log(f"hypothesis candidate {k}: load failed"); return
+                err = self.sandbox.last_error or "build_model missing"
+                self.log(f"hypothesis candidate {k}: load failed: {err[:160]}")
+                self.load_errors.append(f"Your previous code failed to load: {err[:300]} -- fix it (numpy only, no imports beyond numpy, define build_model/build_goal/candidate_actions/test_actions/ignore_boxes).")
+                return
             out.append(code)
         except Exception as e:
             self.log(f"hypothesis candidate {k} failed: {e!r}")
 
     def hypothesise(self, s: Session, log: list[Transition], prev: Optional[Hypothesis], counterexamples: list[str], n: int, rejected: list[str]) -> list[Hypothesis]:
         grid = np.asarray(s.frame.grid)
+        errs = self.load_errors[-2:]; self.load_errors = []
         msgs = hypothesis_prompt(scene=s.scene, grid=grid, log=log, available=s.available_actions(), prior_signatures=mechanism_signatures(),
-                                 previous_code=prev.code if prev else None, counterexamples=counterexamples, level=s.level,
+                                 previous_code=prev.code if prev else None, counterexamples=list(counterexamples) + errs, level=s.level,
                                  ignore_boxes=prev.ignore(s.scene) if prev else (), rejected=rejected)
         codes: list = []
         threads = [threading.Thread(target=self._generate, args=(msgs, k, codes), daemon=True) for k in range(self.K)]

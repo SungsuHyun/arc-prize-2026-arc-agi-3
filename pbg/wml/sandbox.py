@@ -68,7 +68,9 @@ def _namespace() -> dict:
     import numpy as np
     from ..core import contracts, types
     from ..memory.priors import mechanisms
-    ns: dict = {"__builtins__": dict(SAFE_BUILTINS), "np": np, "numpy": np}
+    builtins = dict(SAFE_BUILTINS)
+    builtins["__build_class__"] = __build_class__     # class statements (a goal object with is_goal/progress) need it
+    ns: dict = {"__builtins__": builtins, "np": np, "numpy": np}
     for mod in (types, contracts, mechanisms):
         for k in getattr(mod, "__all__", None) or [n for n in dir(mod) if not n.startswith("_")]:
             ns[k] = getattr(mod, k)
@@ -112,13 +114,16 @@ class Sandbox:
         self.python = python or sys.executable
         self.log = log or (lambda *a, **k: None)
         self.allow_getattr = allow_getattr
+        self.last_error: str = ""
 
     def load_namespace(self, code: str):
         """Validated in-process load; returns the module namespace or None (error logged)."""
         try:
+            self.last_error = ""
             return load_in_process(code, allow_getattr=self.allow_getattr)
         except Exception as e:
-            self.log(f"sandbox load failed: {type(e).__name__}: {str(e)[:200]}")
+            self.last_error = f"{type(e).__name__}: {str(e)[:200]}"
+            self.log(f"sandbox load failed: {self.last_error}")
             return None
 
     def validate(self, code: str, log_json: list[dict]) -> dict:
