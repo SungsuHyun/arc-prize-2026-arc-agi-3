@@ -50,7 +50,7 @@ def transfer_hypotheses(memory, game_id: str, scene: Scene, sandbox, *, log=None
     if mem.world_model_code:
         m = sandbox.load(mem.world_model_code)
         if m is not None:
-            out.append(Hypothesis(m, 1.0, 1.0, [], mem.world_model_code, "memory:verified", True, "", "llm"))
+            out.append(Hypothesis(m, 1.0, 1.0, [], mem.world_model_code, "memory:verified", False, "", "llm"))   # re-verified on this run's log before it counts as verified
     for h in mem.hypotheses[:3]:
         if h.get("code") and "def build_model" in h["code"]:
             m = sandbox.load(h["code"])

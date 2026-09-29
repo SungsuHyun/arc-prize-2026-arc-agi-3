@@ -173,7 +173,10 @@ class Orchestrator:
                                     wml.wait_job(60.0)
                                 cap = budget.cap("reprobe", s.level)
                             events.emit(state, "HYPOTHESIZE", "reprobe budget exhausted -> RESET", budget_used=budget.used())
-                            s.act(Action.reset(), "reprobe"); planner.stuck.reset(); resets_without_progress += 1
+                            acted = s.actions_since_reset > 0
+                            s.act(Action.reset(), "reprobe"); planner.stuck.reset()
+                            if acted:
+                                resets_without_progress += 1     # a refused reset is not an attempt
                             budget.reset_level(s.level, "reprobe"); touched.clear(); walk_dry = 0; state = "HYPOTHESIZE"; continue
                         stop = "UNRESOLVED"; events.emit(state, "END", f"no progress after {self.max_resets} resets", budget_used=budget.used()); break
                 if kind == "initial":
