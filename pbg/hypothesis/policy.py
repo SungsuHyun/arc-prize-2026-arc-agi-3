@@ -182,6 +182,9 @@ class HypothesisPolicy:
         observed: dict = {}
         level = s.level; rounds = 0; n_hyp = 0; stop = ""; llm_calls0 = self.llm.calls
         plans_executed = 0; tests_run = 0; tried_labels: set = set(); idle_rounds = 0; approx_budget = 6
+        tried_here: set = set()             # (board state, action label) already run as a test: never repeat it from the same board
+        no_plan_n: Optional[int] = None     # hypothesis that verified but produced no plan (keep it only while nothing verifies better)
+        repeats_dropped = 0
 
         def act(a: Action, kind: str) -> Optional[Transition]:
             t = s.act(a, kind)
@@ -203,7 +206,7 @@ class HypothesisPolicy:
                 s.act(Action.reset(), "reset"); continue
             if s.level != level:
                 events.emit("LOOK", "LOOK", f"level {level} -> {s.level}: the hypothesis must verify again on the new board", budget_used=budget.used())
-                level = s.level; rounds = 0; idle_rounds = 0; approx_budget = 6; counterexamples = []; observed.clear()
+                level = s.level; rounds = 0; idle_rounds = 0; approx_budget = 6; counterexamples = []; observed.clear(); tried_here.clear(); no_plan_n = None
                 if hyp is not None:
                     hyp.verdict = None
             log = s.level_log()
@@ -220,7 +223,7 @@ class HypothesisPolicy:
                 if plan is None or (plan == [] and not hyp.is_goal(s.scene)):
                     events.emit("PLAN", "TEST", f"no plan under h{hyp.n} for goal '{getattr(hyp.goal, 'name', '?')}' -> test the doubts", budget_used=budget.used())
                     counterexamples = (counterexamples + [f"Your model verified but the planner found NO action sequence from the current board to your goal '{getattr(hyp.goal, 'name', '?')}' using candidate_actions: the goal, the candidate actions or the dynamics are incomplete."])[-4:]
-                    hyp.verdict = None
+                    hyp.verdict = None; no_plan_n = hyp.n
                     usable = False
                 elif plan == []:
                     events.emit("PLAN", "TEST", "goal already true but no level-up: the win condition is wrong", budget_used=budget.used())
@@ -258,6 +261,8 @@ class HypothesisPolicy:
                 stop = "llm_exhausted"; events.emit("LOOK", "END", "LLM call cap reached", budget_used=budget.used()); break
             rounds += 1; n_hyp += 1
             used_before = budget.used()
+            # the current hypothesis' accuracy even when its verdict was cleared (no plan): a worse candidate must not replace it
+            cur_acc = verify(hyp.model, log, hyp.ignore).accuracy if (hyp is not None and log) else -1.0
             t0 = time.time()
             cands = self.hypothesise(s, log, hyp, counterexamples, n_hyp, rejected)
             for c in cands:
@@ -273,19 +278,30 @@ class HypothesisPolicy:
             if not cands:
                 continue
             best = cands[0]
-            if hyp is None or hyp.verdict is None or best.verdict.accuracy >= hyp.verdict.accuracy:
+            if hyp is None or best.verdict.accuracy >= cur_acc or (no_plan_n == hyp.n and best.verdict.usable(self.min_acc)):
                 hyp = best
+            else:
+                events.emit("HYPOTHESISE", "HYPOTHESISE", f"kept h{hyp.n} (acc {cur_acc:.2f}): best new candidate h{best.n} is worse ({best.verdict.accuracy:.2f})", budget_used=budget.used())
+                hyp.verdict = verify(hyp.model, log, hyp.ignore)
             if hyp.verdict.counterexamples:
                 counterexamples = hyp.verdict.counterexamples[-4:]
-            if hyp.verdict.usable(self.min_acc):
+            if hyp.verdict.usable(self.min_acc) and hyp.n != no_plan_n:
                 events.emit("VERIFY", "PLAN", f"h{hyp.n} verified (acc {hyp.verdict.accuracy:.2f} on {hyp.verdict.n}) -> plan", budget_used=budget.used())
                 idle_rounds = idle_rounds + 1 if budget.used() == used_before else 0
                 continue
             tests = [a for a in hyp.call("test_actions", s.scene, []) if isinstance(a, Action)][:2]
             attempts = [a for a in hyp.call("attempt_actions", s.scene, []) if isinstance(a, Action) and a not in tests][:1]
             tests = tests + attempts          # learn AND try: one move toward the hypothesised win per round
+            sk = state_key(s.scene)
+            fresh = [a for a in tests if (sk, a.label()) not in tried_here]
+            if len(fresh) < len(tests):
+                repeats_dropped += len(tests) - len(fresh)
+                dropped = [a.label() for a in tests if a not in fresh]
+                events.emit("TEST", "TEST", f"dropped tests already run from this board: {dropped}", budget_used=budget.used())
+                counterexamples = (counterexamples + [f"You proposed {dropped} as tests, but they were already run from this exact board and their outcome is in the log: propose DIFFERENT actions."])[-4:]
+            tests = fresh
             if not tests:
-                tests = [a for a in hyp.call("candidate_actions", s.scene, []) if isinstance(a, Action)][:2]
+                tests = [a for a in hyp.call("candidate_actions", s.scene, []) if isinstance(a, Action) and (sk, a.label()) not in tried_here][:2]
             if not tests:
                 tests = _fallback_probe(s, tried_labels)
                 events.emit("TEST", "TEST", f"h{hyp.n} names no test -> fallback probe {[a.label() for a in tests]}", budget_used=budget.used())
@@ -297,7 +313,7 @@ class HypothesisPolicy:
                 t = act(a, "test")
                 if t is None:
                     break
-                tests_run += 1; tried_labels.add(a.label())
+                tests_run += 1; tried_labels.add(a.label()); tried_here.add((state_key(t.before), a.label()))
                 if t.status_change:
                     events.emit("TEST", "LOOK", f"{t.status_change} after test {a.label()}", transition_id=t.id, budget_used=budget.used()); break
             idle_rounds = idle_rounds + 1 if budget.used() == used_before else 0
@@ -311,7 +327,7 @@ class HypothesisPolicy:
                       [{"name": f"h{hyp.n}", "score": round(hyp.verdict.accuracy, 3) if hyp.verdict else 0.0, "coverage": round(hyp.verdict.coverage, 3) if hyp.verdict else 0.0,
                         "verified": bool(hyp.verdict and hyp.verdict.usable(self.min_acc)), "origin": "hypothesis"}] if hyp else [],
                       [{"name": getattr(hyp.goal, "name", "?"), "win": hyp.doc.get("win", "")}] if hyp and hyp.goal else [],
-                      {"rounds": n_hyp, "plans": plans_executed, "tests": tests_run, "explore": explored}, round(time.time() - t_start, 1))
+                      {"rounds": n_hyp, "plans": plans_executed, "tests": tests_run, "repeats_dropped": repeats_dropped, "explore": explored}, round(time.time() - t_start, 1))
 
 
 def _fallback_probe(s, tried: set) -> list:
