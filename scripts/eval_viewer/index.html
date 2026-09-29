@@ -124,7 +124,35 @@ const $ = id => document.getElementById(id);
 const state = { runs: [], run: null, detail: null, game: null, level: null, data: null, steps: [], i: 0, timer: null, live: null };
 const STATUS = { running: '<span class="live">진행 중</span>', aborted: '<span class="aborted">중단됨</span>', finished: "" };
 
-async function api(path) { const r = await fetch(path); const j = await r.json(); if (!r.ok) throw new Error(j.error || r.statusText); return j; }
+// static export (GitHub Pages, scripts/export_replay_static.py): the same API as files under data/, hash lookup done here
+const STATIC = !!window.REPLAY_STATIC;
+function apiUrl(path) {
+  if (!STATIC) return path;
+  const p = path.split("?")[0].split("/").filter(Boolean).slice(1);   // drop "api"
+  if (p[0] === "runs" && p.length === 1) return "data/runs.json";
+  if (p[0] === "runs" && p.length === 2) return `data/runs/${p[1]}.json`;
+  if (p[0] === "runs" && p[2] === "games" && p.length === 4) return `data/runs/${p[1]}/${p[3]}.json.gz`;
+  if (p[0] === "runs" && p[4] === "log") return `data/runs/${p[1]}/${p[3]}.log.txt`;
+  if (p[0] === "runs" && p[4] === "rulebook") return `data/runs/${p[1]}/${p[3]}.rulebook.json`;
+  return path;
+}
+let findIndex = null;
+async function staticFind(h) {
+  if (!findIndex) findIndex = await (await fetch("data/find.json")).json();
+  h = h.trim().toLowerCase(); if (h.length < 6) throw new Error(`no game with hash ${h}`);
+  const hits = Object.entries(findIndex).filter(([full]) => full.startsWith(h)).map(([full, x]) => ({ ...x, hash: full }));
+  if (!hits.length) throw new Error(`no game with hash ${h}`);
+  return hits.length === 1 ? hits[0] : { ambiguous: hits };
+}
+async function api(path) {
+  if (STATIC && path.startsWith("/api/find/")) return staticFind(path.slice(10));
+  const url = apiUrl(path); const r = await fetch(url);
+  if (STATIC && url.endsWith(".gz")) {       // step files are gzip: decompress in the browser (the host serves them as-is)
+    if (!r.ok) throw new Error(`${r.status} ${url}`);
+    return JSON.parse(await new Response(r.body.pipeThrough(new DecompressionStream("gzip"))).text());
+  }
+  const j = await r.json(); if (!r.ok) throw new Error(j.error || r.statusText); return j;
+}
 const fmt = (x, d = 2) => x == null ? "—" : (typeof x === "number" ? x.toFixed(d) : x);
 const esc = s => String(s ?? "").replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
 
@@ -201,7 +229,7 @@ function renderRunInfo() {
 // a run in progress: re-read its summary every few seconds and, when the open game grew, extend the replay in place
 function watchRun() {
   clearInterval(state.live); state.live = null;
-  if (!d() || d().status !== "running") return;
+  if (STATIC || !d() || d().status !== "running") return;
   state.live = setInterval(async () => {
     if (!state.run) return;
     try {
@@ -270,9 +298,9 @@ async function selectLevel(game, level, step = null) {
   if (!state.steps.length) state.steps = all;   // level not in the replay (e.g. replay diverged): show everything
   $("slider").max = state.steps.length - 1;
   $("notes").textContent = (state.data.notes || []).join(" · ") + (state.data.source === "log" ? "  (source: log parse)" : "");
-  $("loglink").href = `/api/runs/${state.run}/games/${game}/log`; $("loglink").style.display = "";
+  $("loglink").href = apiUrl(`/api/runs/${state.run}/games/${game}/log`); $("loglink").style.display = "";
   const gi = state.detail.games.find(x => x.game_id === game) || {};
-  $("booklink").href = `/api/runs/${state.run}/games/${game}/rulebook`; $("booklink").style.display = gi.has_rulebook ? "" : "none";
+  $("booklink").href = apiUrl(`/api/runs/${state.run}/games/${game}/rulebook`); $("booklink").style.display = gi.has_rulebook ? "" : "none";
   renderTimeline();
   goto(step != null && step < state.steps.length ? step : 0);
 }
@@ -414,7 +442,7 @@ document.addEventListener("keydown", e => {
 });
 // reload the page when the server has restarted (auto-reload after a source edit)
 let serverStarted = null;
-setInterval(async () => {
+if (!STATIC) setInterval(async () => {
   try { const r = await fetch("/api/health", { cache: "no-store" }); if (!r.ok) return; const j = await r.json();
     if (serverStarted == null) serverStarted = j.started; else if (j.started !== serverStarted) location.reload(); } catch {}
 }, 2000);

@@ -89,3 +89,13 @@ make eval-site            # http://0.0.0.0:8090/  (모든 인터페이스, EVAL_
 
 - 레벨 시점의 룰북 스냅샷(현재는 최종본 + REVIEW 로그로 대체)
 - arcnav 실행 로그 지원(형식이 달라 별도 파서 필요)
+
+## 2026-09-29 추가: GitHub Pages 정적 Replay
+
+`scripts/export_replay_static.py --out <dir>`가 같은 페이지(`index.html`에 `window.REPLAY_STATIC = true` 주입)와 API 응답 전부를
+파일로 쓴다: `data/runs.json`, `data/runs/<run>.json`, `data/runs/<run>/<game>.json.gz`(엔진 재생 보드, 페이지가
+`DecompressionStream`으로 해제), `<game>.log.txt`(키 형태 토큰 가림), `data/find.json`(hash 조회는 페이지에서). 끝난 실행만
+넣는다(진행 중 실행 추적은 로컬 뷰어 전용). `make site-publish`가 벤치마크 사이트와 함께 `/replay/`로 배포하고, 대시보드
+헤더에 Replay 링크가 생겼다. 전체(실행 106개·게임 475개) 67MB — 원본 로그 49MB, 보드 9.6MB. 줄이려면
+`REPLAY_ARGS="--since 20260928 --no-logs"`, 빼려면 `REPLAY=0`. 확인: headless Chromium에서 재생·레벨 선택·`#h/<hash>` 조회 동작.
+공개 페이지이므로 로그의 LLM 출력·게임 보드가 그대로 공개된다는 점에 유의.

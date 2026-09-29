@@ -15,6 +15,10 @@ trap 'git worktree remove --force "$TMP" 2>/dev/null || true; git branch -D $BRA
 git branch -D $BRANCH 2>/dev/null || true
 git worktree add --orphan -b $BRANCH "$TMP" > /dev/null
 cp -r experiments/site/. "$TMP"/
+# Replay viewer as static files under /replay/ (finished rulebook + pbg runs; REPLAY=0 skips, REPLAY_ARGS narrows)
+if [ "${REPLAY:-1}" != "0" ]; then
+  .venv/bin/python scripts/export_replay_static.py --out "$TMP/replay" ${REPLAY_ARGS:-}
+fi
 touch "$TMP/.nojekyll"
 git -C "$TMP" add -A
 git -C "$TMP" commit -q -m "Publish benchmark site $(date -u +%Y-%m-%d-%H%M)"

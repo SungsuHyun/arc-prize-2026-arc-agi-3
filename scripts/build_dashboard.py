@@ -123,6 +123,7 @@ TEMPLATE = r"""<!doctype html>
     </div>
     <div style="display:flex;gap:10px;align-items:center">
       <span id="backLink"></span>
+      <a href="replay/" title="기록된 실행의 보드 재생 (make site-publish가 함께 배포)">Replay</a>
       <button class="theme" id="themeBtn">테마</button>
     </div>
   </header>

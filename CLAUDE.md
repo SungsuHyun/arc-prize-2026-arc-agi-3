@@ -31,7 +31,7 @@ make exp-new NAME=title [FROM=vNNN]       # 새 실험 버전 스캐폴드
 make exp-run NAME=vNNN [GAME=..] [STEPS=..] # 실험 실행 + results/ JSON 기록
 make exp-summary                          # 실험 비교 + experiments/summary.json
 make bench NAME=vNNN [GAME=..] [STEPS=..]  # 지정 버전 벤치마크 + Pages 자동 배포 (ALL=1: 전 버전)
-make site-publish                         # 벤치마크 사이트를 GitHub Pages로 수동 배포
+make site-publish                         # 벤치마크 사이트 + 정적 Replay(/replay/)를 GitHub Pages로 배포 (REPLAY=0: Replay 제외)
 make site                                 # 로컬 미리보기 (localhost:8080, 자동 재생성)
 make eval-site                            # Replay 뷰어 (localhost:8090): rulebook/pbg run→게임→레벨→스텝 보드 재생, 진행 중 실행 포함 (docs/026)
 make eval-site-install                    # 위 뷰어를 systemd user 서비스로 등록 (부팅 시 자동 시작, 이미 등록됨)

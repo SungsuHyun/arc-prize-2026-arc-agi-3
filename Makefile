@@ -188,7 +188,7 @@ eval-site-uninstall: ## Stop, disable and remove the eval viewer systemd user se
 	systemctl --user daemon-reload
 
 
-site-publish: ## Publish the benchmark site to GitHub Pages (gh-pages branch)
+site-publish: ## Publish the benchmark site + static Replay (/replay/) to GitHub Pages (gh-pages branch) [REPLAY=0] [REPLAY_ARGS="--since 20260928 --no-logs"]
 	bash scripts/publish_site.sh
 
 
