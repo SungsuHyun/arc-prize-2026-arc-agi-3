@@ -234,6 +234,35 @@ class Object:
         mb = other.mask[r0 - b[0]:r1 - b[0], c0 - b[1]:c1 - b[1]]
         return bool((ma & mb).any())
 
+    def with_mask(self, mask: np.ndarray, color_mask: Optional[np.ndarray] = None, origin: Optional[tuple[int, int]] = None) -> "Object":
+        """Copy with a new pixel layout (bbox-sized bool mask, optional int8 colour mask with -1 outside) anchored at origin."""
+        r0, c0 = origin if origin is not None else (self.bbox[0], self.bbox[1])
+        mask = np.asarray(mask, dtype=bool)
+        cm = None if color_mask is None else np.asarray(color_mask, dtype=np.int8)
+        if cm is not None:
+            vals = [int(v) for v in np.unique(cm[mask])] if mask.any() else [self.color]
+            counts = {v: int(((cm == v) & mask).sum()) for v in vals}
+            color = max(counts, key=counts.get); colors = tuple(sorted(counts))
+        else:
+            color, colors = self.color, (self.color,)
+        return Object(self.id, int(color), colors, (r0, c0, r0 + mask.shape[0], c0 + mask.shape[1]), mask, int(mask.sum()), shape_signature(mask),
+                      self.region, self.role, color_mask=cm, parts=None, composite=self.composite)
+
+    def rotated(self, k: int = 1) -> "Object":
+        """Copy rotated by k x 90 degrees clockwise about the bbox centre (colour layout rotates too)."""
+        k = int(k) % 4
+        m = np.rot90(self.mask, -k)
+        cm = None if self.color_mask is None else np.rot90(self.color_mask, -k)
+        cr, cc = (self.bbox[0] + self.bbox[2]) / 2, (self.bbox[1] + self.bbox[3]) / 2
+        r0 = int(round(cr - m.shape[0] / 2)); c0 = int(round(cc - m.shape[1] / 2))
+        return self.with_mask(m, cm, (r0, c0))
+
+    def flipped(self, axis: int = 1) -> "Object":
+        """Copy mirrored: axis=1 left-right, axis=0 top-bottom."""
+        m = np.flip(self.mask, axis)
+        cm = None if self.color_mask is None else np.flip(self.color_mask, axis)
+        return self.with_mask(m, cm)
+
     def identity(self) -> tuple:
         """What evaluation compares (spec §8): role-free object identity."""
         if self.color_mask is not None and len(self.colors) >= 2:

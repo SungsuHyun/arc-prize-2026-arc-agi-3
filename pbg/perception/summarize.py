@@ -1,6 +1,8 @@
 """perception/summarize.py — one-line natural-language Diff summary for LLM context (spec §6 step 6)."""
 from __future__ import annotations
 
+import numpy as np
+
 from ..core.types import Object, Scene, Transition
 
 COLOR_NAMES = {0: "black", 1: "blue", 2: "red", 3: "green", 4: "yellow", 5: "grey", 6: "magenta", 7: "orange", 8: "sky", 9: "brown",
@@ -57,3 +59,31 @@ def scene_text(scene: Scene, max_objects: int = 40) -> str:
         if aux:
             lines.append(f"  aux={aux}")
     return "\n".join(lines)
+
+
+def crop_text(o, max_rows: int = 14, max_cols: int = 20) -> list[str]:
+    """Rows of an object's pixels as hex digits ('.' outside its mask), clipped to max_rows x max_cols."""
+    cm = o.color_mask if o.color_mask is not None else np.where(o.mask, o.color, -1)
+    rows = []
+    for r in range(min(o.height, max_rows)):
+        rows.append("".join("." if cm[r, c] < 0 else format(int(cm[r, c]), "x") for c in range(min(o.width, max_cols))) + ("~" if o.width > max_cols else ""))
+    if o.height > max_rows:
+        rows.append("~")
+    return rows
+
+
+def transform_crops(t: Transition, max_area: int = 400) -> list[str]:
+    """Before/after crops of objects that changed shape or colour layout in a transition (what a summary line hides:
+    a rotation, a flip, a stamped canvas)."""
+    b = {o.id: o for o in t.before.objects}; a = {o.id: o for o in t.after.objects}
+    ids = [x[0] for x in t.diff.reshaped] + [x[0] for x in t.diff.recolored if x[0] not in {y[0] for y in t.diff.reshaped}]
+    out = []
+    for oid in ids[:3]:
+        ob, oa = b.get(oid), a.get(oid)
+        if ob is None or oa is None or max(ob.area, oa.area) > max_area:
+            continue
+        out.append(f"  obj#{oid} before @({ob.bbox[0]},{ob.bbox[1]}) {ob.height}x{ob.width}:")
+        out += ["    " + r for r in crop_text(ob)]
+        out.append(f"  obj#{oid} after @({oa.bbox[0]},{oa.bbox[1]}) {oa.height}x{oa.width}:")
+        out += ["    " + r for r in crop_text(oa)]
+    return out

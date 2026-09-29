@@ -94,12 +94,16 @@ API_SUMMARY = '''
 Action: .type in {"BUTTON","CLICK","RESET"}; .id (BUTTON 1..7); .row/.col (CLICK, grid cells); .key -> "ACTION1".."CLICK"
 Region: .id "R0".. (re-numbered every frame), .bg_color, .bbox (r0,c0,r1,c1 exclusive), .kind_hint in {board,panel,ui_strip,unknown}, .area, .center
 Object: .id (tracking id), .color, .colors (tuple, multi-colour objects), .bbox, .mask (bbox-sized bool), .area, .shape_sig (translation-invariant hash),
-        .region (Region.id), .role (set by role_fn), .center, .height, .width; .moved(dr,dc) -> copy shifted; .recolored(c) -> copy; .overlaps(other) -> bool
+        .region (Region.id), .role (set by role_fn), .center, .height, .width; .color_mask (bbox-sized int8, -1 outside; multi-colour objects),
+        .composite (adjacent parts fused into one rectangle: a pattern, a canvas, a framed button);
+        .moved(dr,dc) -> copy shifted; .recolored(c) -> copy; .rotated(k) -> copy turned k*90deg clockwise about its centre; .flipped(axis) -> mirror;
+        .with_mask(mask, color_mask=None, origin=(r0,c0)) -> copy with a new pixel layout (stamping, painting); .overlaps(other) -> bool
 Scene: .regions, .objects, .grid_shape, .aux (dict: hidden state you may add; scene.aux["_before"] = pre-action scene inside effects);
        .by_role(role) -> objects; .get(id); .region(id); .in_region(id); .copy(objects=..., aux=...); .render() -> grid (numpy int8)
 Rule(name, applies(scene, action)->bool, effect(scene, action)->Scene|None, confidence=0.5)
 RuleModel(rules, role_fn, default="unknown")   # predict() applies matching rules in order; None == UNKNOWN
-Prediction check: multiset of (color, bbox, shape_sig) of objects not in ui_strip regions and not role "indicator" must equal the real next frame.
+Prediction check: multiset of (color, bbox, shape_sig, colour layout) of objects not in ui_strip regions and not role "indicator" must equal the real next frame.
+Observations may include pixel crops (hex digits, '.' outside) of objects whose shape or colour layout changed: read them to see rotations, flips, stamps.
 '''
 
 
@@ -135,12 +139,16 @@ def world_model_prompt(*, signatures: str, current_code: Optional[str], violated
     return [{"role": "system", "content": system_prompt()}, {"role": "user", "content": "\n".join(user)}]
 
 
-def goal_template_prompt(scene_text: str, observations: list[str]) -> list[dict]:
+def goal_template_prompt(scene_text: str, observations: list[str], rejected: Optional[list[str]] = None) -> list[dict]:
     sys = ("You propose the WIN CONDITION of an unknown pixel board game as executable Python. Define `def build_goal()` returning an "
-           "object with `name: str`, `is_goal(scene) -> bool` and `progress(scene) -> float in [0,1]`. Use roles/colours/regions read from the "
-           "Scene, no coordinates. Reply with exactly ONE ```python block.\n\n" + core_sources())
-    user = "# Scene\n" + scene_text + "\n\n# Recent observations\n" + "\n".join(f"- {o}" for o in observations) + \
-        "\n\nNo goal template matched this scene. Propose the most plausible win condition as code."
+           "object with `name: str`, `is_goal(scene) -> bool` and `progress(scene) -> float in [0,1]` (progress must grow as the player gets "
+           "closer; it is used as a search heuristic). Read colours/regions/objects from the Scene; no absolute coordinates; no comments. "
+           "The condition may be procedural (a pattern to reproduce, a sequence of states, a count) as long as it is a function of the scene. "
+           "Reply with exactly ONE ```python block.\n" + API_SUMMARY)
+    user = "# Scene\n" + scene_text + "\n\n# Observations (pixel crops show shape/colour changes)\n" + "\n".join(f"- {o}" for o in observations)
+    if rejected:
+        user += "\n\n# Predicates that held WITHOUT completing the level (so they are NOT the win condition)\n" + "\n".join(f"- {r}" for r in rejected)
+    user += "\n\nNo goal template explains this level. Propose the most plausible win condition as code."
     return [{"role": "system", "content": sys}, {"role": "user", "content": user}]
 
 

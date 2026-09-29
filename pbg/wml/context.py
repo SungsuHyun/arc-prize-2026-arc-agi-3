@@ -6,7 +6,7 @@ from __future__ import annotations
 from typing import Iterable, Optional
 
 from ..core.types import Transition
-from ..perception.summarize import summarize
+from ..perception.summarize import summarize, transform_crops
 
 
 def select_context(log: list[Transition], violations: Iterable[str] = (), cap: int = 40) -> list[Transition]:
@@ -49,5 +49,16 @@ def select_context(log: list[Transition], violations: Iterable[str] = (), cap: i
     return chosen
 
 
-def observation_lines(ts: list[Transition], perception=None) -> list[str]:
-    return [f"[{t.id}] " + summarize(t) for t in ts]
+def observation_lines(ts: list[Transition], perception=None, max_crops: int = 6) -> list[str]:
+    """One summary line per transition; the first transitions that reshape/recolour an object per action key also get
+    before/after pixel crops (a summary line cannot show a rotation or a stamp)."""
+    out = []; shown: set[tuple[str, int]] = set()
+    for t in ts:
+        out.append(f"[{t.id}] " + summarize(t))
+        ids = [x[0] for x in t.diff.reshaped] + [x[0] for x in t.diff.recolored]
+        key = (t.action.key, ids[0]) if ids else None
+        if key and key not in shown and len(shown) < max_crops:
+            crops = transform_crops(t)
+            if crops:
+                shown.add(key); out += crops
+    return out

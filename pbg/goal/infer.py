@@ -14,6 +14,8 @@ class GoalInference:
         self.memory, self.llm, self.sandbox = memory, llm, sandbox
         self.log = log or (lambda *a, **k: None)
         self.demoted: dict[str, float] = {}
+        self.llm_calls = 0
+        self._proposals: dict[int, int] = {}      # level -> LLM goal proposals made (procedural goals the templates cannot express)
 
     def refine(self, log: list[Transition], current: list[GoalInstance], priors: Optional[dict], level: int, scene: Scene,
                *, roles_fn=None, ctx: Optional[dict] = None, model=None) -> list[GoalInstance]:
@@ -33,8 +35,13 @@ class GoalInference:
             for g in G:
                 if g.name == name:
                     g.confidence = max(0.0, g.confidence + pen)
-        if not G and self.llm is not None:
-            G = self.propose_with_llm(s, log)
+        # no template goal, or every template goal was demoted (reached without a level-up): the win condition is
+        # probably procedural (a sequence, a pattern rule) -> ask the LLM, at most twice per level
+        exhausted = bool(G) and max(g.confidence for g in G) < 0.25 and not any(g.origin == "llm" for g in G)
+        if (not G or exhausted) and self.llm is not None and self._proposals.get(level, 0) < 2:
+            self._proposals[level] = self._proposals.get(level, 0) + 1
+            rejected = [g.name for g in G if self.demoted.get(g.name, 0.0) < 0]
+            G = G + self.propose_with_llm(s, log, rejected=rejected)
         before = list(G)
         G = filter_by_levelup(G, log, roles_fn=roles_fn, model=model)
         if not G and before:
@@ -64,14 +71,17 @@ class GoalInference:
             if len(g.history) >= 6 and any(g.history[i] < g.history[i - 1] - 1e-9 for i in range(1, len(g.history))):
                 g.progress_weight = 0.5
 
-    def propose_with_llm(self, scene: Scene, log: list[Transition]) -> list[GoalInstance]:
+    def propose_with_llm(self, scene: Scene, log: list[Transition], rejected: Optional[list[str]] = None) -> list[GoalInstance]:
         from ..wml.prompts import goal_template_prompt
+        from ..wml.context import observation_lines, select_context
         from ..perception.summarize import scene_text
         if self.llm is None or self.sandbox is None:
             return []
-        msgs = goal_template_prompt(scene_text(scene), [self._summ(t) for t in log[-20:]])
+        ctx = select_context(log, [], cap=30)
+        msgs = goal_template_prompt(scene_text(scene), observation_lines(ctx), rejected=rejected or [])
         try:
             reply = self.llm.chat(msgs, purpose="goal_template", image=None)
+            self.llm_calls += 1
         except Exception as e:
             self.log(f"goal llm failed: {e!r}")
             return []
