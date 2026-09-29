@@ -70,7 +70,7 @@ def _namespace() -> dict:
     from ..memory.priors import mechanisms
     builtins = dict(SAFE_BUILTINS)
     builtins["__build_class__"] = __build_class__     # class statements (a goal object with is_goal/progress) need it
-    ns: dict = {"__builtins__": builtins, "np": np, "numpy": np}
+    ns: dict = {"__builtins__": builtins, "__name__": "hypothesis", "np": np, "numpy": np}   # class statements read __name__
     for mod in (types, contracts, mechanisms):
         for k in getattr(mod, "__all__", None) or [n for n in dir(mod) if not n.startswith("_")]:
             ns[k] = getattr(mod, k)
