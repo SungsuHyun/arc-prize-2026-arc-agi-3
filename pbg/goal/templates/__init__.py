@@ -588,6 +588,46 @@ def t_align_color(scene: Scene, ctx: dict) -> list[GoalInstance]:
     return out
 
 
+def t_align_all_colors(scene: Scene, ctx: dict) -> list[GoalInstance]:
+    """Every colour that has exactly two small units (a marker and a mover's tip) lines up on the same axis: the
+    conjunction of align_color over colours (three movers, three markers). One colour -> same as align_color."""
+    strips = {r.id for r in scene.regions if r.kind_hint == "ui_strip"}
+    colors = sorted({c for o in scene.objects if o.region not in strips for c in o.colors})
+    pairs = []
+    for c in colors:
+        units = _color_units(scene, c)
+        if len(units) == 2 and all((u[2] - u[0]) * (u[3] - u[1]) <= 100 for u in units):
+            pairs.append(c)
+    if len(pairs) < 2:
+        return []
+    out = []
+    for axis in ("col", "row"):
+        k = (1, 3) if axis == "col" else (0, 2)
+        def aligned(s, c, k=k):
+            us = _color_units(s, c)
+            return len(us) >= 2 and len({(u[k[0]], u[k[1]]) for u in us}) == 1
+        def is_goal(s, cs=tuple(pairs), k=k):
+            return all(aligned(s, c, k) for c in cs)
+        def progress(s, cs=tuple(pairs), k=k):
+            tot = 0.0
+            for c in cs:
+                us = _color_units(s, c)
+                if len(us) < 2:
+                    continue
+                lo = [u[k[0]] for u in us]
+                tot += 1.0 - (max(lo) - min(lo)) / s.grid_shape[k[0]]
+            return tot / len(cs)
+        def estimate(s, cs=tuple(pairs), k=k):
+            tot = 0.0
+            for c in cs:
+                us = _color_units(s, c)
+                if len(us) >= 2:
+                    lo = [u[k[0]] for u in us]; tot += (max(lo) - min(lo)) / 2.0
+            return tot
+        out.append(GoalInstance(f"align_all_colors({axis})", "align_all_colors", {"axis": axis, "colors": list(pairs)}, is_goal, progress, clue=0.2, estimate_fn=estimate))
+    return out
+
+
 def _layout_of(o) -> "np.ndarray":
     return o.color_mask if o.color_mask is not None else np.where(o.mask, o.color, -1).astype(np.int8)
 
@@ -663,13 +703,13 @@ def _adjacent(a, b) -> bool:
 
 
 # confidence tiers: role-based templates are more specific than colour/geometry ones (spec §9 usage-stats prior 0.5)
-BASE_CONFIDENCE = {"reach": 0.5, "all_collected": 0.5, "inside_frame": 0.5, "fill_marked_slots": 0.5, "same_cell": 0.5, "pattern_match": 0.45, "match_pattern": 0.5, "align_color": 0.5, "match_shapes": 0.45,
+BASE_CONFIDENCE = {"reach": 0.5, "all_collected": 0.5, "inside_frame": 0.5, "fill_marked_slots": 0.5, "same_cell": 0.5, "pattern_match": 0.45, "match_pattern": 0.5, "align_color": 0.5, "align_all_colors": 0.5, "match_shapes": 0.45,
                    "enclose": 0.4, "align": 0.35, "all_removed": 0.3, "fill_region": 0.3, "count_equals": 0.2, "sort_by": 0.2, "sequence": 0.3, "explore": 0.0}
 
 TEMPLATES: dict[str, Callable[[Scene, dict], list[GoalInstance]]] = {
     "reach": t_reach, "match_shapes": t_match_shapes, "all_removed": t_all_removed, "all_collected": t_all_collected,
     "fill_region": t_fill_region, "sort_by": t_sort_by, "count_equals": t_count_equals, "align": t_align, "enclose": t_enclose,
-    "sequence": t_sequence, "inside_frame": t_inside_frame, "fill_marked_slots": t_fill_marked_slots, "same_cell": t_same_cell, "pattern_match": t_pattern_match, "match_pattern": t_match_pattern, "align_color": t_align_color, "explore": t_explore}
+    "sequence": t_sequence, "inside_frame": t_inside_frame, "fill_marked_slots": t_fill_marked_slots, "same_cell": t_same_cell, "pattern_match": t_pattern_match, "match_pattern": t_match_pattern, "align_color": t_align_color, "align_all_colors": t_align_all_colors, "explore": t_explore}
 
 
 def instantiate_all(scene: Scene, ctx: Optional[dict] = None, usage_stats: Optional[dict] = None) -> list[GoalInstance]:

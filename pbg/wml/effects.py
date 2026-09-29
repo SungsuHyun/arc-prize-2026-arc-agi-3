@@ -102,7 +102,9 @@ def observe_effect(t: Transition) -> Optional[list[tuple]]:
             continue
         ob = b.get(oid)
         if ob is not None:
-            comps.append(("move", ob.color, ob.shape_sig[:8], dr, dc))
+            # which object of the class moves is fixed by its extent across the movement axis (the mover on THIS column)
+            fixed = (ob.bbox[1], ob.bbox[3]) if dr else (ob.bbox[0], ob.bbox[2])
+            comps.append(("move", ob.color, ob.shape_sig[:8], dr, dc, fixed[0], fixed[1]))
     for oid in reshaped:
         ob, oa = b.get(oid), a.get(oid)
         if ob is None:
@@ -213,10 +215,15 @@ def _apply_components(scene: Scene, comps: list[tuple]) -> Optional[Scene]:
     others = list(objs)
     for c in comps:
         if c[0] == "move":
-            _, color, sig, dr, dc = c
+            color, sig, dr, dc = c[1], c[2], c[3], c[4]
+            fixed = (c[5], c[6]) if len(c) >= 7 else None
             for o in objs:
                 if o.id in consumed or o.color != color or o.shape_sig[:8] != sig:
                     continue
+                if fixed is not None:
+                    ext = (o.bbox[1], o.bbox[3]) if dr else (o.bbox[0], o.bbox[2])
+                    if ext != fixed:
+                        continue
                 new_objs.append(o.moved(dr, dc)); consumed.add(o.id)
         elif c[0] == "resize":
             _, color, axis, lo, hi, anchor, delta = c
@@ -298,7 +305,7 @@ def class_signature(comps: list[tuple]) -> list:
     out = []
     for c in comps:
         if c[0] == "move":
-            out.append(["move", c[1], abs(c[3]) + abs(c[4])])
+            out.append(["move", c[1], abs(c[3]) + abs(c[4])])      # class signature ignores which object of the class
         elif c[0] == "resize":
             out.append(["resize", c[1], abs(c[6])])
     return sorted(out)

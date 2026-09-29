@@ -109,7 +109,7 @@ def _structure(params: dict) -> dict:
     """Structural (level-independent) goal parameters: string values that are not roles/regions/ids."""
     out = {}
     for k, v in (params or {}).items():
-        if k in ("color", "target", "canvas", "canvas_bbox", "a", "b", "src", "dst", "id"):
+        if k in ("color", "colors", "target", "canvas", "canvas_bbox", "a", "b", "src", "dst", "id"):
             continue
         if isinstance(v, str) and not v.startswith(("custom:", "R")):
             out[k] = v

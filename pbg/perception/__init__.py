@@ -117,7 +117,10 @@ class Perception:
         resizable bars: they carry state and must be objects."""
         new: set[tuple] = set()
         rb = before.aux.get("_raw_regions", []); ra = after.aux.get("_raw_regions", [])
+        h, w = before.grid_shape
         for color, (r0, c0, r1, c1) in rb:
+            if (r1 - r0) * (c1 - c0) > 0.25 * h * w:
+                continue          # a board whose fringe changes when bars grow into it is still the board
             same = [(s0, d0, s1, d1) for col, (s0, d0, s1, d1) in ra if col == color and not (s1 <= r0 or r1 <= s0 or d1 <= c0 or c1 <= d0)]
             if not same:
                 continue
