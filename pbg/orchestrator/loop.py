@@ -243,10 +243,13 @@ class Orchestrator:
                     if wml.job_running() and budget.cap("reprobe", s.level) <= 0:
                         events.emit("PLAN", "HYPOTHESIZE", f"model score {H[0].score:.2f}/change {H[0].change_score:.2f} below gate; waiting for the llm job", budget_used=budget.used())
                         wml.wait_job(120.0); state = "HYPOTHESIZE"; continue
-                    if budget.cap("reprobe", s.level) > 0 and _walk_useful(knowledge, s):
-                        events.emit("PLAN", "PROBE", f"model score {H[0].score:.2f}/change {H[0].change_score:.2f} below gate -> walk probe", budget_used=budget.used()); state = "PROBE"; continue
+                    if budget.cap("reprobe", s.level) > 0:
+                        # walk while the click map can still learn; otherwise PROBE takes one goal-directed step (an action
+                        # whose predicted outcome raises the top goal's progress) -- idling on the LLM is the last resort
+                        why = "walk probe" if _walk_useful(knowledge, s) else "goal-directed step"
+                        events.emit("PLAN", "PROBE", f"model score {H[0].score:.2f}/change {H[0].change_score:.2f} below gate -> {why}", budget_used=budget.used()); state = "PROBE"; continue
                     if wml.job_running():
-                        events.emit("PLAN", "HYPOTHESIZE", "below gate, nothing new to click -> waiting for the llm job", budget_used=budget.used())
+                        events.emit("PLAN", "HYPOTHESIZE", "below gate, reprobe spent -> waiting for the llm job", budget_used=budget.used())
                         wml.wait_job(120.0); state = "HYPOTHESIZE"; continue
                     if not self.use_llm or not wml.job_running():
                         # nothing left to learn from cheaply: ask the LLM for a goal/model or let the low-quality plan through once

@@ -103,7 +103,14 @@ class Perception:
         if r.id == "R0" or r.kind_hint == "ui_strip" or not self._dynamic:
             return False
         r0, c0, r1, c1 = r.bbox
-        return (r.bg_color, "row", r0, r1) in self._dynamic or (r.bg_color, "col", c0, c1) in self._dynamic
+        for color, axis, lo, hi in self._dynamic:
+            if color != r.bg_color:
+                continue
+            a, b = (r0, r1) if axis == "row" else (c0, c1)
+            ov = min(b, hi) - max(a, lo)
+            if ov > 0 and ov >= 0.5 * min(b - a, hi - lo):
+                return True      # same bar band (a cap drawn over its end may clip the extent seen this frame)
+        return False
 
     def _detect_dynamic(self, before: Scene, after: Scene) -> set[tuple]:
         """Raw background panels whose extent changed between two consecutive frames (same colour, same fixed axis) are
