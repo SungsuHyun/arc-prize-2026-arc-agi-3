@@ -187,18 +187,20 @@ class Orchestrator:
                         # without a level-up
                         if s.reset_allowed and resets_without_progress < int(self.max_resets):
                             if s.actions_since_reset == 0:
-                                # nothing happened since the last reset: a second RESET would restart the whole game.
-                                # Grant a fresh re-exploration allowance and walk (act) instead of spinning.
-                                events.emit(state, "PROBE", "reset refused (no action since last reset) -> fresh walk allowance", budget_used=budget.used())
-                                budget.reset_level(s.level, "reprobe")
+                                # a RESET now would restart the WHOLE game (refused). Don't re-attempt it every loop
+                                # (that was 188+ refused resets); take a forced exploratory action so we make progress
+                                # (and a later RESET becomes a real attempt), or end cleanly when nothing is left to try.
+                                a = _forced_explore(knowledge, s, forced_tried)
+                                if a is not None:
+                                    t_ = s.act(a, "reprobe")
+                                    events.emit(state, "HYPOTHESIZE", f"reset would restart the game -> forced exploratory {a.label()}", transition_id=t_.id if t_ else None, budget_used=budget.used())
+                                    budget.reset_level(s.level, "reprobe"); walk_dry = 0; state = "HYPOTHESIZE"; continue
                                 if wml.job_running():
-                                    wml.wait_job(60.0)
-                                cap = budget.cap("reprobe", s.level)
+                                    events.emit(state, "HYPOTHESIZE", "reset unsafe, nothing to explore -> waiting for the llm job", budget_used=budget.used())
+                                    wml.wait_job(60.0); budget.reset_level(s.level, "reprobe"); state = "HYPOTHESIZE"; continue
+                                stop = "UNRESOLVED (reset unsafe, nothing to explore)"; events.emit(state, "END", stop, budget_used=budget.used()); break
                             events.emit(state, "HYPOTHESIZE", "reprobe budget exhausted -> RESET", budget_used=budget.used())
-                            acted = s.actions_since_reset > 0
-                            s.act(Action.reset(), "reprobe"); planner.stuck.reset()
-                            if acted:
-                                resets_without_progress += 1     # a refused reset is not an attempt
+                            s.act(Action.reset(), "reprobe"); planner.stuck.reset(); resets_without_progress += 1
                             budget.reset_level(s.level, "reprobe"); touched.clear(); walk_dry = 0; state = "HYPOTHESIZE"; continue
                         stop = "UNRESOLVED"; events.emit(state, "END", f"no progress after {self.max_resets} resets", budget_used=budget.used()); break
                 if kind == "initial":
