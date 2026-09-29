@@ -54,8 +54,61 @@ def checker_mask(grid: np.ndarray) -> np.ndarray:
     return m
 
 
+def dot_lattice_groups(grid: np.ndarray, fg: np.ndarray, regions: list[Region], *, dot_max_area: int = 2,
+                       min_dots: int = 5, max_link: int = 6) -> tuple[list[Object], np.ndarray]:
+    """Many small same-colour components lying on a regular lattice are ONE object: a dotted ring, a 1-px diagonal outline
+    (which 4-connectivity shatters into isolated cells), a scatter of marks forming one figure. Two dots of the same colour
+    link when their Chebyshev distance is within ~1.5x the lattice's typical spacing; a connected run of >= min_dots dots
+    becomes one multi-cell object of that colour. Returns (objects, mask of pixels consumed). Scale-free: unrelated far
+    marks never link, and the same rule catches both spaced dots and a broken diagonal line."""
+    used = np.zeros(grid.shape, dtype=bool)
+    labels, n = label_components(grid, fg, 4)
+    if n == 0:
+        return [], used
+    stats = component_stats(labels, n)
+    by_color: dict[int, list[dict]] = {}
+    for s in stats:
+        if s["area"] <= dot_max_area:
+            s["cen"] = (float(s["rows"].mean()), float(s["cols"].mean()))
+            by_color.setdefault(int(grid[s["rows"][0], s["cols"][0]]), []).append(s)
+    objs: list[Object] = []
+    for color, dots in by_color.items():
+        if len(dots) < min_dots:
+            continue
+        cen = np.array([d["cen"] for d in dots])
+        cheb = np.maximum(np.abs(cen[:, None, 0] - cen[None, :, 0]), np.abs(cen[:, None, 1] - cen[None, :, 1]))
+        np.fill_diagonal(cheb, np.inf)
+        nn = cheb.min(axis=1)
+        link = int(min(max_link, max(2, round(1.5 * float(np.median(nn))))))
+        adj = cheb <= link
+        seen = np.zeros(len(dots), dtype=bool)
+        for start in range(len(dots)):
+            if seen[start]:
+                continue
+            stack = [start]; comp = []
+            while stack:
+                x = stack.pop()
+                if seen[x]:
+                    continue
+                seen[x] = True; comp.append(x)
+                stack.extend(np.nonzero(adj[x] & ~seen)[0].tolist())
+            if len(comp) < min_dots:
+                continue
+            members = [dots[i] for i in comp]
+            r0 = min(m["bbox"][0] for m in members); c0 = min(m["bbox"][1] for m in members)
+            r1 = max(m["bbox"][2] for m in members); c1 = max(m["bbox"][3] for m in members)
+            m = np.zeros((r1 - r0, c1 - c0), dtype=bool)
+            area = 0
+            for mem in members:
+                m[mem["rows"] - r0, mem["cols"] - c0] = True; area += mem["area"]
+                used[mem["rows"], mem["cols"]] = True
+            reg = smallest_region_for_bbox(regions, (r0, c0, r1, c1))
+            objs.append(Object(len(objs), color, (color,), (r0, c0, r1, c1), m, area, shape_signature(m), reg.id))
+    return objs, used
+
+
 def segment_objects(grid: np.ndarray, regions: list[Region], global_bg: int, region_masks: dict, *, connectivity: int = 4,
-                    max_objects: int = 200, min_region_area: int = 0) -> tuple[list[Object], list[tuple[int, int]]]:
+                    max_objects: int = 200, min_region_area: int = 0, group_dots: bool = True) -> tuple[list[Object], list[tuple[int, int]]]:
     """Returns (objects with provisional ids 0..n-1, adjacency pairs between different-colour components)."""
     h, w = grid.shape
     fg = foreground_mask(grid, regions, global_bg, region_masks, min_region_area=min_region_area)
@@ -84,6 +137,12 @@ def segment_objects(grid: np.ndarray, regions: list[Region], global_bg: int, reg
         objs.append(Object(len(objs), color, tuple(cols), (r0, c0, r1, c1), m, s["area"], shape_signature(m), reg.id, color_mask=cm))
         tex_used[s["rows"], s["cols"]] = True
     fg = fg & ~tex_used
+    # a dotted ring / broken diagonal outline / scatter of marks on a lattice is ONE object, not N one-pixel objects
+    if group_dots:
+        dots, dot_used = dot_lattice_groups(grid, fg, regions)
+        for o in dots:
+            o.id = len(objs); objs.append(o)
+        fg = fg & ~dot_used
     labels, n = label_components(grid, fg, connectivity)
     stats = component_stats(labels, n)
     base = len(objs)

@@ -102,3 +102,25 @@ def test_match_pattern_goal():
     g2 = g.copy(); g2[45:50, 30:40] = 3
     s2 = p.parse(Frame(g2.tolist(), 1, 0), s)
     assert gi.is_goal(s2) and gi.progress(s2) == 1.0
+
+
+def test_dot_lattice_grouped_into_one_object():
+    """A 1-px diagonal outline (which 4-connectivity shatters into isolated cells) and a scatter of regularly-spaced
+    same-colour dots become ONE object each, not N one-pixel objects; a lone stray dot stays separate."""
+    import numpy as np
+    from pbg.core.types import Frame
+    from pbg.perception import Perception
+    g = np.full((64, 64), 4, dtype=np.int8)          # yellow background
+    g[8:56, 8:56] = 3                                 # green board
+    # a diamond outline drawn 1 px wide (diagonal edges -> isolated cells under 4-connectivity)
+    cy, cx, rad = 30, 30, 8
+    for k in range(-rad, rad + 1):
+        for (r, c) in ((cy + k, cx + (rad - abs(k))), (cy + k, cx - (rad - abs(k)))):
+            g[r, c] = 6
+    g[50, 50] = 6                                      # one stray dot of the same colour, far away
+    p = Perception(); s = p.parse(Frame(g.tolist(), 1, 0), None)
+    diamonds = [o for o in s.objects if o.color == 6 and o.area >= 5]
+    assert len(diamonds) == 1, f"diamond outline not grouped: {[(o.area, o.bbox) for o in s.objects if o.color == 6]}"
+    assert diamonds[0].area >= 20 and diamonds[0].height >= 15
+    strays = [o for o in s.objects if o.color == 6 and o.area == 1]
+    assert len(strays) == 1                            # the lone dot is not swallowed into the lattice
