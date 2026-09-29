@@ -171,6 +171,8 @@ def rect_composites(objs: list[Object], adj: Optional[list[tuple[int, int]]], re
         nbr.setdefault(a, set()).add(b); nbr.setdefault(b, set()).add(a)
     def is_rect(ids) -> bool:
         os_ = [by[i] for i in ids]
+        if len({o.color for o in os_}) < len(os_):
+            return False      # a repeated colour (button, gap, button) is several things, not one pattern
         r0 = min(o.bbox[0] for o in os_); c0 = min(o.bbox[1] for o in os_); r1 = max(o.bbox[2] for o in os_); c1 = max(o.bbox[3] for o in os_)
         total = (r1 - r0) * (c1 - c0)
         # a small end-cap (a marker on a slider bar, a tab on a panel) is its own object, not a part of a pattern

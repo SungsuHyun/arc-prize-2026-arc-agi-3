@@ -21,9 +21,17 @@ def click_key(scene: Scene, row: int, col: int) -> str:
     for o in sorted(scene.objects, key=lambda o: o.area):          # smallest object first (a marker on a bar)
         r0, c0, r1, c1 = o.bbox
         if r0 <= row < r1 and c0 <= col < c1:
-            return f"c{o.color}:{o.shape_sig[:8]}"
+            return object_key(o)
     reg = next((r.id for r in scene.regions if r.id != "R0" and r.bbox[0] <= row < r.bbox[2] and r.bbox[1] <= col < r.bbox[3]), "R0")
     return f"bg:{reg}:{row // BG_CELL},{col // BG_CELL}"
+
+
+def object_key(o) -> str:
+    """Class of an object for the click map: colour + shape, but a solid rectangle is keyed by colour + thickness so a
+    bar whose length changes stays one class."""
+    if o.mask is not None and o.mask.all() and min(o.height, o.width) >= 2 and max(o.height, o.width) > min(o.height, o.width):
+        return f"c{o.color}:bar{min(o.height, o.width)}"
+    return f"c{o.color}:{o.shape_sig[:8]}"
 
 
 class ClickMap:
@@ -88,7 +96,7 @@ class ClickMap:
         for o in sorted(scene.objects, key=lambda o: (-o.area, o.id)):
             if o.region in strips or o.area < 2:
                 continue
-            key = f"c{o.color}:{o.shape_sig[:8]}"
+            key = object_key(o)
             if key in seen_keys:
                 continue
             seen_keys.add(key)
@@ -102,7 +110,7 @@ class ClickMap:
                 inert.append(a)
         # responsive classes with several objects (four arrow buttons of one colour): every object of the class matters
         for o in sorted(scene.objects, key=lambda o: (-o.area, o.id)):
-            key = f"c{o.color}:{o.shape_sig[:8]}"
+            key = object_key(o)
             if o.region in strips or o.area < 2 or self.status(key) != "responsive":
                 continue
             a = Action.click(*o.center)

@@ -96,7 +96,7 @@ class Orchestrator:
         last_refine_n = -1; resets_without_progress = 0; game_overs = 0
         tried_experiments: set = set(); bumped: set = set(); clicked: set = set(); gated_rounds = 0
         idle_iters = 0; last_used = -1
-        walk_dry = 0
+        walk_dry = 0; last_action = None
         while not s.finished():
             knowledge.clicks.extend(s.transitions[-8:])
             if budget.used() == last_used:
@@ -146,6 +146,18 @@ class Orchestrator:
                         events.emit(state, "HYPOTHESIZE", "reprobe budget exhausted, waiting for the llm job", budget_used=budget.used())
                         wml.wait_job(min(240.0, max(0.0, (s.deadline - time.time()) if s.deadline else 240.0)))
                         state = "HYPOTHESIZE"; continue
+                    if cap > 0 and not _walk_useful(knowledge, s) and H:
+                        # nothing new to click: one goal-directed step (the responsive action whose predicted outcome raises the
+                        # top goal's progress the most, never the inverse of the last action) instead of a round-robin walk
+                        a = _goal_directed_action(knowledge, s, H, G, last_action)
+                        if a is not None:
+                            t_ = s.act(a, "reprobe")
+                            if t_ is not None:
+                                last_action = a
+                                events.emit("PROBE", "HYPOTHESIZE", f"goal-directed probe {a.label()}", transition_id=t_.id, budget_used=budget.used())
+                                semantics = classify_actions(s.transitions, semantics); knowledge.clicks.extend(s.transitions[-3:])
+                                state = "HYPOTHESIZE"; experiments_this_round = 0; continue
+                        walk_dry += 1; cap = 0
                     if cap <= 0:
                         # re-exploration budget exhausted: reset as the last resort (spec §15); the reprobe allowance
                         # starts again after the reset (a new attempt), and the game is only abandoned after 3 resets
@@ -415,3 +427,50 @@ def _walk_useful(knowledge, s) -> bool:
         if st == "untried" or (st == "responsive" and key not in tried_here):
             return True
     return False
+
+
+def _goal_directed_action(knowledge, s, H, G, last_action):
+    """The responsive action (click map) whose predicted next state has the highest top-goal progress; unknown
+    outcomes count as informative (progress 0.5); the inverse of the last action (same objects moved back) is skipped."""
+    from ..probe.clickmap import click_key
+    if not G:
+        return None
+    goal = G[0]; model = H[0].model
+    cands = [a for a in s.available_actions() if a.type == "BUTTON"] + knowledge.clicks.rank(s.scene, level=s.level, include_inert=False, limit=16)
+    if not cands:
+        return None
+    scored = []
+    for a in cands:
+        if a.type == "CLICK" and knowledge.clicks.status(click_key(s.scene, a.row, a.col)) == "untried":
+            scored.append((0.6, a)); continue
+        try:
+            nxt = model.predict(s.scene, a)
+        except Exception:
+            nxt = None
+        if nxt is None:
+            scored.append((0.5, a)); continue
+        if nxt is s.scene or _state_key(nxt) == _state_key(s.scene):
+            continue                       # predicted no-op: nothing to learn or gain
+        if last_action is not None:
+            try:
+                back = model.predict(nxt, last_action)
+            except Exception:
+                back = None
+            if back is not None and _state_key(back) == _state_key(s.scene) and a.label() != last_action.label():
+                pass                       # a cancels last_action: allowed only if it raises progress (checked below)
+        scored.append((goal.progress(nxt), a))
+    if not scored:
+        return None
+    scored.sort(key=lambda x: -x[0])
+    best = scored[0][1]
+    if last_action is not None and best.label() != last_action.label():
+        # never undo the previous step unless it is the only option
+        try:
+            nxt = model.predict(s.scene, best)
+            if nxt is not None and last_action is not None:
+                undo = model.predict(nxt, last_action)
+                if undo is not None and _state_key(undo) == _state_key(s.scene) and len(scored) > 1:
+                    best = scored[1][1]
+        except Exception:
+            pass
+    return best

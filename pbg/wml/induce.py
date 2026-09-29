@@ -264,7 +264,8 @@ def induce_hypotheses(log: list[Transition], semantics: dict, available: list[Ac
     hints = infer_roles_static(log, semantics)
     agent_keys = set(hints["agent"]); agent_colors = set(hints["agent_colors"])
     if not moves or not agent_keys:
-        return induce_click_hypotheses(log, semantics, available, knowledge)
+        from .effects import induce_effect_model
+        return induce_click_hypotheses(log, semantics, available, knowledge) + induce_effect_model(log, semantics, available, knowledge)
     dirs = {int(k.replace("ACTION", "")): d for k, d in moves.items() if k.startswith("ACTION")}
     if not dirs:
         return induce_click_hypotheses(log, semantics, available, knowledge)

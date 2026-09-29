@@ -101,6 +101,13 @@ class Session:
             self.perception.refit(self.transitions)
             after = t.after
         self.transitions.append(t); self.memory.append(t, self.game_id)
+        if self.perception.reparse_needed:
+            # a background panel changed extent: it is a resizable bar; re-parse this level so every scene has it as an object
+            self.perception.reparse_needed = False
+            lv = [x for x in self.transitions if x.level == level]
+            re = self.perception.reparse_level(lv)
+            if re is not None:
+                after = re
         self.click_monitor.observe(t)
         self.budget.sync(self.env.status().actions_used)
         self.scene, self.frame = after, rt.after

@@ -38,6 +38,8 @@ class Perception:
         self._merged: list[tuple[int, int]] = []             # confirmed merges (id_a, id_b)
         self._groups: list[set[int]] = []
         self._solo: set[int] = set()                         # part ids seen moving on their own: never part of a composite
+        self._dynamic: set[tuple] = set()                    # (colour, axis, lo, hi): panels seen changing extent -> objects, not regions
+        self.reparse_needed = False                          # a panel was just found dynamic: callers re-parse the level's transitions
         self.timings: list[float] = []
         self.merge_confirmed = False                         # a merge was confirmed OR a composite dissolved: callers refit past transitions
 
@@ -47,8 +49,10 @@ class Perception:
         grid = np.asarray(frame.grid, dtype=np.int8)
         regions, global_bg, meta = find_regions(grid, min_area_ratio=float(self.cfg["region_min_area_ratio"]),
                                                ui_strip_max_thickness=int(self.cfg["ui_strip_max_thickness"]))
+        raw_regions = [(r.bg_color, tuple(r.bbox)) for r in regions if r.id != "R0" and r.kind_hint != "ui_strip"]
+        regions = [r for r in regions if not self._is_dynamic(r)]
         if prev is not None:
-            regions = stabilize_regions(regions, prev.regions)
+            regions = stabilize_regions(regions, [r for r in prev.regions if not self._is_dynamic(r)])
         min_area = max(4, int(float(self.cfg["region_min_area_ratio"]) * grid.shape[0] * grid.shape[1]))
         objs, adj = segment_objects(grid, regions, global_bg, meta["region_masks"], connectivity=int(self.cfg["connectivity"]), min_region_area=min_area)
         prev_parts = [p for o in prev.objects for p in (o.parts or [o])] if prev else None   # fused objects are tracked by their parts
@@ -71,7 +75,7 @@ class Perception:
                     fused.append(fuse(members, grid, regions)); consumed |= {m.id for m in members}
             tracked = [o for o in tracked if o.id not in consumed] + fused
         tracked.sort(key=lambda o: o.id)
-        scene = Scene(frame.hash, tuple(grid.shape), regions, tracked, {"_global_bg": global_bg, "_merge_candidates": sorted(cand)})
+        scene = Scene(frame.hash, tuple(grid.shape), regions, tracked, {"_global_bg": global_bg, "_merge_candidates": sorted(cand), "_raw_regions": raw_regions})
         self.timings.append(time.perf_counter() - t0)
         return scene
 
@@ -93,6 +97,45 @@ class Perception:
                 if self._pair_moves[(a, b)] >= int(self.cfg["merge_confirm_count"]) and (a, b) not in self._merged:
                     self._merged.append((a, b)); self._add_group(a, b); new = True
         return new
+
+    def _is_dynamic(self, r) -> bool:
+        if r.id == "R0" or r.kind_hint == "ui_strip" or not self._dynamic:
+            return False
+        r0, c0, r1, c1 = r.bbox
+        return (r.bg_color, "row", r0, r1) in self._dynamic or (r.bg_color, "col", c0, c1) in self._dynamic
+
+    def _detect_dynamic(self, before: Scene, after: Scene) -> set[tuple]:
+        """Raw background panels whose extent changed between two consecutive frames (same colour, same fixed axis) are
+        resizable bars: they carry state and must be objects."""
+        new: set[tuple] = set()
+        rb = before.aux.get("_raw_regions", []); ra = after.aux.get("_raw_regions", [])
+        for color, (r0, c0, r1, c1) in rb:
+            same = [(s0, d0, s1, d1) for col, (s0, d0, s1, d1) in ra if col == color and not (s1 <= r0 or r1 <= s0 or d1 <= c0 or c1 <= d0)]
+            if not same:
+                continue
+            for (s0, d0, s1, d1) in same:
+                if (s0, s1) == (r0, r1) and (d0, d1) != (c0, c1):
+                    new.add((color, "row", r0, r1))
+                elif (d0, d1) == (c0, c1) and (s0, s1) != (r0, r1):
+                    new.add((color, "col", c0, c1))
+        return new - self._dynamic
+
+    def reparse_level(self, transitions: list[Transition]):
+        """Re-parse a level's transitions from their frames (after a panel turned out to be dynamic) with tracking run
+        again in order. Returns the final scene (the caller's current scene)."""
+        scene = None
+        for t in transitions:
+            if t.before_frame is None or t.action.type == "RESET":
+                scene = self.parse(t.after_frame, None) if t.after_frame is not None else scene
+                if scene is not None:
+                    t.after = scene
+                continue
+            before = scene if (scene is not None and scene.frame_hash == t.before_frame.hash) else self.parse(t.before_frame, None)
+            after = self.parse(t.after_frame, before)
+            d = compute_diff(before, after, before_grid=t.before_frame.grid, after_grid=t.after_frame.grid, noop_pixel_threshold=int(self.cfg["noop_pixel_threshold"]))
+            t.before, t.after, t.diff = before, after, d
+            scene = after
+        return scene
 
     def _fuse_composites(self, objs: list[Object], adj, grid, regions, extra_excluded=()) -> list[Object]:
         comps = rect_composites(objs, adj, regions, self._solo | set(extra_excluded), min_side=int(self.cfg.get("composite_min_side", 2)),
@@ -128,13 +171,19 @@ class Perception:
             for o in scene_c.objects:
                 if not o.composite:
                     continue
-                disp = {}
+                disp = {}; changed = set()
                 for p in o.parts:
                     q = other.get(p.id)
-                    if q is not None and q.shape_sig == p.shape_sig and q.area == p.area:
+                    if q is None:
+                        continue
+                    if q.shape_sig == p.shape_sig and q.area == p.area:
                         disp[p.id] = (q.bbox[0] - p.bbox[0], q.bbox[1] - p.bbox[1])
+                    else:
+                        changed.add(p.id)          # resized / redrawn part (a bar next to a button is not a pattern half)
                 if len(disp) >= 2 and any(v == (0, 0) for v in disp.values()):
                     new |= {i for i, v in disp.items() if v != (0, 0)}
+                if changed and any(v == (0, 0) for v in disp.values()):
+                    new |= changed
         return new - self._solo
 
     def apply_groups(self, scene: Scene) -> Scene:
@@ -190,6 +239,10 @@ class Perception:
         passed in: when a merge is confirmed here both scenes are re-fused and `t.after` is the canonical current scene."""
         bg = None if before_frame is None else before_frame.grid; ag = None if after_frame is None else after_frame.grid
         d = self.diff(before, after, bg, ag)
+        if status_change is None:
+            dyn = self._detect_dynamic(before, after)
+            if dyn:
+                self._dynamic |= dyn; self.reparse_needed = True
         solo = self._solo_movers(before, after)
         if solo:
             # a composite's part moved alone (an agent next to a wall, a marker under a button): it was never a pattern

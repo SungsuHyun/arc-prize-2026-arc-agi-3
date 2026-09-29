@@ -24,6 +24,7 @@ class LevelKnowledge:
         # Positions change between levels, classes do not: on a new level ONE click per trigger object is enough to
         # re-instantiate the rule (the displacement must be one already seen for the class)
         self.click_rules: dict[str, dict] = {}
+        self.effect_rules: dict[str, dict] = {}    # trigger class -> {signatures: [...], n}: joint effects seen on earlier levels
 
     # ── goal confidence prior for THIS game (stronger than the global usage stats) ──
     def goal_stats(self, global_stats: Optional[dict] = None) -> dict:
@@ -40,6 +41,12 @@ class LevelKnowledge:
         n = 0
         for r in getattr(model, "rules", lambda: [])():
             meta = getattr(r, "meta", None)
+            if meta and meta.get("kind") == "effect" and r.confidence >= 0.9:
+                e = self.effect_rules.setdefault(meta["trigger_class"], {"signatures": [], "n": 0})
+                if meta["signature"] not in e["signatures"]:
+                    e["signatures"].append(meta["signature"])
+                e["n"] += 1; n += 1
+                continue
             if not meta or meta.get("kind") != "click_shift" or r.confidence < 0.9:
                 continue
             e = self.click_rules.setdefault(meta["trigger_class"], {"mover_colors": [], "displacements": [], "n": 0})
@@ -73,7 +80,7 @@ class LevelKnowledge:
     # ── persistence ──
     def to_json(self) -> dict:
         return {"clicks": self.clicks.to_json(), "goal_wins": dict(self.goal_wins), "goal_fails": dict(self.goal_fails),
-                "won_goals": self.won_goals, "demoted": self.demoted, "levels_seen": sorted(self.levels_seen), "click_rules": self.click_rules}
+                "won_goals": self.won_goals, "demoted": self.demoted, "levels_seen": sorted(self.levels_seen), "click_rules": self.click_rules, "effect_rules": self.effect_rules}
 
     @classmethod
     def from_json(cls, d: dict) -> "LevelKnowledge":
@@ -81,7 +88,7 @@ class LevelKnowledge:
         k.clicks = ClickMap.from_json(d.get("clicks", {}))
         k.goal_wins = Counter(d.get("goal_wins", {})); k.goal_fails = Counter(d.get("goal_fails", {}))
         k.won_goals = list(d.get("won_goals", [])); k.demoted = dict(d.get("demoted", {}))
-        k.levels_seen = set(d.get("levels_seen", [])); k.click_rules = dict(d.get("click_rules", {}))
+        k.levels_seen = set(d.get("levels_seen", [])); k.click_rules = dict(d.get("click_rules", {})); k.effect_rules = dict(d.get("effect_rules", {}))
         return k
 
     def save(self, path: Path) -> None:

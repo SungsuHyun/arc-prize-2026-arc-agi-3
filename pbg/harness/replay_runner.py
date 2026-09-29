@@ -45,6 +45,12 @@ def replay_transitions(records, game_id: str = "") -> tuple[list[Transition], Pe
         if p.merge_confirmed:
             p.refit(ts); after = t.after
         ts.append(t)
+        if p.reparse_needed:
+            p.reparse_needed = False
+            lv = [x for x in ts if x.level == rt.level]
+            re = p.reparse_level(lv)
+            if re is not None:
+                after = re
         # tracking stability: objects that stayed (same colour+shape at the same place) must keep their id
         before_ids = {o.identity(): o.id for o in scene.objects}
         for o in after.objects:
