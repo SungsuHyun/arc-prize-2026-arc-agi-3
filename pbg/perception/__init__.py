@@ -96,7 +96,7 @@ class Perception:
 
     def _fuse_composites(self, objs: list[Object], adj, grid, regions, extra_excluded=()) -> list[Object]:
         comps = rect_composites(objs, adj, regions, self._solo | set(extra_excluded), min_side=int(self.cfg.get("composite_min_side", 2)),
-                                min_area=int(self.cfg.get("composite_min_area", 6)))
+                                min_area=int(self.cfg.get("composite_min_area", 6)), min_share=float(self.cfg.get("composite_min_share", 0.2)))
         if not comps:
             return objs
         consumed = {m.id for c in comps for m in c}

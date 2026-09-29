@@ -388,6 +388,19 @@ def induce_click_hypotheses(log: list[Transition], semantics: dict, available: l
                     if ob is not None:
                         trig_movers.setdefault(key, Counter())[ob.color] += 1
     click_moves = {k: c.most_common(1)[0][0] for k, c in trig.items() if c.most_common(1)[0][1] >= 2}
+    # triggers whose displacement is (nearly) always the same: a uniform shift generalises to positions never seen
+    # (the winning one), which a learned permutation table cannot
+    trig_box: dict[tuple, Counter] = {}       # per trigger OBJECT (two identical arrow buttons move in opposite directions)
+    for t in clicks:
+        oid = object_under(t.before, t.action.row, t.action.col)
+        o = t.before.get(oid) if oid is not None else None
+        if o is None or not t.diff.moved:
+            continue
+        ui = strip_ids(t)
+        disp = Counter(v for i, v in t.diff.moved if i != oid and i not in ui)
+        if disp:
+            trig_box.setdefault((o.color, o.shape_sig, tuple(o.bbox)), Counter())[disp.most_common(1)[0][0]] += 1
+    uniform = {k: c.most_common(1)[0][0] for k, c in trig_box.items() if c.most_common(1)[0][1] >= 2 and c.most_common(1)[0][1] >= 0.8 * sum(c.values())}
     # learned permutations: per trigger class, the top-left -> top-left mapping of every moved object, if consistent
     votes: dict[tuple, dict] = {}
     last_level = max(t.level for t in clicks)
@@ -497,7 +510,20 @@ def induce_click_hypotheses(log: list[Transition], semantics: dict, available: l
     model = RuleModel(rules, role_fn, default="noop", name="induced:click")
     model.level_scoped = bool(perms)      # learned position permutations only hold for the level they were seen on
     model.position_graph = {k[2]: {src: (d["near"] if isinstance(d, dict) else d) for src, d in m.items()} for k, m in perms.items()}   # trigger bbox -> {top-left -> top-left}
-    return [("induced:click", model)]
+    out = [("induced:click", model)]
+    shift_keys = {k: uniform[k] for k in perms if k in uniform}
+    if shift_keys:
+        # variant: uniform shifts instead of permutation tables for the consistent triggers (a slider moved by arrow buttons)
+        rules2 = [r for r in rules if not r.name.startswith("click_perm_")]
+        rules2 += [Rule(f"click_perm_{n}", lambda s, a: a.type == "CLICK", permute_on_click(perm_boxes[k[2]], dict(m)), source="induced")
+                   for n, (k, m) in enumerate(perms.items()) if k not in shift_keys]
+        for k, (dr, dc) in shift_keys.items():
+            rules2.insert(0, Rule(f"click_shift_{perm_boxes[k[2]]}", lambda s, a: a.type == "CLICK", move_on_click(perm_boxes[k[2]], "custom:moved", dr, dc), source="induced"))
+        m2 = RuleModel(rules2, role_fn, default="noop", name="induced:click-shift")
+        m2.level_scoped = any(k not in shift_keys for k in perms)
+        m2.position_graph = {k[2]: {src: (d["near"] if isinstance(d, dict) else d) for src, d in m.items()} for k, m in perms.items() if k not in shift_keys}
+        out.append(("induced:click-shift", m2))
+    return out
 
 
 def induced_code(name: str) -> str:

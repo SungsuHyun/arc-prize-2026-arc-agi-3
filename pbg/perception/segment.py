@@ -152,10 +152,10 @@ def parts_adjacent(a: Object, b: Object) -> bool:
 
 
 def rect_composites(objs: list[Object], adj: Optional[list[tuple[int, int]]], regions: list[Region], excluded=(), *,
-                    min_side: int = 2, min_area: int = 6, max_parts: int = 6) -> list[list[Object]]:
+                    min_side: int = 2, min_area: int = 6, max_parts: int = 6, min_share: float = 0.2) -> list[list[Object]]:
     """Adjacent different-colour components whose union is a FILLED rectangle: a two-colour target pattern, a half-stamped
-    canvas, a framed button. Thin parts (1 px lines, corner marks) and ui strips never take part; `excluded` are parts seen
-    moving on their own (an agent standing next to a wall is not a pattern). Adjacency is taken from the segmentation
+    canvas, a framed button. Thin parts (1 px lines, corner marks), parts under `min_share` of the union (a marker on a bar)
+    and ui strips never take part; `excluded` are parts seen moving on their own (an agent standing next to a wall is not a pattern). Adjacency is taken from the segmentation
     when given, else from the masks."""
     by = {o.id: o for o in objs}
     strip = {r.id for r in regions if r.kind_hint == "ui_strip"}
@@ -172,7 +172,9 @@ def rect_composites(objs: list[Object], adj: Optional[list[tuple[int, int]]], re
     def is_rect(ids) -> bool:
         os_ = [by[i] for i in ids]
         r0 = min(o.bbox[0] for o in os_); c0 = min(o.bbox[1] for o in os_); r1 = max(o.bbox[2] for o in os_); c1 = max(o.bbox[3] for o in os_)
-        return sum(o.area for o in os_) == (r1 - r0) * (c1 - c0)
+        total = (r1 - r0) * (c1 - c0)
+        # a small end-cap (a marker on a slider bar, a tab on a panel) is its own object, not a part of a pattern
+        return sum(o.area for o in os_) == total and all(o.area >= min_share * total for o in os_)
     seen: set[int] = set(); out: list[list[int]] = []
     for start in sorted(nbr):
         if start in seen:

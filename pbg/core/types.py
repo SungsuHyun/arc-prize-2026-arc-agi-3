@@ -218,8 +218,9 @@ class Object:
 
     def moved(self, dr: int, dc: int) -> "Object":
         r0, c0, r1, c1 = self.bbox
+        parts = None if not self.parts else [q.moved(dr, dc) for q in self.parts]
         return Object(self.id, self.color, self.colors, (r0 + dr, c0 + dc, r1 + dr, c1 + dc), self.mask, self.area,
-                      self.shape_sig, self.region, self.role, self.color_mask)
+                      self.shape_sig, self.region, self.role, self.color_mask, parts=parts, composite=self.composite)
 
     def recolored(self, color: int) -> "Object":
         cm = None if self.color_mask is None else np.where(self.color_mask >= 0, color, -1).astype(np.int8)

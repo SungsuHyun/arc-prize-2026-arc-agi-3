@@ -17,6 +17,9 @@ def filter_by_levelup(G: list[GoalInstance], log: Iterable[Transition], *, prior
             continue
         before = roles_fn(t.before) if roles_fn else t.before
         win_states = [before]
+        ext = _extrapolate(t, log[:idx])
+        if ext is not None:
+            win_states.append(roles_fn(ext) if roles_fn else ext)
         if model is not None:
             try:
                 pred = model.predict(t.before, t.action)
@@ -37,3 +40,30 @@ def filter_by_levelup(G: list[GoalInstance], log: Iterable[Transition], *, prior
         for g in G:
             g.confidence = min(1.0, g.confidence + 0.3)
     return G
+
+
+def _extrapolate(t: Transition, earlier: list[Transition]):
+    """The winning action's result is never observed; if the same action (same button / same click cell) always moved the
+    same objects by the same displacement earlier in the level, apply that displacement to the last state."""
+    same = [x for x in earlier if x.level == t.level and x.action.label() == t.action.label() and not x.diff.is_noop and x.diff.moved
+            and not x.diff.appeared and not x.diff.disappeared]
+    if len(same) < 2:
+        return None
+    disp = {}
+    for x in same:
+        for i, v in x.diff.moved:
+            o = x.before.get(i)
+            if o is None:
+                continue
+            disp.setdefault((o.color, o.shape_sig), set()).add(v)
+    consistent = {k: next(iter(v)) for k, v in disp.items() if len(v) == 1}
+    if not consistent:
+        return None
+    objs = []; changed = False
+    for o in t.before.objects:
+        d = consistent.get((o.color, o.shape_sig))
+        if d is not None:
+            objs.append(o.moved(*d)); changed = True
+        else:
+            objs.append(o)
+    return t.before.copy(objects=objs) if changed else None
