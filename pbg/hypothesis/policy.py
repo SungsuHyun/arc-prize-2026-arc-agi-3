@@ -106,7 +106,7 @@ class Hypothesis:
     def summary(self) -> str:
         d = self.doc
         v = self.verdict
-        vs = f"acc={v.accuracy:.2f} approx={v.approx:.2f} cov={v.coverage:.2f} n={v.n}" if v else "unverified"
+        vs = f"acc={v.accuracy:.2f} chg={v.change_accuracy:.2f}({v.changed}) approx={v.approx:.2f} cov={v.coverage:.2f} n={v.n}" if v else "unverified"
         if self.timeouts + getattr(self.model, "timeouts", 0):
             vs += f" TIMEOUTS={self.timeouts + getattr(self.model, 'timeouts', 0)}"
         return f"h{self.n} [{vs}] {str(d.get('summary', ''))[:220]} | win: {str(d.get('win', ''))[:120]} | uncertain: {d.get('uncertain', [])}"
@@ -209,10 +209,12 @@ class HypothesisPolicy:
         return out
 
     # ── deterministic candidates (docs/029 P1-3) ──
-    def induced_candidates(self, s: Session, log: list[Transition], n: int, limit: int = 3) -> list[InducedHypothesis]:
-        """Prior-composed models induced from this level's log, each paired with the goal templates ranked for its roles."""
+    def induced_candidates(self, s: Session, log: list[Transition], n: int, limit: int = 3, ids: Optional[dict] = None) -> list[InducedHypothesis]:
+        """Prior-composed models induced from this level's log, each paired with the goal templates ranked for its roles.
+        `ids` keeps one number per model name across rounds, so a no-plan verdict against a model sticks to it."""
         if not log:
             return []
+        ids = ids if ids is not None else {}
         try:
             sem = classify_actions(log)
             available = s.available_actions()
@@ -228,7 +230,7 @@ class HypothesisPolicy:
             except Exception as e:
                 self.log(f"goal inference failed: {e!r}"); G = []
             actions_fn = (lambda scene, sem=sem, av=available: action_set(scene, av, semantics=sem))
-            out.append(InducedHypothesis(wh, G[:3], n, actions_fn))
+            out.append(InducedHypothesis(wh, G[:3], ids.setdefault(wh.name, 1000 + len(ids)), actions_fn))
         return out
 
     def goal_directed_step(self, h: Hypothesis, s: Session, observed: dict, tried_here: set, seen_states: set) -> Optional[Action]:
@@ -312,6 +314,8 @@ class HypothesisPolicy:
         plans_executed = 0; tests_run = 0; tried_labels: set = set(); idle_rounds = 0; approx_budget = 6
         tried_here: set = set()             # (board state, action label) already run as a test: never repeat it from the same board
         gd_steps = 0                        # goal-directed steps taken on this level (P1-4)
+        induced_ids: dict = {}              # induced model name -> stable hypothesis number
+        llm_best: Optional[Hypothesis] = None   # best LLM candidate of the last round: its tests run when an induced model tops the ranking
         approx_actions = 0                  # actions spent under approximate plans on this level (P2-6)
         no_plan_n: Optional[int] = None     # hypothesis that verified but produced no plan (keep it only while nothing verifies better)
         repeats_dropped = 0
@@ -416,16 +420,17 @@ class HypothesisPolicy:
             rounds += 1; n_hyp += 1
             used_before = budget.used()
             # the current hypothesis' accuracy even when its verdict was cleared (no plan): a worse candidate must not replace it
-            cur_acc = verify(hyp.model, log, hyp.ignore).accuracy if (hyp is not None and log) else -1.0
+            cur_key = verify(hyp.model, log, hyp.ignore).rank_key() if (hyp is not None and log) else (-1.0,)
             t0 = time.time()
             cands = self.hypothesise(s, log, hyp, counterexamples, n_hyp, rejected)
-            cands += self.induced_candidates(s, log, n_hyp)
+            cands += self.induced_candidates(s, log, n_hyp, ids=induced_ids)
             for c in cands:
                 c.verdict = verify(c.model, log, c.ignore) if log else Verdict(0.0, 0.0, 0, 0, 0)
                 if c.timeout_note():
                     c.verdict.counterexamples = [c.timeout_note()] + c.verdict.counterexamples
                     events.emit("VERIFY", "VERIFY", f"h{c.n} hit the {MODEL_SECONDS:.0f}s deadline: {getattr(c.model, 'last_timeout', '')[:120]}", budget_used=budget.used())
-            cands.sort(key=lambda c: (c.verdict.accuracy, c.verdict.coverage), reverse=True)
+            cands.sort(key=lambda c: c.verdict.rank_key(), reverse=True)
+            llm_best = next((c for c in cands if c.origin == "llm"), llm_best)
             events.emit("HYPOTHESISE", "HYPOTHESISE", f"round {rounds}: {len(cands)} candidate(s) in {time.time() - t0:.0f}s", budget_used=budget.used())
             for c in cands:
                 events.emit("HYPOTHESISE", "HYPOTHESISE", c.summary(), budget_used=budget.used())
@@ -436,10 +441,10 @@ class HypothesisPolicy:
             if not cands:
                 continue
             best = cands[0]
-            if hyp is None or best.verdict.accuracy >= cur_acc or (no_plan_n == hyp.n and best.verdict.usable(self.min_acc)):
+            if hyp is None or best.verdict.rank_key() >= cur_key or (no_plan_n == hyp.n and best.verdict.usable(self.min_acc) and best.n != no_plan_n):
                 hyp = best
             else:
-                events.emit("HYPOTHESISE", "HYPOTHESISE", f"kept h{hyp.n} (acc {cur_acc:.2f}): best new candidate h{best.n} is worse ({best.verdict.accuracy:.2f})", budget_used=budget.used())
+                events.emit("HYPOTHESISE", "HYPOTHESISE", f"kept h{hyp.n} (chg/acc {cur_key[0]:.2f}/{cur_key[1]:.2f}): best new candidate h{best.n} is worse ({best.verdict.change_accuracy:.2f}/{best.verdict.accuracy:.2f})", budget_used=budget.used())
                 hyp.verdict = verify(hyp.model, log, hyp.ignore)
             if hyp.verdict.counterexamples:
                 counterexamples = hyp.verdict.counterexamples[-4:]
@@ -447,8 +452,9 @@ class HypothesisPolicy:
                 events.emit("VERIFY", "PLAN", f"h{hyp.n} verified (acc {hyp.verdict.accuracy:.2f} on {hyp.verdict.n}) -> plan", budget_used=budget.used())
                 idle_rounds = idle_rounds + 1 if budget.used() == used_before else 0
                 continue
-            tests = [a for a in hyp.call("test_actions", s.scene, []) if isinstance(a, Action)][:2]
-            attempts = [a for a in hyp.call("attempt_actions", s.scene, []) if isinstance(a, Action) and a not in tests][:1]
+            src = hyp if (hyp.origin == "llm" or llm_best is None) else llm_best     # an induced model names no experiments: the LLM's run
+            tests = [a for a in src.call("test_actions", s.scene, []) if isinstance(a, Action)][:2]
+            attempts = [a for a in src.call("attempt_actions", s.scene, []) if isinstance(a, Action) and a not in tests][:1]
             tests = tests + attempts          # learn AND try: one move toward the hypothesised win per round
             sk = state_key(s.scene)
             fresh = [a for a in tests if (sk, a.label()) not in tried_here]

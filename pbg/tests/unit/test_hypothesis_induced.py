@@ -91,3 +91,31 @@ def test_goal_directed_step_prefers_progress(tmp_path):
     # the same step is not repeated from the same board once it was tried there
     from pbg.planner.common import state_key
     assert pol.goal_directed_step(_H(), s, {}, {(state_key(s.scene), "ACTION4")}, set()) != Action.button(4)
+
+
+def test_nothing_happens_model_is_not_usable():
+    """docs/029: a model that predicts 'no change' is exact on every no-op transition and useless; the verdict's change
+    accuracy must keep it from ranking above a model that explains the moves."""
+    from pbg.hypothesis.verify import verify
+    p = Perception(); s = _Session(p)
+
+    class _Noop:
+        def predict(self, sc, a): return sc
+        def with_roles(self, sc): return sc
+    v = verify(_Noop(), s.level_log(), None)
+    assert v.changed == 3 and v.change_correct == 0 and v.change_accuracy == 0.0
+    assert v.accuracy == 0.0 and not v.usable(0.8)
+
+    class _Right:
+        def predict(self, sc, a):
+            return sc.copy(objects=[o.moved(0, 4) if o.color in (12, 9) else o for o in sc.objects]) if a.id == 4 else sc
+        def with_roles(self, sc): return sc
+    w = verify(_Right(), s.level_log(), None)
+    assert w.change_accuracy > v.change_accuracy and w.rank_key() > v.rank_key()
+
+
+def test_induced_ids_are_stable_across_rounds(tmp_path):
+    p = Perception(); s = _Session(p); pol = _policy(tmp_path); ids = {}
+    a = pol.induced_candidates(s, s.level_log(), n=1, ids=ids)
+    b = pol.induced_candidates(s, s.level_log(), n=7, ids=ids)
+    assert a and b and {c.name: c.n for c in a} == {c.name: c.n for c in b if c.name in {x.name for x in a}}

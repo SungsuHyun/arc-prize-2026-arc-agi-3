@@ -21,9 +21,20 @@ class Verdict:
     counterexamples: list[str] = field(default_factory=list)
     violations: list[str] = field(default_factory=list)
     approx: float = 0.0        # mean closeness over verifiable transitions (1 exact, IoU of changed regions otherwise, 0 unknown)
+    changed: int = 0           # transitions where the real board changed (outside the ignore boxes)
+    change_correct: int = 0    # ... of which the model predicted exactly
 
-    def usable(self, min_acc: float = 0.8, min_n: int = 3) -> bool:
-        return self.n >= min_n and self.accuracy >= min_acc
+    @property
+    def change_accuracy(self) -> float:
+        """Accuracy on the transitions that changed the board: a model that predicts "nothing happens" scores 0 here
+        (it is exact on every no-op and useless for planning — the trap that cost tn36 its level, docs/029)."""
+        return self.change_correct / self.changed if self.changed else 0.0
+
+    def rank_key(self) -> tuple:
+        return (self.change_accuracy, self.accuracy, self.coverage)
+
+    def usable(self, min_acc: float = 0.8, min_n: int = 3, min_change: float = 0.5) -> bool:
+        return self.n >= min_n and self.accuracy >= min_acc and self.changed >= 1 and self.change_accuracy >= min_change
 
     def approximate(self, min_approx: float = 0.5, min_cov: float = 0.6, min_n: int = 2) -> bool:
         """Good enough to act on one step at a time (closed loop), not to trust a long plan."""
@@ -80,7 +91,15 @@ def verify(model, log: list[Transition], hyp_ignore=None, *, tol: int = 0, max_e
     if not usable:
         return Verdict(0.0, 0.0, 0, 0, 0)
     correct = unknown = 0; ex: list[str] = []; viol: list[str] = []; close = 0.0
+    changed = change_correct = 0
     for t in usable:
+        boxes0 = _boxes(t.before, hyp_ignore) if hyp_ignore else [tuple(r.bbox) for r in t.before.regions if r.kind_hint == "ui_strip"]
+        real = np.asarray(t.before_frame.grid) != np.asarray(t.after_frame.grid)
+        for (r0, c0, r1, c1) in boxes0:
+            real[r0:r1, c0:c1] = False
+        did_change = bool(real.any())
+        if did_change:
+            changed += 1
         try:
             pred = model.predict(t.before, t.action)
         except Exception as e:
@@ -92,7 +111,10 @@ def verify(model, log: list[Transition], hyp_ignore=None, *, tol: int = 0, max_e
         boxes = _boxes(t.before, hyp_ignore) if hyp_ignore else [tuple(r.bbox) for r in t.before.regions if r.kind_hint == "ui_strip"]
         ok, n, win = pixel_equal(pred, t.after_frame.grid, boxes, tol)
         if ok:
-            correct += 1; close += 1.0; continue
+            correct += 1; close += 1.0
+            if did_change:
+                change_correct += 1
+            continue
         close += closeness(pred, t.before_frame.grid, t.after_frame.grid, boxes)
         viol.append(t.id)
         if len(ex) < max_examples and win is not None:
@@ -104,4 +126,4 @@ def verify(model, log: list[Transition], hyp_ignore=None, *, tol: int = 0, max_e
             else:
                 ex.append(f"[{t.id}] {t.action.label()}: {n} px wrong over rows {r0}-{r1 - 1}, cols {c0}-{c1 - 1} (window too large to print)")
     n = len(usable)
-    return Verdict(correct / n, (n - unknown) / n, n, correct, unknown, ex, viol, approx=close / n)
+    return Verdict(correct / n, (n - unknown) / n, n, correct, unknown, ex, viol, approx=close / n, changed=changed, change_correct=change_correct)
