@@ -36,7 +36,8 @@ def candidate_actions(scene) -> list:  # the actions worth planning with in this
 def test_actions(scene) -> list:       # 1-3 actions whose outcome best discriminates the "uncertain" items (empty if none)
 def ignore_boxes(scene) -> list:       # [(r0, c0, r1, c1), ...] display elements (counters, timers) to ignore when checking predictions
 
-Rules for the code: numpy only; no game names; no coordinates memorised from this level except through scene queries;
+Keep the code compact (well under 200 lines): simple geometric rules beat elaborate simulations, and a reply cut off by
+the length limit is worthless. Rules for the code: numpy only; no game names; no coordinates memorised from this level except through scene queries;
 no comments that argue -- put reasoning in HYPOTHESIS. The prediction check compares the rendered predicted grid with the
 real next grid pixel by pixel outside ignore_boxes: a rule that moves an object must move ALL its pixels correctly.
 If an action is truly unpredictable to you, return None from the rule (UNKNOWN) rather than guessing a no-op.

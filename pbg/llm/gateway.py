@@ -45,9 +45,12 @@ def load_llm_config(path: Optional[Path] = None) -> dict:
 
 
 def extract_code(text: str) -> Optional[str]:
-    """The single python code block of a reply (the first one if several; None if none)."""
+    """The single python code block of a reply (the first one if several; None if none). A block whose closing fence
+    was cut off by the token limit is salvaged as-is (the sandbox rejects it if it does not parse)."""
     if not text:
         return None
+    if "```python" in text and text.count("```") % 2 == 1:
+        text = text + "\n```"
     blocks = [b for b in CODE_RE.findall(text) if "def build_model" in b or "def build_goal" in b]
     if not blocks:
         blocks = CODE_RE.findall(text)
