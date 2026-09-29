@@ -20,9 +20,14 @@ class Verdict:
     unknown: int
     counterexamples: list[str] = field(default_factory=list)
     violations: list[str] = field(default_factory=list)
+    approx: float = 0.0        # mean closeness over verifiable transitions (1 exact, IoU of changed regions otherwise, 0 unknown)
 
     def usable(self, min_acc: float = 0.8, min_n: int = 3) -> bool:
         return self.n >= min_n and self.accuracy >= min_acc
+
+    def approximate(self, min_approx: float = 0.5, min_cov: float = 0.6, min_n: int = 2) -> bool:
+        """Good enough to act on one step at a time (closed loop), not to trust a long plan."""
+        return self.n >= min_n and self.coverage >= min_cov and self.approx >= min_approx
 
 
 def _boxes(scene: Scene, hyp_ignore) -> list:
@@ -48,11 +53,33 @@ def pixel_equal(pred: Scene, obs_grid: np.ndarray, boxes: list, tol: int = 0) ->
     return False, n, (max(0, int(ys.min()) - 1), max(0, int(xs.min()) - 1), min(og.shape[0], int(ys.max()) + 2), min(og.shape[1], int(xs.max()) + 2))
 
 
+def closeness(pred: Scene, before_grid, after_grid, boxes: list) -> float:
+    """How close a wrong prediction is: IoU of the predicted and the real changed-pixel sets, times the colour agreement
+    on the real changed pixels (moving the right thing roughly right scores well; changing nothing scores 0)."""
+    pg = pred.render(); bg = np.asarray(before_grid); ag = np.asarray(after_grid)
+    if pg.shape != ag.shape:
+        return 0.0
+    pc = pg != bg; rc = ag != bg
+    for (r0, c0, r1, c1) in boxes:
+        pc[r0:r1, c0:c1] = False; rc[r0:r1, c0:c1] = False
+    if not rc.any():
+        return 1.0 if not pc.any() else 0.0
+    union = (pc | rc).sum()
+    iou = float((pc & rc).sum()) / float(union) if union else 0.0
+    # spatial tolerance: a change predicted within 3 cells of the real one counts half
+    if iou < 0.5 and pc.any():
+        ry, rx = np.nonzero(rc); py, px = np.nonzero(pc)
+        d = abs(float(ry.mean()) - float(py.mean())) + abs(float(rx.mean()) - float(px.mean()))
+        iou = max(iou, 0.5 * max(0.0, 1.0 - d / 12.0))
+    colour = float((pg[rc] == ag[rc]).mean())
+    return max(0.0, min(1.0, 0.7 * iou + 0.3 * colour))
+
+
 def verify(model, log: list[Transition], hyp_ignore=None, *, tol: int = 0, max_examples: int = 4) -> Verdict:
     usable = [t for t in log if t.action.type != "RESET" and t.before_frame is not None and t.after_frame is not None and not t.status_change]
     if not usable:
         return Verdict(0.0, 0.0, 0, 0, 0)
-    correct = unknown = 0; ex: list[str] = []; viol: list[str] = []
+    correct = unknown = 0; ex: list[str] = []; viol: list[str] = []; close = 0.0
     for t in usable:
         try:
             pred = model.predict(t.before, t.action)
@@ -65,7 +92,8 @@ def verify(model, log: list[Transition], hyp_ignore=None, *, tol: int = 0, max_e
         boxes = _boxes(t.before, hyp_ignore) if hyp_ignore else [tuple(r.bbox) for r in t.before.regions if r.kind_hint == "ui_strip"]
         ok, n, win = pixel_equal(pred, t.after_frame.grid, boxes, tol)
         if ok:
-            correct += 1; continue
+            correct += 1; close += 1.0; continue
+        close += closeness(pred, t.before_frame.grid, t.after_frame.grid, boxes)
         viol.append(t.id)
         if len(ex) < max_examples and win is not None:
             r0, c0, r1, c1 = win
@@ -76,4 +104,4 @@ def verify(model, log: list[Transition], hyp_ignore=None, *, tol: int = 0, max_e
             else:
                 ex.append(f"[{t.id}] {t.action.label()}: {n} px wrong over rows {r0}-{r1 - 1}, cols {c0}-{c1 - 1} (window too large to print)")
     n = len(usable)
-    return Verdict(correct / n, (n - unknown) / n, n, correct, unknown, ex, viol)
+    return Verdict(correct / n, (n - unknown) / n, n, correct, unknown, ex, viol, approx=close / n)

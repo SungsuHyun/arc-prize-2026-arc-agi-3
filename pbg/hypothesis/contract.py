@@ -34,6 +34,8 @@ def build_goal():                      # object with name, is_goal(scene) -> boo
 def candidate_actions(scene) -> list:  # the actions worth planning with in this state (Action.button(i) / Action.click(row, col));
                                        # for click games include the POINTS that matter (targets, gaps), not only objects
 def test_actions(scene) -> list:       # 1-3 actions whose outcome best discriminates the "uncertain" items (empty if none)
+def attempt_actions(scene) -> list:    # 1-3 actions that, under your hypothesis, move the board TOWARD the win right now
+                                       # (used while the model is still approximate: act, observe, re-think)
 def ignore_boxes(scene) -> list:       # [(r0, c0, r1, c1), ...] display elements (counters, timers) to ignore when checking predictions
 
 Scene, Object, Action, Rule, RuleModel and numpy (as np) are already defined in your namespace: do not import them.
@@ -41,7 +43,10 @@ Keep the code compact (well under 200 lines): simple geometric rules beat elabor
 the length limit is worthless. Rules for the code: numpy only; no game names; no coordinates memorised from this level except through scene queries;
 no comments that argue -- put reasoning in HYPOTHESIS. The prediction check compares the rendered predicted grid with the
 real next grid pixel by pixel outside ignore_boxes: a rule that moves an object must move ALL its pixels correctly.
-If an action is truly unpredictable to you, return None from the rule (UNKNOWN) rather than guessing a no-op.
+Always predict: an approximate next board (right object, right direction, roughly right distance) is far more useful
+than None -- the check also scores how close the changed region is, and planning works on approximate models by acting
+one step at a time. Return None only for actions you have no idea about; write what is uncertain in "uncertain".
+All functions receive the scene WITH your role_fn roles already applied (o.role, scene.by_role work everywhere).
 Roles vocabulary: agent, mover, button, bar, wall, target, marker, key, door, collectible, hazard, indicator, decoration.
 '''
 

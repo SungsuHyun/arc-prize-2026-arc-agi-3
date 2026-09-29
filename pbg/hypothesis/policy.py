@@ -41,15 +41,34 @@ class Hypothesis:
         self.goal = ns["build_goal"]() if "build_goal" in ns else None
         self.verdict: Optional[Verdict] = None
 
+    def roled(self, scene: Scene) -> Scene:
+        """The scene with this hypothesis' roles applied (every hypothesis function expects them)."""
+        try:
+            return self.model.with_roles(scene) if hasattr(self.model, "with_roles") else scene
+        except Exception:
+            return scene
+
     def call(self, name: str, scene: Scene, default):
         fn = self.ns.get(name)
         if fn is None:
             return default
         try:
-            out = fn(scene)
+            out = fn(self.roled(scene))
             return out if out is not None else default
         except Exception:
             return default
+
+    def is_goal(self, scene: Scene) -> bool:
+        try:
+            return bool(self.goal.is_goal(self.roled(scene))) if self.goal is not None else False
+        except Exception:
+            return False
+
+    def progress(self, scene: Scene) -> float:
+        try:
+            return float(self.goal.progress(self.roled(scene))) if self.goal is not None else 0.0
+        except Exception:
+            return 0.0
 
     def ignore(self, scene: Scene) -> list:
         return self.call("ignore_boxes", scene, [])
@@ -57,7 +76,7 @@ class Hypothesis:
     def summary(self) -> str:
         d = self.doc
         v = self.verdict
-        vs = f"acc={v.accuracy:.2f} cov={v.coverage:.2f} n={v.n}" if v else "unverified"
+        vs = f"acc={v.accuracy:.2f} approx={v.approx:.2f} cov={v.coverage:.2f} n={v.n}" if v else "unverified"
         return f"h{self.n} [{vs}] {str(d.get('summary', ''))[:220]} | win: {str(d.get('win', ''))[:120]} | uncertain: {d.get('uncertain', [])}"
 
 
@@ -140,9 +159,9 @@ class HypothesisPolicy:
                     continue
                 yield a, nxt
         try:
-            if goal.is_goal(s.scene):
+            if h.is_goal(s.scene):
                 return []
-            return astar(s.scene, successors, goal.is_goal, goal.progress, depth=80, time_limit=self.plan_time)
+            return astar(s.scene, successors, h.is_goal, h.progress, depth=80, time_limit=self.plan_time)
         except Exception as e:
             self.log(f"planning failed: {e!r}")
             return None
@@ -159,7 +178,7 @@ class HypothesisPolicy:
         counterexamples: list[str] = []; rejected: list[str] = []
         observed: dict = {}
         level = s.level; rounds = 0; n_hyp = 0; stop = ""; llm_calls0 = self.llm.calls
-        plans_executed = 0; tests_run = 0; tried_labels: set = set(); idle_rounds = 0
+        plans_executed = 0; tests_run = 0; tried_labels: set = set(); idle_rounds = 0; approx_budget = 6
 
         def act(a: Action, kind: str) -> Optional[Transition]:
             t = s.act(a, kind)
@@ -176,17 +195,21 @@ class HypothesisPolicy:
                 s.act(Action.reset(), "reset"); continue
             if s.level != level:
                 events.emit("LOOK", "LOOK", f"level {level} -> {s.level}: the hypothesis must verify again on the new board", budget_used=budget.used())
-                level = s.level; rounds = 0; idle_rounds = 0; counterexamples = []; observed.clear()
+                level = s.level; rounds = 0; idle_rounds = 0; approx_budget = 6; counterexamples = []; observed.clear()
                 if hyp is not None:
                     hyp.verdict = None
             log = s.level_log()
             # verify the current hypothesis on this level's log
             if hyp is not None and log:
                 hyp.verdict = verify(hyp.model, log, hyp.ignore)
-            usable = hyp is not None and (hyp.verdict is not None and hyp.verdict.usable(self.min_acc))
+            exact = hyp is not None and hyp.verdict is not None and hyp.verdict.usable(self.min_acc)
+            approx = (not exact) and hyp is not None and hyp.verdict is not None and hyp.verdict.approximate() and approx_budget > 0
+            usable = exact or approx
             if usable:
+                if approx:
+                    approx_budget -= 1
                 plan = self.plan(hyp, s, observed)
-                if plan is None or (plan == [] and not hyp.goal.is_goal(s.scene)):
+                if plan is None or (plan == [] and not hyp.is_goal(s.scene)):
                     events.emit("PLAN", "TEST", f"no plan under h{hyp.n} for goal '{getattr(hyp.goal, 'name', '?')}' -> test the doubts", budget_used=budget.used())
                     counterexamples = (counterexamples + [f"Your model verified but the planner found NO action sequence from the current board to your goal '{getattr(hyp.goal, 'name', '?')}' using candidate_actions: the goal, the candidate actions or the dynamics are incomplete."])[-4:]
                     hyp.verdict = None
@@ -197,9 +220,10 @@ class HypothesisPolicy:
                     rejected.append(f"win='{str(hyp.doc.get('win', ''))[:80]}'")
                     usable = False
                 else:
-                    events.emit("PLAN", "EXECUTE", f"plan of {len(plan)} under h{hyp.n}: {[a.label() for a in plan[:10]]}", budget_used=budget.used())
+                    mode = "exact" if exact else f"approximate (approx {hyp.verdict.approx:.2f}): first 2 steps, then re-think"
+                    events.emit("PLAN", "EXECUTE", f"plan of {len(plan)} under h{hyp.n} [{mode}]: {[a.label() for a in plan[:10]]}", budget_used=budget.used())
                     plans_executed += 1
-                    for a in plan:
+                    for a in (plan if exact else plan[:2]):
                         pred = None
                         try:
                             pred = hyp.model.predict(s.scene, a)
@@ -249,7 +273,9 @@ class HypothesisPolicy:
                 events.emit("VERIFY", "PLAN", f"h{hyp.n} verified (acc {hyp.verdict.accuracy:.2f} on {hyp.verdict.n}) -> plan", budget_used=budget.used())
                 idle_rounds = idle_rounds + 1 if budget.used() == used_before else 0
                 continue
-            tests = [a for a in hyp.call("test_actions", s.scene, []) if isinstance(a, Action)][:3]
+            tests = [a for a in hyp.call("test_actions", s.scene, []) if isinstance(a, Action)][:2]
+            attempts = [a for a in hyp.call("attempt_actions", s.scene, []) if isinstance(a, Action) and a not in tests][:1]
+            tests = tests + attempts          # learn AND try: one move toward the hypothesised win per round
             if not tests:
                 tests = [a for a in hyp.call("candidate_actions", s.scene, []) if isinstance(a, Action)][:2]
             if not tests:
@@ -258,7 +284,7 @@ class HypothesisPolicy:
             if not tests:
                 events.emit("TEST", "HYPOTHESISE", f"h{hyp.n} names no test and nothing is left to probe: revise", budget_used=budget.used())
                 continue
-            events.emit("VERIFY", "TEST", f"h{hyp.n} not verified (acc {hyp.verdict.accuracy:.2f}, n {hyp.verdict.n}) -> tests {[a.label() for a in tests]}", budget_used=budget.used())
+            events.emit("VERIFY", "TEST", f"h{hyp.n} not verified (acc {hyp.verdict.accuracy:.2f}, n {hyp.verdict.n}) -> tests+attempt {[a.label() for a in tests]}", budget_used=budget.used())
             for a in tests:
                 t = act(a, "test")
                 if t is None:
