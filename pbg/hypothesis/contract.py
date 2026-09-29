@@ -83,6 +83,8 @@ def change_window(t: Transition, pad: int = 2) -> Optional[tuple[int, int, int, 
 
 def transition_text(t: Transition, ignore_boxes: list = (), max_rows: int = 22, max_cols: int = 40) -> str:
     """What one action did: the action (with click position), the changed pixels, and before/after windows of the change."""
+    if t.action.type == "RESET" or t.before_frame is None or t.after_frame is None:
+        return f"[{t.id}] RESET -> the level restarted from its initial board (after a GAME_OVER or a deliberate reset)"
     b = np.asarray(t.before_frame.grid); a = np.asarray(t.after_frame.grid)
     mask = a != b
     for (r0, c0, r1, c1) in ignore_boxes:
