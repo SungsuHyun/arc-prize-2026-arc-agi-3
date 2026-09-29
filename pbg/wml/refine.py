@@ -183,7 +183,10 @@ class WorldModelLab:
             if self.llm.exhausted():
                 break
             try:
-                reply = self.llm.chat(msgs, purpose="world_model", use_cache=(k == 0), override={"temperature": 0.6 + 0.1 * k} if k else None)
+                # candidate k>0: higher temperature; models without sampling parameters get a prompt nudge instead
+                kmsgs = msgs if k == 0 else msgs + [{"role": "user", "content": f"Alternative {k}: decompose the mechanics differently from the most obvious reading "
+                                                    f"(different roles or rule granularity); still return ONE complete ```python block."}]
+                reply = self.llm.chat(kmsgs, purpose="world_model", use_cache=(k == 0), override={"temperature": 0.6 + 0.1 * k} if k else None)
                 self.llm_calls += 1
             except Exception as e:
                 self.log(f"llm world_model failed: {e!r}")

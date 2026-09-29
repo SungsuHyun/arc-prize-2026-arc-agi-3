@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import re
 import time
 import urllib.error
@@ -19,9 +20,28 @@ CODE_RE = re.compile(r"```(?:python)?\s*\n(.*?)```", re.S)
 JSON_RE = re.compile(r"```json\s*\n(.*?)```", re.S)
 
 
+def _dotenv() -> dict:
+    """KEY=value pairs of the repository's .env (never printed, never committed)."""
+    root = Path(__file__).resolve().parents[2]
+    out = {}
+    p = root / ".env"
+    if p.exists():
+        for line in p.read_text().splitlines():
+            if "=" in line and not line.strip().startswith("#"):
+                k, v = line.split("=", 1); out[k.strip()] = v.strip().strip('"').strip("'")
+    return out
+
+
 def load_llm_config(path: Optional[Path] = None) -> dict:
-    p = path or Path(__file__).resolve().parent / "llm.yaml"
-    return yaml.safe_load(p.read_text()) if p.exists() else {}
+    """llm.yaml by default; PBG_LLM_CONFIG selects another profile (e.g. pbg/llm/llm-opus.yaml). `api_key: ${VAR}` is
+    expanded from the environment or the repository .env."""
+    p = path or Path(os.environ.get("PBG_LLM_CONFIG") or Path(__file__).resolve().parent / "llm.yaml")
+    cfg = yaml.safe_load(p.read_text()) if p.exists() else {}
+    key = str(cfg.get("api_key", ""))
+    if key.startswith("${") and key.endswith("}"):
+        var = key[2:-1]
+        cfg["api_key"] = os.environ.get(var) or _dotenv().get(var) or ""
+    return cfg
 
 
 def extract_code(text: str) -> Optional[str]:
@@ -68,6 +88,9 @@ class LLMGateway:
         tier = self.tier(purpose)
         if override:
             tier.update(override)
+        if tier.get("no_sampling"):
+            # hosted models that reject sampling parameters: candidates differ by prompt, not by temperature
+            tier.pop("temperature", None); tier.pop("top_p", None)
         msgs = [dict(m) for m in messages]
         if image is not None:
             b64 = base64.b64encode(image).decode()
