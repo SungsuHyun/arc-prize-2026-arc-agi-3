@@ -45,6 +45,7 @@ class BoardHypotheses:
         self.rides: dict[int, int] = {}               # mover -> bar it stands on
         self.marker_of: dict[int, int] = {}           # marker -> mover with the same colour
         self.tested: dict[int, str] = {}              # button -> "confirmed" | "refuted"
+        self.controls_other: dict[int, bool] = {}     # button -> its test click changed objects other than itself
         # ids can be re-assigned when the level is re-parsed after a test click (a panel turned out to be a bar):
         # objects are recognised by colour + bbox, which the same frame keeps
         self._key2id = {(o.color, tuple(o.bbox)): o.id for o in scene.objects}
@@ -98,11 +99,23 @@ class BoardHypotheses:
 
     # ── what to test ──
     def test_actions(self) -> list[Action]:
-        """One click per button candidate, best-supported first; a candidate with a controlled bar in sight comes first."""
+        """One click per button CLASS first (23 identical pieces are one hypothesis, not 23); the other members of a class
+        are tested only after its representative proved to control OTHER objects (arrow buttons each move their own bar),
+        never when clicking it changed the clicked object itself (pieces, pattern cells)."""
         by = {o.id: o for o in self.scene.objects}
-        cands = [(h.p + (0.1 if self.controls.get(i) else 0.0), i) for i, h in self.roles.items() if h.role == "button" and i not in self.tested]
+        cands = [(h.p + (0.1 if self.controls.get(i) else 0.0), i) for i, h in self.roles.items() if h.role == "button" and i not in self.tested and i in by]
         cands.sort(reverse=True)
-        return [Action.click(*by[i].center) for _, i in cands if i in by]
+        out = []; seen_class: set = set()
+        for _, i in cands:
+            cls = (by[i].color, by[i].shape_sig)
+            if cls in seen_class:
+                continue
+            tested_same = [j for j in self.tested if j in by and (by[j].color, by[j].shape_sig) == cls]
+            if tested_same and not any(self.controls_other.get(j) for j in tested_same):
+                continue          # the class representative changed itself or nothing: no per-object testing
+            seen_class.add(cls) if not tested_same else None
+            out.append(Action.click(*by[i].center))
+        return out
 
     def fallback_actions(self) -> list[Action]:
         """Only when no trigger hypothesis held: the other object classes, one each, decorations last."""
@@ -142,6 +155,7 @@ class BoardHypotheses:
                 expected = set(self.controls.get(hid, [])) | {m for m, b in self.rides.items() if b in self.controls.get(hid, [])}
                 agree = bool(expected & changed)
                 self.tested[hid] = "confirmed"; h.confirmed = True; h.p = 1.0
+                self.controls_other[hid] = bool(changed - {hid})
                 if not agree and expected:
                     # it is a trigger, but of other objects than the geometry suggested: keep the observed targets
                     self.controls[hid] = [i for i in changed if self.roles.get(i, RoleHyp("", 0, "")).role == "bar"]
