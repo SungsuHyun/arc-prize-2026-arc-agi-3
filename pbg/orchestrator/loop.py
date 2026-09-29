@@ -273,7 +273,8 @@ class Orchestrator:
                             continue
                 if plan is None:
                     no_plan_rounds += 1
-                    if H and H[0].verified:
+                    if H and H[0].verified and not getattr(H[0].model, "level_scoped", False):
+                        # (a verified permutation table only knows the positions it saw: no plan there says nothing about the goal)
                         G = goal_inf.demote(G, 0)
                         reason = "no plan under verified model -> goal demoted"
                     elif no_plan_rounds % 2 == 0:
@@ -305,10 +306,10 @@ class Orchestrator:
                     events.emit("EXECUTE", "PLAN", f"level up after {r.executed} actions", transition_id=r.t.id if r.t else None, budget_used=budget.used())
                     won = planner.last_info.goal if planner.last_info else None
                     knowledge.record_win(last_level, won, s.step_idx - level_start_step)
-                    used_h = planner.last_info.hypothesis if planner.last_info else None
-                    if used_h is not None and isinstance(used_h.model, RuleModel):
-                        n_rules = knowledge.record_rules(used_h.model)
-                        self.log(f"knowledge: {n_rules} class-level click rule(s) harvested from {used_h.name}")
+                    # harvest class-level rules from every prior-composed model that verified on this level (the plan may
+                    # have used an LLM model whose rules carry no class description)
+                    n_rules = sum(knowledge.record_rules(h.model) for h in H if h.origin == "induced" and isinstance(h.model, RuleModel) and h.score / max(h.coverage, 1e-9) >= 0.9)
+                    self.log(f"knowledge: {n_rules} class-level click rule(s) harvested; asset now {list(knowledge.click_rules)}")
                     if won is not None:
                         self.memory.record_usage(won.template, used=True, verified=True)
                     G = goal_inf.refine(s.transitions, G, self.memory.priors("goals"), s.level, s.scene)

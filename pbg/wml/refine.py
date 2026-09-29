@@ -72,9 +72,11 @@ class WorldModelLab:
         # keep the hypothesis set diverse: the best prior-composed model stays even when LLM candidates outscore it
         # (a high-scoring LLM model can still be useless for planning; the composed one rarely is)
         top = H[:self.N]
-        best_induced = next((h for h in H if h.origin == "induced"), None)
-        if best_induced is not None and best_induced not in top:
-            top = top[:self.N - 1] + [best_induced]
+        # every prior-composed variant stays (a permutation table verifies at 1.0 but cannot reach unseen positions; the
+        # uniform-shift variant scores lower because it says UNKNOWN where it has no rule, yet it is the one that plans)
+        induced = [h for h in H if h.origin == "induced" and h not in top]
+        if induced:
+            top = top[:max(1, self.N - len(induced))] + induced
         return top
 
     # ── background generation ──
