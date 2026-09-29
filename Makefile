@@ -23,7 +23,7 @@ SITE_PORT       ?= 8080
 EVAL_PORT       ?= 8090
 STEPS           ?= 200
 
-.PHONY: help setup pbg pbg-replay pbg-test pbg-lint pbg-import-logs pbg-human-log pbg-metrics pbg-postmortem arcnav rulebook rulebook-bench rulebook-notebook rulebook-submit play-local pull-sample notebook submit status kaggle-log wheels llm-venv smoke-local verify-local serve exp-new exp-run exp-summary bench dashboard site site-publish eval-site eval-site-install eval-site-uninstall clean _check-kaggle
+.PHONY: help setup pbg pbg-replay pbg-test pbg-lint pbg-import-logs pbg-human-log pbg-metrics pbg-postmortem pbg-dataset arcnav rulebook rulebook-bench rulebook-notebook rulebook-submit play-local pull-sample notebook submit status kaggle-log wheels llm-venv smoke-local verify-local serve exp-new exp-run exp-summary bench dashboard site site-publish eval-site eval-site-install eval-site-uninstall clean _check-kaggle
 
 _check-kaggle:
 	@if [ ! -s .kaggle/access_token ]; then \
@@ -88,6 +88,9 @@ pbg-human-log: ## Record a human play log in the terminal: make pbg-human-log GA
 
 pbg-postmortem: ## Per-level post-mortem of one game in a run: make pbg-postmortem RUN=<run id> GAME=ls20
 	$(VENV_PY) -m pbg.harness.postmortem $(RUN) $(GAME)
+
+pbg-dataset: ## Build the per-level initial-map + object-reaction dataset (set_level over every level): make pbg-dataset [GAME=r11l,vc33] (default: all)
+	$(VENV_PY) -m pbg.tools.build_reaction_dataset $(if $(GAME),--games $(GAME),--all) --out experiments/pbg/datasets/reactions
 
 pbg-metrics: ## Metrics + bottleneck attribution of a pbg run JSON: make pbg-metrics RUN=experiments/pbg/results/run-....json
 	$(VENV_PY) -m pbg.harness.metrics $(RUN)
