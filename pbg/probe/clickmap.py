@@ -29,8 +29,8 @@ def click_key(scene: Scene, row: int, col: int) -> str:
 def object_key(o) -> str:
     """Class of an object for the click map: colour + shape, but a solid rectangle is keyed by colour + thickness so a
     bar whose length changes stays one class."""
-    if o.mask is not None and o.mask.all() and min(o.height, o.width) >= 2 and max(o.height, o.width) > min(o.height, o.width):
-        return f"c{o.color}:bar{min(o.height, o.width)}"
+    if o.mask is not None and min(o.height, o.width) >= 2 and float(o.mask.mean()) >= 0.75:
+        return f"c{o.color}:rect"
     return f"c{o.color}:{o.shape_sig[:8]}"
 
 

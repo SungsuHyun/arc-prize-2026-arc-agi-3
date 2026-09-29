@@ -4,6 +4,8 @@ score = exactly predicted transitions / all transitions; coverage = transitions 
 Per-rule confidence: 1 - violations attributed to the rule / times the rule applied."""
 from __future__ import annotations
 
+from collections import Counter
+
 import hashlib
 from dataclasses import dataclass, field
 from typing import Iterable, Optional
@@ -86,6 +88,16 @@ def evaluate(model: WorldModel, log: Iterable[Transition], *, skip_reset: bool =
                       {k: (v[0], v[1]) for k, v in per_class.items()}, change_score=(ch_ok / ch_total_all) if ch_total_all else 1.0)
 
 
+def _is_rect(o, scene):
+    from .effects import _is_rect as f
+    return f(o, scene)
+
+
+def _effective_bbox(o, scene):
+    from .effects import _effective_bbox as f
+    return f(o, scene)
+
+
 def _equal(pred, obs, ignore_ui: bool, t: Transition, model=None) -> bool:
     """Object-level equality; objects in ui_strip regions and objects the model calls 'indicator' are compared by
     existence only (display elements may recolour/tick without being part of the mechanics)."""
@@ -111,8 +123,28 @@ def _equal(pred, obs, ignore_ui: bool, t: Transition, model=None) -> bool:
 
     def strict(o, scene):
         return not in_band(o) and o.id not in loose_ids and o.area > 2 and not covered(o, scene)   # 1-2 px marks/ticks are display elements
-    a = sorted(o.identity() for o in pred.objects if strict(o, pred)); b = sorted(o.identity() for o in obs.objects if strict(o, obs))
-    return a == b
+
+    def key(o, scene):
+        # a bar/panel is compared by colour and extent (extended under the caps drawn over its ends): a button drawn
+        # on top of it, or a piece cut out of it, is not a different bar
+        if _is_rect(o, scene) and max(o.height, o.width) >= 8:
+            return (int(o.color), tuple(_effective_bbox(o, scene)), "bar")
+        return o.identity()
+    pa = [o for o in pred.objects if strict(o, pred)]; ob_ = [o for o in obs.objects if strict(o, obs)]
+    a = sorted(key(o, pred) for o in pa); b = sorted(key(o, obs) for o in ob_)
+    if a == b:
+        return True
+    ca, cb = Counter(a), Counter(b)
+    only_a = list((ca - cb).elements()); only_b = list((cb - ca).elements())
+    ka = {key(o, pred): o for o in pa}; kb = {key(o, obs): o for o in ob_}
+
+    def hidden(o, other):        # under an object of the OTHER scene (a bar drawn over a button)
+        r0, c0, r1, c1 = o.bbox
+        return any(p.area > o.area and p.color != o.color and p.bbox[0] <= r0 and p.bbox[1] <= c0 and r1 <= p.bbox[2] and c1 <= p.bbox[3]
+                   for p in other.objects)
+    only_a = [k for k in only_a if not (k in ka and hidden(ka[k], obs))]
+    only_b = [k for k in only_b if not (k in kb and hidden(kb[k], pred))]
+    return not only_a and not only_b
 
 
 def promotable(res: EvalResult, min_transitions: int = 20, min_per_class: int = 3) -> bool:

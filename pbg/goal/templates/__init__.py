@@ -567,8 +567,8 @@ def t_align_color(scene: Scene, ctx: dict) -> list[GoalInstance]:
     out = []
     for c in sorted(colors):
         units = _color_units(scene, c)
-        if not 2 <= len(units) <= 3 or all((u[2] - u[0]) * (u[3] - u[1]) > 64 for u in units):
-            continue
+        if not 2 <= len(units) <= 3 or any((u[2] - u[0]) * (u[3] - u[1]) > 100 for u in units):
+            continue          # a big unit is a bar or panel, not a marker
         owners = [o for o in scene.objects if o.region not in strips and c in o.colors]
         if len(owners) < 2:
             continue

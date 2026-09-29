@@ -81,6 +81,9 @@ class WorldModelLab:
         induced = [h for h in H if h.origin == "induced" and h not in top]
         if induced:
             top = top[:max(1, self.N - len(induced))] + induced
+        # the working set is ordered usable-first: a stale memory model with a high score but no change accuracy must not
+        # sit at H[0] and block the gate while a usable composed model is available
+        top.sort(key=lambda h: (h.usable(), h.sort_key()), reverse=True)
         return top
 
     # ── background generation ──
