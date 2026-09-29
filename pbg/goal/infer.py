@@ -14,12 +14,15 @@ class GoalInference:
         self.memory, self.llm, self.sandbox = memory, llm, sandbox
         self.log = log or (lambda *a, **k: None)
         self.demoted: dict[str, float] = {}
+        self.knowledge = None                     # LevelKnowledge of the game (set by the orchestrator)
         self.llm_calls = 0
         self._proposals: dict[int, int] = {}      # level -> LLM goal proposals made (procedural goals the templates cannot express)
 
     def refine(self, log: list[Transition], current: list[GoalInstance], priors: Optional[dict], level: int, scene: Scene,
                *, roles_fn=None, ctx: Optional[dict] = None, model=None) -> list[GoalInstance]:
         usage = (priors or {}).get("usage_stats") if priors else None
+        if self.knowledge is not None:
+            usage = self.knowledge.goal_stats(usage)      # what won earlier levels of THIS game comes first
         s = roles_fn(scene) if roles_fn else scene
         fresh = instantiate_all(s, ctx, usage)
         by_name = {g.name: g for g in fresh}

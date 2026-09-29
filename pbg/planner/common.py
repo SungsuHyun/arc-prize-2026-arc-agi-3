@@ -9,11 +9,13 @@ from ..core.types import Action, Scene
 PASSIVE_ROLES = ("wall", "indicator", "decoration", "unknown", None)
 
 
-def click_candidates(scene: Scene, extra: list[tuple[int, int]] = (), limit: int = 40) -> list[Action]:
+def click_candidates(scene: Scene, extra: list[tuple[int, int]] = (), limit: int = 40, click_map=None) -> list[Action]:
     """Click coordinates: object centres (objects with an active role first) + region centres + previously responsive
-    coordinates (spec §10)."""
+    coordinates (spec §10). With a click response map that has evidence, only classes known to react or never tried."""
     seen: set[tuple[int, int]] = set(); out: list[Action] = []
     strips = {r.id for r in scene.regions if r.kind_hint == "ui_strip"}
+    if click_map is not None and click_map.total() >= 3:
+        return click_map.rank(scene, include_inert=False, limit=limit, extra=extra)
     triggers = [o for o in scene.objects if o.role and "trigger" in o.role]
     if triggers:
         # the model knows which objects react to clicks: plan over those (plus known responsive coordinates) only
@@ -42,7 +44,7 @@ def click_candidates(scene: Scene, extra: list[tuple[int, int]] = (), limit: int
 
 
 def action_set(scene: Scene, available: list[Action], *, semantics: Optional[dict] = None, responsive: list[tuple[int, int]] = (),
-               max_clicks: int = 40) -> list[Action]:
+               max_clicks: int = 40, click_map=None) -> list[Action]:
     noop = set()
     if semantics:
         noop = {k for k, v in semantics.items() if not k.startswith("_") and isinstance(v, dict) and v.get("class") == "NOOP" and v.get("n", 0) >= 2}
@@ -51,7 +53,7 @@ def action_set(scene: Scene, available: list[Action], *, semantics: Optional[dic
         if a.type == "BUTTON" and a.key not in noop:
             out.append(a)
         elif a.type == "CLICK":
-            out.extend(click_candidates(scene, responsive, max_clicks))
+            out.extend(click_candidates(scene, responsive, max_clicks, click_map))
     return out
 
 

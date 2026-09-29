@@ -126,7 +126,7 @@ class Probe:
         return res
 
     def run_walk(self, budget_cap: int, *, max_per_dir: int = 12, agent_ids: set = frozenset(), dirs: Optional[dict] = None,
-                 bumped: Optional[set] = None, clicked: Optional[set] = None) -> ProbeResult:
+                 bumped: Optional[set] = None, clicked: Optional[set] = None, click_map=None) -> ProbeResult:
         """Re-exploration after STUCK / no plan (spec §7 budget row 'reprobe'): first bump every object adjacent to the agent
         once (passability may have changed: doors, keys), then press each move button repeatedly until the board stops
         changing, then untried clicks. Reveals walls, reach and side effects."""
@@ -171,22 +171,32 @@ class Probe:
                 if t is None or t.diff.is_noop or t.status_change:
                     break
         if self._has_click():
-            # objects never clicked on this level first (a submit button after the pieces are cleared), then the rest
             scene = self.s.scene
-            def ident(a: Action):
-                for o in scene.objects:
-                    r0, c0, r1, c1 = o.bbox
-                    if r0 <= a.row < r1 and c0 <= a.col < c1:
-                        return (o.color, o.shape_sig)
-                return ("bg", a.row // 8, a.col // 8)
-            targets = self._click_targets(scene, 64)
-            fresh = [a for a in targets if clicked is None or ident(a) not in clicked]
-            rest = [a for a in targets if a not in fresh]
-            for a in (fresh + rest)[:max(0, budget_cap - res.actions_used)]:
-                if clicked is not None:
-                    clicked.add(ident(a))
-                if act(a) is None:
-                    break
+            if click_map is not None:
+                # click response map: untried classes, then classes known to react, then untried background; classes
+                # known to be inert at most once per level. The list is NOT padded to the cap: nothing left = stop.
+                targets = click_map.rank(scene, level=level, include_inert=True, limit=64)
+                for a in targets[:max(0, budget_cap - res.actions_used)]:
+                    t = act(a)
+                    if t is None:
+                        break
+                    click_map.add(t)
+            else:
+                # objects never clicked on this level first (a submit button after the pieces are cleared), then the rest
+                def ident(a: Action):
+                    for o in scene.objects:
+                        r0, c0, r1, c1 = o.bbox
+                        if r0 <= a.row < r1 and c0 <= a.col < c1:
+                            return (o.color, o.shape_sig)
+                    return ("bg", a.row // 8, a.col // 8)
+                targets = self._click_targets(scene, 64)
+                fresh = [a for a in targets if clicked is None or ident(a) not in clicked]
+                rest = [a for a in targets if a not in fresh]
+                for a in (fresh + rest)[:max(0, budget_cap - res.actions_used)]:
+                    if clicked is not None:
+                        clicked.add(ident(a))
+                    if act(a) is None:
+                        break
         res.steps_done.append("walk")
         res.semantics = classify_actions(res.transitions)
         return res

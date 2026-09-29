@@ -22,6 +22,7 @@ from ..probe.semantics import ActionSemantics, classify_actions
 from ..wml.evaluate import evaluate
 from ..wml.refine import WorldModelLab
 from .session import Session
+from .knowledge import LevelKnowledge
 from .transfer import level_novelty, structure_vector, transfer_hypotheses
 
 
@@ -70,7 +71,13 @@ class Orchestrator:
         mem = self.memory.load(game_id)
         wml = WorldModelLab(llm=self.llm if self.use_llm else None, memory=self.memory, log=self.log)
         goal_inf = GoalInference(self.memory, self.llm if self.use_llm else None, wml.sandbox, log=self.log)
+        # knowledge asset of this game: click response map, goal template wins/fails, demoted goals; accumulates across
+        # levels (and runs) so nothing a level taught is re-learned with actions
+        knowledge = LevelKnowledge.load(self.memory.knowledge_path(game_id))
+        goal_inf.knowledge = knowledge; goal_inf.demoted.update(knowledge.demoted)
+        self.log(f"knowledge: {knowledge.summary()}")
         planner = Planner(log=self.log, **self.planner_kwargs)
+        planner.click_map = knowledge.clicks
         probe = Probe(s)
         scene = s.start()
         env.calibrate_click()
@@ -89,7 +96,9 @@ class Orchestrator:
         last_refine_n = -1; resets_without_progress = 0; game_overs = 0
         tried_experiments: set = set(); bumped: set = set(); clicked: set = set(); gated_rounds = 0
         idle_iters = 0; last_used = -1
+        walk_dry = 0
         while not s.finished():
+            knowledge.clicks.extend(s.transitions[-8:])
             if budget.used() == last_used:
                 idle_iters += 1
                 if idle_iters >= 8 and state in ("PLAN", "HYPOTHESIZE") and not wml.job_running():
@@ -115,7 +124,8 @@ class Orchestrator:
                 self.memory.record_level_note(game_id, last_level, {"level": last_level, "actions_used": s.level_actions.get(last_level, 0),
                                                                      "novelty": novelty, "replaced_rules": [], "added_rules": []})
                 events.emit(state, "PLAN" if novelty == 0 else "PROBE", f"level {last_level} -> {s.level}, novelty {novelty}", budget_used=budget.used())
-                last_level = s.level; prev_level_scene = s.scene; level_start_step = s.step_idx
+                last_level = s.level; prev_level_scene = s.scene; level_start_step = s.step_idx; walk_dry = 0
+                knowledge.levels_seen.add(s.level); knowledge.demoted = dict(goal_inf.demoted); knowledge.save(self.memory.knowledge_path(game_id))
                 planner.stuck.reset(); no_plan_rounds = 0; reprobe_rounds = 0; resets_without_progress = 0; touched.clear(); clicked.clear()
                 if s.level > self.max_levels:
                     stop = "max_levels"; break
@@ -129,6 +139,8 @@ class Orchestrator:
                 kind = "initial" if not s.transitions else "reprobe"
                 if kind == "reprobe":
                     reprobe_rounds += 1
+                    if walk_dry >= 2:
+                        cap = 0     # the click map has nothing untried or responsive left: do not walk, wait/reset instead
                     if cap <= 0 and wml.job_running():
                         # nothing cheap left to try: wait for the pending LLM candidates rather than spend actions (spec §15)
                         events.emit(state, "HYPOTHESIZE", "reprobe budget exhausted, waiting for the llm job", budget_used=budget.used())
@@ -149,7 +161,7 @@ class Orchestrator:
                                 cap = budget.cap("reprobe", s.level)
                             events.emit(state, "HYPOTHESIZE", "reprobe budget exhausted -> RESET", budget_used=budget.used())
                             s.act(Action.reset(), "reprobe"); planner.stuck.reset(); resets_without_progress += 1
-                            budget.reset_level(s.level, "reprobe"); touched.clear(); state = "HYPOTHESIZE"; continue
+                            budget.reset_level(s.level, "reprobe"); touched.clear(); walk_dry = 0; state = "HYPOTHESIZE"; continue
                         stop = "UNRESOLVED"; events.emit(state, "END", f"no progress after {self.max_resets} resets", budget_used=budget.used()); break
                 if kind == "initial":
                     res = probe.run_initial(cap, do_reset_probe=False)
@@ -161,8 +173,10 @@ class Orchestrator:
                             for k, v in semantics.items() if k.startswith("ACTION") and isinstance(v, dict) and v.get("class") == "MOVE" and v.get("displacement")}
                     step = max([abs(v["displacement"][0]) + abs(v["displacement"][1]) for k, v in semantics.items() if k.startswith("ACTION") and isinstance(v, dict) and v.get("displacement")] or [1])
                     dirs = {k: (d[0] * step, d[1] * step) for k, d in dirs.items()}
-                    res = probe.run_walk(cap, agent_ids=agent_ids, dirs=dirs, bumped=bumped, clicked=clicked)
+                    res = probe.run_walk(cap, agent_ids=agent_ids, dirs=dirs, bumped=bumped, clicked=clicked, click_map=knowledge.clicks)
+                    walk_dry = walk_dry + 1 if res.actions_used == 0 else 0
                 semantics = classify_actions(s.transitions, semantics)
+                knowledge.clicks.extend(res.transitions); knowledge.save(self.memory.knowledge_path(game_id))
                 self.memory.save_semantics(game_id, semantics.to_json())
                 events.emit("PROBE", "HYPOTHESIZE", f"{kind} probe done: {res.actions_used} actions, steps {res.steps_done}", budget_used=budget.used())
                 state = "HYPOTHESIZE"; experiments_this_round = 0
@@ -196,7 +210,7 @@ class Orchestrator:
                 exp = None
                 model_ok = bool(H) and H[0].usable(self.min_plan_score)
                 if model_ok and not budget.low() and budget.allows("experiment", level=s.level) and experiments_this_round < 6:
-                    exp = wml.most_informative_action(H, s.scene, s.available_actions(), semantics=semantics, extra_clicks=planner.responsive,
+                    exp = wml.most_informative_action(H, s.scene, s.available_actions(), semantics=semantics, extra_clicks=planner.responsive, click_map=knowledge.clicks,
                                                       exclude=tried_experiments, state_key=_state_key(s.scene))   # never repeat an experiment from the same state
                 if exp is not None:
                     tried_experiments.add((_state_key(s.scene), exp.label()))
@@ -282,6 +296,10 @@ class Orchestrator:
                     events.emit("EXECUTE", "HYPOTHESIZE", f"explore plan done ({r.executed} actions)", budget_used=budget.used()); state = "HYPOTHESIZE"; continue
                 if r.kind == "PROGRESS":
                     events.emit("EXECUTE", "PLAN", f"level up after {r.executed} actions", transition_id=r.t.id if r.t else None, budget_used=budget.used())
+                    won = planner.last_info.goal if planner.last_info else None
+                    knowledge.record_win(last_level, won, s.step_idx - level_start_step)
+                    if won is not None:
+                        self.memory.record_usage(won.template, used=True, verified=True)
                     G = goal_inf.refine(s.transitions, G, self.memory.priors("goals"), s.level, s.scene)
                     state = "PLAN"; last_mismatch = None
                 elif r.kind == "MISMATCH":
@@ -302,6 +320,7 @@ class Orchestrator:
                             idx = next((i for i, g in enumerate(G) if g.name == reached.name), None)
                             if idx is not None:
                                 goal_inf.demote(G, idx, penalty=-0.6)
+                            knowledge.record_fail(reached)
                             events.emit("EXECUTE", "PLAN", f"plan exhausted ({r.executed} actions): goal {reached.name} reached without level-up -> demoted", budget_used=budget.used())
                             state = "PLAN"; continue
                     events.emit("EXECUTE", "PLAN", f"plan exhausted ({r.executed} actions)", budget_used=budget.used()); state = "PLAN"
@@ -322,6 +341,7 @@ class Orchestrator:
             stop = st.state if st.state in ("WIN", "GAME_OVER") else ("timeout" if s.timed_out() else "budget")
         events.emit(state, "END", stop, budget_used=budget.used())
         self.memory.save_semantics(game_id, semantics.to_json())
+        knowledge.clicks.extend(s.transitions[-8:]); knowledge.demoted = dict(goal_inf.demoted); knowledge.save(self.memory.knowledge_path(game_id))
         self.memory.save()
         return Result(game_id, st.state, st.level - 1 if st.state != "WIN" else (st.levels_total or st.level), st.levels_total, st.actions_used, budget.snapshot(),
                       wml.llm_calls, len(events.events), stop, dict(s.level_actions),

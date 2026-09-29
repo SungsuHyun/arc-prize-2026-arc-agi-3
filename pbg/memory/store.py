@@ -105,6 +105,9 @@ class Memory:
         for t in ts:
             self.append(t, game_id)
 
+    def knowledge_path(self, game_id: str) -> Path:
+        return self.semantic_dir(game_id) / "knowledge.json"
+
     def save_semantics(self, game_id: str, semantics: dict) -> None:
         gm = self.load(game_id); gm.action_semantics = dict(semantics)
         (self.semantic_dir(game_id) / "action_semantics.json").write_text(json.dumps(gm.action_semantics, indent=1, default=str))

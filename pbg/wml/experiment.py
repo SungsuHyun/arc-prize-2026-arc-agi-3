@@ -20,11 +20,13 @@ def entropy_of_partition(preds: list, weights: list[float]) -> float:
     return -sum(v / tot * math.log(v / tot, 2) for v in groups.values())
 
 
-def candidate_actions(scene: Scene, available: list[Action], semantics=None, extra_clicks: list[tuple[int, int]] = ()) -> list[Action]:
+def candidate_actions(scene: Scene, available: list[Action], semantics=None, extra_clicks: list[tuple[int, int]] = (), click_map=None) -> list[Action]:
     out: list[Action] = []
     for a in available:
         if a.type == "BUTTON":
             out.append(a)
+        elif a.type == "CLICK" and click_map is not None and click_map.total() >= 3:
+            out.extend(click_map.rank(scene, include_inert=False, limit=40, extra=extra_clicks))
         elif a.type == "CLICK":
             seen = set()
             strips = {r.id for r in scene.regions if r.kind_hint == "ui_strip"}
@@ -44,13 +46,13 @@ def candidate_actions(scene: Scene, available: list[Action], semantics=None, ext
 
 
 def most_informative_action(H: list[Hypothesis], scene: Scene, available: list[Action], *, tau: float = 0.3, semantics=None,
-                            extra_clicks=(), exclude: Optional[set] = None, state_key=None) -> Optional[Action]:
+                            extra_clicks=(), exclude: Optional[set] = None, state_key=None, click_map=None) -> Optional[Action]:
     """`exclude` = {(frame_hash, action label)} already run: an experiment is never repeated from the same state."""
     if len(H) < 2:
         return None
     best, best_gain = None, 0.0
     weights = [max(h.score, 0.05) for h in H]
-    for a in candidate_actions(scene, available, semantics, extra_clicks):
+    for a in candidate_actions(scene, available, semantics, extra_clicks, click_map):
         if exclude and ((state_key if state_key is not None else scene.frame_hash), a.label()) in exclude:
             continue
         preds = []

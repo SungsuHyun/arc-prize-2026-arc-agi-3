@@ -43,12 +43,13 @@ class Planner:
         self.stuck = StuckDetector()
         self.responsive: list[tuple[int, int]] = []
         self.last_info: Optional[PlanInfo] = None
+        self.click_map = None             # click response map (orchestrator knowledge): restricts click candidates
         self.observed: dict = {}          # (state_key, action label) -> observed after scene (ground truth for planning)
         self.observed_seen: list = []
 
     def _actions_fn(self, available: list[Action], semantics):
         def fn(scene: Scene) -> list[Action]:
-            return action_set(scene, available, semantics=semantics, responsive=self.responsive)
+            return action_set(scene, available, semantics=semantics, responsive=self.responsive, click_map=self.click_map)
         return fn
 
     def _abstract(self, scene: Scene, model, goal) -> Optional[list[Action]]:
