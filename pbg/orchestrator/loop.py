@@ -97,13 +97,28 @@ class Orchestrator:
         tried_experiments: set = set(); bumped: set = set(); clicked: set = set(); gated_rounds = 0
         idle_iters = 0; last_used = -1
         walk_dry = 0; last_action = None; fresh_level = False; llm_waits_this_level = 0; level_note = ""
+        forced_tried: set = set(); gd_last = ""; gd_repeat = 0
         while not s.finished():
             knowledge.clicks.extend(s.transitions[-8:])
             if budget.used() == last_used:
                 idle_iters += 1
-                if idle_iters >= 8 and state in ("PLAN", "HYPOTHESIZE") and not wml.job_running():
+                if wml.job_running() and idle_iters >= 4:
+                    # an LLM job is thinking in the background: wait on it instead of busy-spinning the planner
+                    # (a no-plan state used to re-run planner.search ~30x/second for the whole ~80 s job -> 15k idle loops)
+                    wml.wait_job(5.0); idle_iters = 0
+                elif idle_iters >= 8 and state in ("PLAN", "HYPOTHESIZE"):
                     events.emit(state, "PROBE", "no action for 8 loop iterations -> walk probe (liveness)", budget_used=budget.used())
                     state = "PROBE"; idle_iters = 0
+                if idle_iters >= 60 and not wml.job_running():
+                    # hard anti-spin governor: probing bounced and no plan is forthcoming. Take one forced exploratory
+                    # action to generate new evidence; if every action class is exhausted, end the level rather than
+                    # spin the CPU (and starve the shared LLM) for the rest of the budget.
+                    a = _forced_explore(knowledge, s, forced_tried)
+                    if a is not None:
+                        t_ = s.act(a, "reprobe")
+                        events.emit(state, "HYPOTHESIZE", f"anti-spin: forced exploratory {a.label()}", transition_id=t_.id if t_ else None, budget_used=budget.used())
+                        idle_iters = 0; last_used = budget.used(); state = "HYPOTHESIZE"; experiments_this_round = 0; continue
+                    stop = "stuck (no untried action; ending to free the budget)"; break
             else:
                 idle_iters = 0; last_used = budget.used()
             if s.env.status().state == "GAME_OVER":
@@ -127,7 +142,7 @@ class Orchestrator:
                 fresh_level = novelty > 0; knowledge.hyp_triggers = set(); knowledge.hyp_inert = set(); knowledge.clicks.skip_untried = set(); llm_waits_this_level = 0
                 last_level = s.level; prev_level_scene = s.scene; level_start_step = s.step_idx; walk_dry = 0
                 knowledge.levels_seen.add(s.level); knowledge.demoted = dict(goal_inf.demoted); knowledge.save(self.memory.knowledge_path(game_id))
-                planner.stuck.reset(); no_plan_rounds = 0; reprobe_rounds = 0; resets_without_progress = 0; touched.clear(); clicked.clear()
+                planner.stuck.reset(); no_plan_rounds = 0; reprobe_rounds = 0; resets_without_progress = 0; touched.clear(); clicked.clear(); forced_tried.clear(); gd_last = ""; gd_repeat = 0
                 if s.level > self.max_levels:
                     stop = "max_levels"; break
                 if novelty == 0 and H:
@@ -270,11 +285,17 @@ class Orchestrator:
                         # whose predicted outcome raises the top goal's progress) -- idling on the LLM is the last resort
                         why = "walk probe" if _walk_useful(knowledge, s) else "goal-directed step"
                         events.emit("PLAN", "PROBE", f"model score {H[0].score:.2f}/change {H[0].change_score:.2f} below gate -> {why}", budget_used=budget.used()); state = "PROBE"; continue
-                    a = _goal_directed_action(knowledge, s, H, G, last_action) if H else None
+                    # anti-repeat: after the same click 3x without a plan emerging, forbid it and pick another; if the
+                    # ranked candidates are exhausted, fall back to a forced untried action (r11l hammered one click 33x)
+                    avoid = frozenset({gd_last}) if gd_repeat >= 3 else frozenset()
+                    a = _goal_directed_action(knowledge, s, H, G, last_action, avoid=avoid) if H else None
+                    if a is not None and a.label() == gd_last and gd_repeat >= 3:
+                        a = _forced_explore(knowledge, s, forced_tried) or a
                     if a is not None:
                         t_ = s.act(a, "reprobe")
                         if t_ is not None:
-                            last_action = a
+                            gd_repeat = gd_repeat + 1 if a.label() == gd_last else 0
+                            gd_last = a.label(); last_action = a
                             events.emit("PLAN", "HYPOTHESIZE", f"below gate, reprobe spent -> goal-directed step {a.label()}", transition_id=t_.id, budget_used=budget.used())
                             semantics = classify_actions(s.transitions, semantics); knowledge.clicks.extend(s.transitions[-3:])
                             state = "HYPOTHESIZE"; experiments_this_round = 0; continue
@@ -474,14 +495,38 @@ def _walk_useful(knowledge, s) -> bool:
     return False
 
 
-def _goal_directed_action(knowledge, s, H, G, last_action):
+def _forced_explore(knowledge, s, tried: set):
+    """Anti-spin last resort: one untried action to break a no-plan loop and generate fresh evidence. Untried click
+    classes first (ranked, most promising), then any simple/button action not yet forced this level. None when every
+    action class has been exhausted -> the caller ends the level rather than spinning the CPU."""
+    from ..probe.clickmap import click_key
+    if any(a.type == "CLICK" for a in s.available_actions()):
+        for a in knowledge.clicks.rank(s.scene, level=s.level, include_inert=True, limit=64):
+            if a.type != "CLICK":
+                continue
+            key = ("C", click_key(s.scene, a.row, a.col))
+            if key in tried:
+                continue
+            if knowledge.clicks.status(click_key(s.scene, a.row, a.col)) == "untried":
+                tried.add(key); return a
+    for a in s.available_actions():
+        if a.type != "CLICK":
+            key = ("B", a.id)
+            if key not in tried:
+                tried.add(key); return a
+    return None
+
+
+def _goal_directed_action(knowledge, s, H, G, last_action, avoid: frozenset = frozenset()):
     """The responsive action (click map) whose predicted next state has the highest top-goal progress; unknown
-    outcomes count as informative (progress 0.5); the inverse of the last action (same objects moved back) is skipped."""
+    outcomes count as informative (progress 0.5); the inverse of the last action (same objects moved back) is skipped.
+    `avoid` holds action labels to skip -- used to stop hammering the same click when it is not making progress."""
     from ..probe.clickmap import click_key
     if not G:
         return None
     goal = G[0]; model = H[0].model
     cands = [a for a in s.available_actions() if a.type == "BUTTON"] + knowledge.clicks.rank(s.scene, level=s.level, include_inert=False, limit=16)
+    cands = [a for a in cands if a.label() not in avoid] or cands
     if not cands:
         return None
     scored = []

@@ -337,6 +337,37 @@ def move_selected_on_click(key: str = "selected") -> Effect:
     return effect
 
 
+def step_toward_click(mover_role: str, blockers: tuple[str, ...] = ("wall", "hazard"), step: int = 1, diagonal: bool = False) -> Effect:
+    """Point-select navigation: clicking a cell (r, c) moves each `mover_role` object ONE cell toward (r, c). With
+    `diagonal` it steps by sign on both axes; otherwise it steps along the axis of greater distance (4-connected). A
+    step that would overlap a `blockers` role or leave the region is cancelled (the piece stays). Models games where
+    you click a destination and the piece walks there one step per click (r11l-style)."""
+    def effect(scene: Scene, action: Action) -> Optional[Scene]:
+        if action.type != "CLICK":
+            return scene
+        blocks = [b for b in scene.objects if b.role in _roleset(blockers)]
+        new = {}
+        for o in _by_roles(scene, mover_role):
+            cr = (o.bbox[0] + o.bbox[2] - 1) / 2.0; cc = (o.bbox[1] + o.bbox[3] - 1) / 2.0
+            drr = action.row - cr; dcc = action.col - cc
+            sr = (drr > 0) - (drr < 0); sc = (dcc > 0) - (dcc < 0)
+            if diagonal:
+                dr, dc = sr, sc
+            elif abs(drr) >= abs(dcc):
+                dr, dc = sr, 0
+            else:
+                dr, dc = 0, sc
+            if dr == 0 and dc == 0:
+                new[o.id] = o; continue
+            nxt = o.moved(dr * step, dc * step)
+            if not _within_region(scene, nxt) or any(nxt.overlaps(b) for b in blocks if b.id != o.id):
+                new[o.id] = o
+            else:
+                new[o.id] = nxt
+        return _replace(scene, new)
+    return effect
+
+
 def counter_step(key: str = "counter", delta: int = -1, only_when_changed: bool = True) -> Effect:
     """Hidden counter in aux[key] that changes by delta on every action (optionally only on non-noop ones)."""
     def effect(scene: Scene, action: Action) -> Optional[Scene]:
@@ -604,7 +635,7 @@ def merge_touching(role: str) -> Effect:
 MECHANISMS: dict[str, Callable] = {f.__name__: f for f in (
     move_role, move_role_diagonal, rotate_role, teleport_role, slide_until_blocked,
     cancel_move_if_overlap, cancel_move_if_outside, cancel_move_if_off_floor, push_role, pull_role, gravity,
-    toggle_color, recolor_on_click, move_on_click, permute_on_click, set_flag_on_click, move_selected_on_click, counter_step, shrink_strip,
+    toggle_color, recolor_on_click, move_on_click, step_toward_click, permute_on_click, set_flag_on_click, move_selected_on_click, counter_step, shrink_strip,
     collect_on_overlap, remove_on_click, spawn_on_button, hazard_kills, split_on_button, merge_touching,
     key_opens_door, door_blocks_without_key, switch_toggles_role, color_match_pass, sequence_lock,
     lives_decrement_on_flag, highlight_selected, timer_tick, noop_for, unknown_for)}

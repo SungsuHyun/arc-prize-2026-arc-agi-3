@@ -25,6 +25,7 @@ class EvalResult:
     n: int = 0
     per_class: dict[str, tuple[int, int]] = field(default_factory=dict)   # action key -> (correct, total)
     change_score: float = 0.0   # accuracy on transitions where the board changed (a "nothing happens" model scores 0 here)
+    changes_seen: int = 0       # number of visible-change transitions in the log (0 -> change_score is vacuous, not evidence)
 
 
 def _applied_rules(model: WorldModel, t: Transition) -> list[str]:
@@ -85,7 +86,8 @@ def evaluate(model: WorldModel, log: Iterable[Transition], *, skip_reset: bool =
     unk_set = set(unk)
     ch_total_all = sum(1 for t in log if t.id not in unk_set and not t.diff.is_noop and not _equal(t.before, t.after, ignore_ui, t, model))
     return EvalResult(correct / len(log), covered / len(log), viol, unk, conf, hashlib.sha1("|".join(keys).encode()).hexdigest()[:12], len(log),
-                      {k: (v[0], v[1]) for k, v in per_class.items()}, change_score=(ch_ok / ch_total_all) if ch_total_all else 1.0)
+                      {k: (v[0], v[1]) for k, v in per_class.items()}, change_score=(ch_ok / ch_total_all) if ch_total_all else 1.0,
+                      changes_seen=ch_total_all)
 
 
 def _is_rect(o, scene):
@@ -148,8 +150,11 @@ def _equal(pred, obs, ignore_ui: bool, t: Transition, model=None) -> bool:
 
 
 def promotable(res: EvalResult, min_transitions: int = 20, min_per_class: int = 3) -> bool:
-    """Promotion condition (spec §8): score == 1.0, >= 20 transitions, >= 3 observations per action class."""
-    if res.score < 1.0 or res.n < min_transitions:
+    """Promotion condition (spec §8): score == 1.0, >= 20 transitions, >= 3 observations per action class, AND the log
+    contained at least one visible change the model got right. Without that last clause a "nothing happens" model on a
+    change-less log verifies vacuously (change_score falls back to 1.0), gets promoted to memory, and is transferred to
+    other games where it explains nothing yet bypasses the quality gate -> no plan -> the planner spins."""
+    if res.score < 1.0 or res.n < min_transitions or res.changes_seen < 1:
         return False
     return all(tot >= min_per_class for _, tot in res.per_class.values())
 
