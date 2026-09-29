@@ -38,7 +38,10 @@ def attempt_actions(scene) -> list:    # 1-3 actions that, under your hypothesis
                                        # (used while the model is still approximate: act, observe, re-think)
 def ignore_boxes(scene) -> list:       # [(r0, c0, r1, c1), ...] display elements (counters, timers) to ignore when checking predictions
 
-Scene, Object, Action, Rule, RuleModel and numpy (as np) are already defined in your namespace: do not import them.
+Scene, Object, Action, Rule, RuleModel, numpy (as np) and every mechanism of the library below are already defined in your
+namespace: call them directly (`from mechanisms import move_role` is tolerated, nothing else may be imported).
+Every loop in your code must be bounded (by the grid, the objects, a step count): a rule that runs longer than 2 seconds on one
+transition is killed and counts as a wrong prediction.
 Keep the code compact (well under 200 lines): simple geometric rules beat elaborate simulations, and a reply cut off by
 the length limit is worthless. Rules for the code: numpy only; no game names; no coordinates memorised from this level except through scene queries;
 no comments that argue -- put reasoning in HYPOTHESIS. The prediction check compares the rendered predicted grid with the

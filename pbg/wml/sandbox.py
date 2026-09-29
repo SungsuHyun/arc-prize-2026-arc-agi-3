@@ -17,7 +17,9 @@ from pathlib import Path
 from typing import Optional
 
 ALLOWED_IMPORTS = {"numpy", "dataclasses", "typing", "itertools", "math", "core", "core.types", "core.contracts", "core.mechanisms",
-                   "pbg.core", "pbg.core.types", "pbg.core.contracts", "pbg.memory.priors.mechanisms", "collections", "functools"}
+                   "pbg.core", "pbg.core.types", "pbg.core.contracts", "pbg.memory.priors.mechanisms", "collections", "functools",
+                   "mechanism", "mechanisms"}     # the prompt lists the mechanism library; models import it under either name
+API_ROOTS = {"core", "pbg", "mechanism", "mechanisms"}
 GAME_ID_RE = re.compile(r"^[a-z]{2}\d{2}$")
 COORD_RE = re.compile(r"\(\s*\d+\s*,\s*\d+\s*\)")
 ROOT = Path(__file__).resolve().parents[2]
@@ -42,7 +44,7 @@ def static_check(code: str, allow_getattr: bool = False) -> None:
             names = [a.name for a in node.names] if isinstance(node, ast.Import) else [node.module or ""]
             for n in names:
                 root = n.split(".")[0]
-                if n not in ALLOWED_IMPORTS and root not in {"numpy", "dataclasses", "typing", "itertools", "math", "core", "pbg", "collections", "functools"}:
+                if n not in ALLOWED_IMPORTS and root not in {"numpy", "dataclasses", "typing", "itertools", "math", "collections", "functools"} | API_ROOTS:
                     raise StaticCheckError(f"import not allowed: {n}")
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in ("eval", "exec", "compile", "open", "__import__", "getattr", "globals", "locals"):
             raise StaticCheckError(f"call not allowed: {node.func.id}")
@@ -96,7 +98,7 @@ def _namespace() -> dict:
 
     def safe_import(name, globals=None, locals=None, fromlist=(), level=0):
         root = name.split(".")[0]
-        if root in ("core", "pbg") or name in ("core", "core.types", "core.contracts", "core.mechanisms"):
+        if root in API_ROOTS or name in ("core", "core.types", "core.contracts", "core.mechanisms"):
             return api
         if name.split(".")[0] in ("numpy", "dataclasses", "typing", "itertools", "math", "collections", "functools"):
             return real_import(name, globals, locals, fromlist, level)

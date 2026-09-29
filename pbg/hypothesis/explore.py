@@ -31,7 +31,7 @@ def _change_key(t: Transition) -> Optional[str]:
     return t.action.label().split("(")[0] + ":" + hashlib.md5(d.tobytes()).hexdigest()[:8]
 
 
-def explore_level(s, act: Callable[[Action, str], Optional[Transition]], *, cap: int, stale: int = 12, seed: int = 0,
+def explore_level(s, act: Callable[[Action, str], Optional[Transition]], *, cap: int, stale: int = 12, unreactive: int = 8, seed: int = 0,
                   emit: Callable[[str], None] = lambda m: None) -> dict:
     """Spend at most `cap` actions exploring the current level; returns counts for the event log / result JSON."""
     rng = random.Random(seed)
@@ -41,6 +41,7 @@ def explore_level(s, act: Callable[[Action, str], Optional[Transition]], *, cap:
     reacted: set[str] = set()           # object classes whose click changed the frame
     patterns: set[str] = set()
     used = since_new = changed = 0
+    unreactive_clicks = 0               # object-class clicks in a row that changed nothing (a click game that ignores object clicks)
     stop = "cap"
     while used < cap:
         if s.finished() or s.timed_out():
@@ -51,6 +52,8 @@ def explore_level(s, act: Callable[[Action, str], Optional[Transition]], *, cap:
             stop = "level_up"; break
         if since_new >= stale:
             stop = f"no new change in {stale} actions"; break
+        if unreactive_clicks >= unreactive:
+            stop = f"{unreactive} object clicks without any reaction"; break
         avail = s.available_actions()
         buttons = [a for a in avail if a.type == "BUTTON"]
         can_click = any(a.type == "CLICK" for a in avail)
@@ -85,6 +88,8 @@ def explore_level(s, act: Callable[[Action, str], Optional[Transition]], *, cap:
         if klass is not None:
             tried[klass] = tried.get(klass, 0) + 1
         k = _change_key(t)
+        if klass is not None:
+            unreactive_clicks = 0 if k is not None else unreactive_clicks + 1
         if k is not None:
             changed += 1
             if klass is not None:
