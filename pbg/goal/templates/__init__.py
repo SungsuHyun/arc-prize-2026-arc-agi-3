@@ -595,8 +595,17 @@ def t_align_color(scene: Scene, ctx: dict) -> list[GoalInstance]:
 
 def _marker_pair(units: list) -> bool:
     """Two small units of one colour that differ in size: a marker and a mover's tip (two identical buttons are not)."""
-    return (len(units) == 2 and all((u[2] - u[0]) * (u[3] - u[1]) <= 100 for u in units)
-            and (units[0][2] - units[0][0], units[0][3] - units[0][1]) != (units[1][2] - units[1][0], units[1][3] - units[1][1]))
+    if len(units) != 2 or any((u[2] - u[0]) * (u[3] - u[1]) > 100 for u in units):
+        return False
+    a, b = units
+    if (a[2] - a[0], a[3] - a[1]) == (b[2] - b[0], b[3] - b[1]):
+        return False
+    # two pieces of one bar split by a marker (same band, small gap) are not a pair either
+    if (a[0], a[2]) == (b[0], b[2]) and max(a[1], b[1]) - min(a[3], b[3]) <= 4:
+        return False
+    if (a[1], a[3]) == (b[1], b[3]) and max(a[0], b[0]) - min(a[2], b[2]) <= 4:
+        return False
+    return True
 
 
 def t_align_all_colors(scene: Scene, ctx: dict) -> list[GoalInstance]:
