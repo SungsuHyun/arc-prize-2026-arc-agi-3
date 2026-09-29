@@ -159,7 +159,7 @@ class HypothesisPolicy:
         counterexamples: list[str] = []; rejected: list[str] = []
         observed: dict = {}
         level = s.level; rounds = 0; n_hyp = 0; stop = ""; llm_calls0 = self.llm.calls
-        plans_executed = 0; tests_run = 0; tried_labels: set = set()
+        plans_executed = 0; tests_run = 0; tried_labels: set = set(); idle_rounds = 0
 
         def act(a: Action, kind: str) -> Optional[Transition]:
             t = s.act(a, kind)
@@ -176,7 +176,7 @@ class HypothesisPolicy:
                 s.act(Action.reset(), "reset"); continue
             if s.level != level:
                 events.emit("LOOK", "LOOK", f"level {level} -> {s.level}: the hypothesis must verify again on the new board", budget_used=budget.used())
-                level = s.level; rounds = 0; counterexamples = []; observed.clear()
+                level = s.level; rounds = 0; idle_rounds = 0; counterexamples = []; observed.clear()
                 if hyp is not None:
                     hyp.verdict = None
             log = s.level_log()
@@ -219,11 +219,13 @@ class HypothesisPolicy:
                                 break
                     continue
             # not usable: hypothesise (or revise), then run its tests
-            if rounds >= self.max_rounds:
-                stop = "UNRESOLVED"; events.emit("LOOK", "END", f"{rounds} hypothesis rounds without a verified model", budget_used=budget.used()); break
+            if idle_rounds >= self.max_rounds:
+                # only rounds that produced NO action count toward giving up: as long as tests or plans act, keep going until the clock ends
+                stop = "UNRESOLVED"; events.emit("LOOK", "END", f"{idle_rounds} hypothesis rounds without any action", budget_used=budget.used()); break
             if self.llm.exhausted():
                 stop = "llm_exhausted"; events.emit("LOOK", "END", "LLM call cap reached", budget_used=budget.used()); break
             rounds += 1; n_hyp += 1
+            used_before = budget.used()
             t0 = time.time()
             cands = self.hypothesise(s, log, hyp, counterexamples, n_hyp, rejected)
             for c in cands:
@@ -245,6 +247,7 @@ class HypothesisPolicy:
                 counterexamples = hyp.verdict.counterexamples[-4:]
             if hyp.verdict.usable(self.min_acc):
                 events.emit("VERIFY", "PLAN", f"h{hyp.n} verified (acc {hyp.verdict.accuracy:.2f} on {hyp.verdict.n}) -> plan", budget_used=budget.used())
+                idle_rounds = idle_rounds + 1 if budget.used() == used_before else 0
                 continue
             tests = [a for a in hyp.call("test_actions", s.scene, []) if isinstance(a, Action)][:3]
             if not tests:
@@ -263,6 +266,7 @@ class HypothesisPolicy:
                 tests_run += 1; tried_labels.add(a.label())
                 if t.status_change:
                     events.emit("TEST", "LOOK", f"{t.status_change} after test {a.label()}", transition_id=t.id, budget_used=budget.used()); break
+            idle_rounds = idle_rounds + 1 if budget.used() == used_before else 0
         st = s.env.status()
         if not stop:
             stop = st.state if st.state in ("WIN", "GAME_OVER") else ("timeout" if s.timed_out() else "budget")
