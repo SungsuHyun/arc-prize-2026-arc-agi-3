@@ -89,7 +89,8 @@ class Perception:
         Returns True when a new merge was confirmed."""
         if not d.moved:
             return False
-        moved = dict(d.moved)
+        reshaped = {x[0] for x in d.reshaped}
+        moved = {i: v for i, v in d.moved if i not in reshaped}     # a bar whose end moved with the mover was resized, not carried
         new = False
         for a, b in before.aux.get("_merge_candidates", []):
             if a in moved and b in moved and moved[a] == moved[b]:

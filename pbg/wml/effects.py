@@ -52,8 +52,8 @@ def _effective_bbox(o: Object, scene: Optional[Scene]) -> tuple:
         return (r0, c0, r1, c1)
     strips = {r.id for r in scene.regions if r.kind_hint == "ui_strip"}
     for q in scene.objects:
-        if q.id == o.id or q.region in strips or q.area > 0.25 * o.area:
-            continue
+        if q.id == o.id or q.region in strips or q.area > 0.25 * o.area or max(q.height, q.width) > 8:
+            continue          # a cap is a small object (button, marker); a wall spanning the bar's width is not
         a0, b0, a1, b1 = q.bbox
         # a cap drawn over the bar's end spans the bar's full thickness (a button on a column); a mover parked at the
         # bar's end does not, and must not be counted as bar
@@ -75,16 +75,17 @@ def _resize_component(ob: Object, oa: Optional[Object], sb: Optional[Scene] = No
     if not _is_rect(oa, sa) or oa.color != ob.color:
         return None
     s0, d0, s1, d1 = _effective_bbox(oa, sa)
+    # delta is always the LENGTH change (positive = grows); anchor is the edge that stayed
     if (r0, r1) == (s0, s1) and (c0, c1) != (d0, d1):
         if c0 == d0:
-            return ("resize", ob.color, "row", r0, r1, c0, d1 - c1)       # right edge moved
+            return ("resize", ob.color, "row", r0, r1, c0, (d1 - d0) - (c1 - c0))       # right edge moved
         if c1 == d1:
-            return ("resize", ob.color, "row", r0, r1, c1, d0 - c0)       # left edge moved (anchor = right edge, delta<0 grows)
+            return ("resize", ob.color, "row", r0, r1, c1, (d1 - d0) - (c1 - c0))       # left edge moved
     if (c0, c1) == (d0, d1) and (r0, r1) != (s0, s1):
         if r0 == s0:
-            return ("resize", ob.color, "col", c0, c1, r0, s1 - r1)
+            return ("resize", ob.color, "col", c0, c1, r0, (s1 - s0) - (r1 - r0))
         if r1 == s1:
-            return ("resize", ob.color, "col", c0, c1, r1, s0 - r0)
+            return ("resize", ob.color, "col", c0, c1, r1, (s1 - s0) - (r1 - r0))
     return None
 
 
@@ -189,7 +190,7 @@ def learn_effect_table(log: list[Transition], min_obs: int = 2, prior_classes: O
             for c in set(comps):
                 cnt[c] += 1
         # components present in at least 80% of the observations (and in >= `need` of them)
-        keep = [c for c, n in cnt.items() if n >= need and n >= 0.8 * len(lst)]
+        keep = [c for c, n in cnt.items() if n >= need and n >= 0.5 * len(lst)]   # majority: partial effects are guard-blocked cases (a mover at the edge)
         if not keep:
             continue
         table[k] = {"components": sorted(keep, key=str), "n": len(lst), "noops": noops.get(k, 0)}
@@ -227,15 +228,9 @@ def _apply_components(scene: Scene, comps: list[tuple]) -> Optional[Scene]:
             consumed.add(tgt.id)
             r0, c0, r1, c1 = _effective_bbox(tgt, scene)
             if axis == "row":
-                if anchor == c0:
-                    nb = (r0, c0, r1, c1 + delta)
-                else:
-                    nb = (r0, c0 - delta, r1, c1)
+                nb = (r0, c0, r1, c1 + delta) if anchor == c0 else (r0, c0 - delta, r1, c1)
             else:
-                if anchor == r0:
-                    nb = (r0, c0, r1 + delta, c1)
-                else:
-                    nb = (r0 - delta, c0, r1, c1)
+                nb = (r0, c0, r1 + delta, c1) if anchor == r0 else (r0 - delta, c0, r1, c1)
             if nb[2] > nb[0] and nb[3] > nb[1]:
                 res = _trim(tgt.with_mask(_bar_mask(nb, [q for q in others if q.id != tgt.id]), None, (nb[0], nb[1])))
                 if res is not None:
