@@ -24,6 +24,7 @@ from typing import Optional
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+from scripts.eval_viewer.ids import HASH_LEN, game_hash  # noqa: E402
 # every experiment line whose runner leaves run-<id>.json + logs/<id>/<game>.log (+ <game>.actions.jsonl); run ids are unique across lines
 EXPERIMENTS = {"rulebook": ROOT / "experiments" / "rulebook" / "results", "pbg": ROOT / "experiments" / "pbg" / "results"}
 RESULTS = EXPERIMENTS["rulebook"]
@@ -351,7 +352,8 @@ def list_runs() -> list[dict]:
             out.append({"run_id": run_id, "experiment": exp, "status": "finished", "tag": doc.get("tag", ""), "started_at": doc.get("started_at"),
                         "finished_at": doc.get("finished_at"), "commit": doc.get("git", {}).get("commit"), "mode": params.get("mode"),
                         "no_model": bool(params.get("no_model") or params.get("no_llm")), "minutes": params.get("max_minutes"),
-                        "aggregate": doc.get("aggregate", {}), "games": len(doc.get("games", [])), "logged_games": logged})
+                        "aggregate": doc.get("aggregate", {}), "games": len(doc.get("games", [])), "logged_games": logged,
+                        "hashes": {g["game_id"]: game_hash(run_id, g["game_id"]) for g in doc.get("games", []) if g.get("game_id")}})
         logs = d / "logs"
         for ldir in (logs.iterdir() if logs.is_dir() else []):
             if not ldir.is_dir() or ldir.name in seen:
@@ -365,9 +367,23 @@ def list_runs() -> list[dict]:
                         "no_model": bool(params.get("no_model") or params.get("no_llm")), "minutes": params.get("max_minutes"),
                         "aggregate": {"levels_completed": sum(r["levels_completed"] for r in recs.values()), "actions": sum(r["actions"] for r in recs.values()),
                                       "games_played": len(logged)},
-                        "games": len(meta.get("games") or logged), "logged_games": logged})
+                        "games": len(meta.get("games") or logged), "logged_games": logged,
+                        "hashes": {g: game_hash(ldir.name, g) for g in (meta.get("games") or logged)}})
     out.sort(key=lambda r: r.get("started_at") or "", reverse=True)
     return out
+
+
+def find_game(h: str) -> Optional[dict]:
+    """{run_id, game_id, experiment, status} of the game execution with this hash (prefix of at least 6 chars accepted)."""
+    h = h.strip().lower()
+    if len(h) < 6:
+        return None
+    hits = []
+    for r in list_runs():
+        for gid, full in r["hashes"].items():
+            if full.startswith(h):
+                hits.append({"run_id": r["run_id"], "game_id": gid, "experiment": r["experiment"], "status": r["status"], "hash": full})
+    return hits[0] if len(hits) == 1 else ({"ambiguous": hits} if hits else None)
 
 
 def _levels_from_summary(g: dict) -> list[dict]:
@@ -412,7 +428,7 @@ def run_detail(run_id: str) -> dict:
     games = []
     for g in raw_games:
         gid = g.get("game_id")
-        games.append({"game_id": gid, "levels_completed": g.get("levels_completed"), "levels_total": int(g.get("levels_total") or 0), "actions": g.get("actions"),
+        games.append({"game_id": gid, "hash": game_hash(run_id, gid), "levels_completed": g.get("levels_completed"), "levels_total": int(g.get("levels_total") or 0), "actions": g.get("actions"),
                       "score": g.get("score"), "stop_reason": g.get("stop_reason") or g.get("error"), "seconds": g.get("seconds") or g.get("elapsed"),
                       "mismatches": g.get("mismatches"), "reviews": g.get("reviews"), "model_calls": g.get("model_calls") or g.get("llm_calls"),
                       "has_log": (ldir / f"{gid}.log").exists(), "has_record": (ldir / f"{gid}.actions.jsonl").exists(),

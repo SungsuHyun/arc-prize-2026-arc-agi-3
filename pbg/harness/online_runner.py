@@ -75,10 +75,13 @@ def play_game(arc, game_id: str, cfg: dict, log_dir: Path, memory: Memory, llm, 
 
 
 def write_run_meta(log_dir: Path, **meta) -> None:
+    from scripts.eval_viewer.ids import game_hash
     """logs/<run>/run.json, written before the first action: lets the eval viewer list a run that is still in progress
     (the summary run-<id>.json only exists once every game has finished)."""
     started = meta.pop("started")
     log_dir.mkdir(parents=True, exist_ok=True)
+    meta["hashes"] = {g: game_hash(meta["run_id"], g) for g in meta.get("game_ids") or []}
+    meta["games"] = meta.pop("game_ids", [])
     (log_dir / "run.json").write_text(json.dumps({**meta, "started_at": started.isoformat(), "pid": os.getpid(), "git": _git()}, indent=1, default=str))
 
 
@@ -108,6 +111,9 @@ def run(game_ids: list[str], cfg: dict, *, out_dir: Path = DEFAULT_OUT, memory_r
             faulthandler.dump_traceback(all_threads=True)
             games.append({"game_id": g, "error": f"hung: {type(e).__name__}", "actions": 0, "levels_completed": 0, "stop_reason": "hung"})
     ex.shutdown(wait=False, cancel_futures=True)
+    from scripts.eval_viewer.ids import game_hash
+    for g in games:
+        g["hash"] = game_hash(run_id, g["game_id"])     # stable per game execution: the Replay viewer's lookup key
     try:
         sc = arc.get_scorecard(); scd = sc.model_dump() if hasattr(sc, "model_dump") else {}
     except Exception as e:

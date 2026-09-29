@@ -19,6 +19,7 @@ API (all JSON):
     GET /api/runs/<run>/games/<game>            replayed steps of one game (?level=N keeps one level)
     GET /api/runs/<run>/games/<game>/rulebook   final rulebook of that game
     GET /api/runs/<run>/games/<game>/log        raw log (text/plain)
+    GET /api/find/<hash>                        {run_id, game_id, ...} of one game execution (hash = scripts/eval_viewer/ids.game_hash)
     GET /api/games                              playable game ids (environment_files)
     POST /api/play/new {game_id}                start an interactive session (no timing, nothing recorded)
     POST /api/play/<sid>/step {action}          action = "UP"|"DOWN"|"LEFT"|"RIGHT"|"SPACE"|"ACTION7" | {"action":"MOUSE","row":r,"col":c}
@@ -147,6 +148,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(list_games())
             if parts[1:] == ["health"]:
                 return self._json({"started": STARTED, "pid": os.getpid()})
+            if len(parts) == 3 and parts[1] == "find":
+                if not SAFE.match(parts[2]):
+                    return self._json({"error": "bad hash"}, 400)
+                hit = R.find_game(parts[2])
+                return self._json(hit) if hit else self._json({"error": f"no game with hash {parts[2]}"}, 404)
             if len(parts) >= 3 and parts[1] == "runs":
                 run_id = parts[2]
                 if not SAFE.match(run_id):

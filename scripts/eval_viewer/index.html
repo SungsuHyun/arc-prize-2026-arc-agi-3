@@ -99,6 +99,9 @@
   .live::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--ok); animation: pulse 1.2s infinite; }
   @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
   .aborted { color: var(--warn); }
+  input#find { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; font-size: 12px; }
+  .hash { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11px; color: var(--muted); cursor: copy; margin-left: 6px; }
+  .hash:hover { color: var(--accent); }
 </style>
 </head>
 <body>
@@ -106,6 +109,7 @@
   <h1>Replay</h1>
   <span class="modes"><button id="mode-replay" class="on">재생 보기</button><button id="mode-play">직접 플레이</button></span>
   <select id="runsel"></select>
+  <input id="find" placeholder="hash로 찾기" size="12" spellcheck="false" style="font-family:ui-monospace,Menlo,Consolas,monospace">
   <span id="runinfo"></span>
   <span style="flex:1"></span>
   <span class="legend">
@@ -160,7 +164,23 @@ async function api(path, body) { const r = await fetch(path, body ? { method: "P
 const fmt = (x, d = 2) => x == null ? "—" : (typeof x === "number" ? x.toFixed(d) : x);
 const esc = s => String(s ?? "").replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
 
-function readHash() { const h = location.hash.slice(1).split("/"); return { run: h[0] || null, game: h[1] || null, level: h[2] ? +h[2] : null, step: h[3] ? +h[3] : null }; }
+function readHash() {
+  const h = location.hash.slice(1).split("/");
+  if (h[0] === "h" && h[1]) return { find: h[1], level: h[2] ? +h[2] : null, step: h[3] ? +h[3] : null };
+  return { run: h[0] || null, game: h[1] || null, level: h[2] ? +h[2] : null, step: h[3] ? +h[3] : null };
+}
+// jump to one game execution by its hash (URL #h/<hash> or the header box); resolves through /api/find
+async function findByHash(h, level = null, step = null) {
+  h = (h || "").trim().toLowerCase(); if (!h) return;
+  try {
+    const hit = await api(`/api/find/${h}`);
+    if (hit.ambiguous) { $("notes").textContent = `여러 게임이 일치: ${hit.ambiguous.map(x => `${x.hash} ${x.game_id}`).join(", ")} — 더 길게 입력하세요`; return; }
+    if (state.mode !== "replay") setMode("replay");
+    $("runsel").value = hit.run_id;
+    await selectRun(hit.run_id, { game: hit.game_id, level: level || 1, step });
+    $("notes").textContent = `${hit.hash} → ${hit.experiment} run ${hit.run_id} · ${hit.game_id}`;
+  } catch (e) { $("notes").textContent = e.message; }
+}
 function writeHash() { if (state.mode === "play") return; const parts = [state.run, state.game, state.level, state.i].filter(x => x != null); history.replaceState(null, "", "#" + parts.join("/")); }
 
 // run ids and started_at are UTC (the runners use datetime.now(timezone.utc)); show the browser's local time
@@ -184,6 +204,7 @@ async function loadRuns() {
     sel.appendChild(o);
   }
   const h = readHash();
+  if (h.find) { await findByHash(h.find, h.level, h.step); return; }
   const start = state.runs.find(r => r.run_id === h.run) ? h.run : (state.runs.find(r => r.logged_games.length) || state.runs[0] || {}).run_id;
   if (start) { sel.value = start; await selectRun(start, h); }
   if (h.run === "play") { setMode("play"); if (h.game) startPlay(h.game); }
@@ -250,7 +271,8 @@ function renderGames() {
     const el = document.createElement("div"); el.className = "game" + (g.has_log ? "" : " nolog") + (g.game_id === state.game ? " open" : "");
     const done = g.levels_completed ?? 0, tot = g.levels_total || "?";
     const tail = state.detail.status === "finished" ? fmt(g.score, 1) : (g.stop_reason === "waiting" ? "대기" : g.stop_reason === "no action record" ? "기록 없음" : state.detail.status === "running" ? '<span class="live"></span>' : "중단");
-    el.innerHTML = `<div class="head"><b>${esc(g.game_id)}</b><span class="meta">L ${done}/${tot} · ${g.actions ?? "?"}a · ${tail}</span></div><div class="levels"></div>`;
+    el.innerHTML = `<div class="head"><span><b>${esc(g.game_id)}</b><span class="hash" title="이 게임 실행의 hash — 클릭하면 복사 (#h/${esc(g.hash)})">${esc(g.hash || "")}</span></span><span class="meta">L ${done}/${tot} · ${g.actions ?? "?"}a · ${tail}</span></div><div class="levels"></div>`;
+    el.querySelector(".hash").onclick = e => { e.stopPropagation(); navigator.clipboard?.writeText(g.hash); $("notes").textContent = `hash ${g.hash} 복사됨 (${location.origin}/#h/${g.hash})`; };
     const lv = el.querySelector(".levels");
     for (const L of g.levels) {
       const c = document.createElement("span");
@@ -380,7 +402,7 @@ function renderDetail() {
   const L = (g.levels || []).find(x => x.level === state.level) || {};
   const lvinfo = state.data.levels[String(state.level)] || {};
   const kind = s.kind === "step" ? (s.tag || "obs") : s.kind;
-  let h = `<h2>${esc(state.game)} · level ${state.level}</h2>
+  let h = `<h2>${esc(state.game)} · level ${state.level} <span class="hash">${esc(g.hash || "")}</span></h2>
   <div class="lvsum">
     <div><div class="n" style="color:${L.completed ? "var(--ok)" : L.reason === "in progress" ? "var(--accent)" : "var(--bad)"}">${L.completed ? "완료" : L.reason === "in progress" ? "진행 중" : "미완료"}</div><div class="l">${L.reason === "in progress" ? "" : esc(L.reason || "")}</div></div>
     <div><div class="n">${L.actions ?? lvinfo.steps ?? "?"}</div><div class="l">actions (기준 ${L.baseline ?? "?"})</div></div>
@@ -409,7 +431,7 @@ function stop() { clearInterval(state.timer); state.timer = null; $("play").text
 function setMode(m) {
   stop(); state.mode = m; document.body.classList.toggle("play", m === "play");
   $("mode-replay").classList.toggle("on", m === "replay"); $("mode-play").classList.toggle("on", m === "play");
-  for (const id of ["runsel", "runinfo", "timeline", "loglink", "booklink"]) $(id).style.display = m === "play" ? "none" : "";
+  for (const id of ["runsel", "runinfo", "find", "timeline", "loglink", "booklink"]) $(id).style.display = m === "play" ? "none" : "";
   $("first").parentElement.style.display = m === "play" ? "none" : "";
   $("playctl").style.display = m === "play" ? "" : "none";
   $("notes").textContent = "";
@@ -504,6 +526,7 @@ $("boardwrap").addEventListener("click", e => {
 });
 
 $("runsel").onchange = e => selectRun(e.target.value);
+$("find").onkeydown = e => { if (e.key === "Enter") { findByHash(e.target.value); e.target.blur(); } };
 $("slider").oninput = e => goto(+e.target.value);
 $("first").onclick = () => goto(0); $("last").onclick = () => goto(state.steps.length - 1);
 $("prev").onclick = () => goto(state.i - 1); $("next").onclick = () => goto(state.i + 1);

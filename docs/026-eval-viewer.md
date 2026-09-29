@@ -80,6 +80,11 @@ LEVEL COMPLETED, GAME OVER)가 표시된다. 시간은 재지 않고 아무것�
   게임·레벨 요약은 actions.jsonl을 집계해 만들고, 페이지는 5초마다 다시 읽어 보드가 늘어나면 제자리에서
   이어 붙인다(마지막 스텝을 보고 있었으면 따라간다). 요약이 생기면 목록 라벨이 완료로 바뀐다.
   이 변경 전에 시작한 실행은 run.json·actions.jsonl이 없어 목록에는 뜨지만 초기 보드만 재생된다.
+- **게임 실행마다 고유 hash.** `scripts/eval_viewer/ids.py`의 `game_hash(run_id, game_id)` = sha1("<run id>/<game id>")
+  앞 10자리. run id가 유일하고 한 run에서 게임은 한 번 실행되므로 실행마다 유일하고, 두 문자열만 있으면 과거 실행에도
+  같은 값이 나온다. 두 러너가 요약의 게임 항목(`"hash"`)과 `logs/<run>/run.json`(`"hashes"`)에 기록한다.
+  뷰어는 게임 목록과 레벨 상세에 hash를 보여 주고(클릭 = 복사), 헤더의 "hash로 찾기" 상자나 URL `#h/<hash>`,
+  API `GET /api/find/<hash>`(6자 이상 접두어 허용)로 해당 run·게임으로 바로 이동한다.
 - 검증: `pbg --games ar25 --minutes 1 --no-llm --budget 40` 스모크를 진행 중에 열어 18스텝 재생, 해시 불일치 0,
   planner 로그 4건이 마지막 스텝에 붙음; 종료 후 같은 run id가 완료 상태로 전환.
 

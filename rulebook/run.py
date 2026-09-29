@@ -10,6 +10,8 @@ import subprocess
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+
+from scripts.eval_viewer.ids import game_hash
 from pathlib import Path
 from typing import Optional
 
@@ -61,9 +63,11 @@ def run(game_ids: list[str], cfg: dict, *, out_dir: Path, tag: str = "", arc=Non
     lock = threading.Lock(); started = dt.datetime.now(dt.timezone.utc)
     log_dir.mkdir(parents=True, exist_ok=True)   # logs/<run>/run.json before the first action: the eval viewer lists the run while it is in progress
     (log_dir / "run.json").write_text(json.dumps({"experiment": "rulebook", "run_id": run_id, "tag": tag, "started_at": started.isoformat(), "pid": os.getpid(),
-                                                  "games": game_ids, "params": cfg}, indent=1, default=str))
+                                                  "games": game_ids, "hashes": {g: game_hash(run_id, g) for g in game_ids}, "params": cfg}, indent=1, default=str))
     with ThreadPoolExecutor(max_workers=int(cfg.get("jobs", 2))) as ex:
         games = list(ex.map(lambda g: play_game(arc, g, cfg, log_dir, lock=lock, deadline=deadline), game_ids))
+    for g in games:
+        g["hash"] = game_hash(run_id, g["game_id"])     # stable per game execution: the Replay viewer's lookup key
     try:
         sc = arc.get_scorecard(); scd = sc.model_dump() if hasattr(sc, "model_dump") else {}
     except Exception as e:
