@@ -159,7 +159,7 @@ class HypothesisPolicy:
         counterexamples: list[str] = []; rejected: list[str] = []
         observed: dict = {}
         level = s.level; rounds = 0; n_hyp = 0; stop = ""; llm_calls0 = self.llm.calls
-        plans_executed = 0; tests_run = 0
+        plans_executed = 0; tests_run = 0; tried_labels: set = set()
 
         def act(a: Action, kind: str) -> Optional[Transition]:
             t = s.act(a, kind)
@@ -175,8 +175,10 @@ class HypothesisPolicy:
                 events.emit("LOOK", "LOOK", "game over -> RESET (hypothesis kept)", budget_used=budget.used())
                 s.act(Action.reset(), "reset"); continue
             if s.level != level:
-                events.emit("LOOK", "LOOK", f"level {level} -> {s.level}: the hypothesis is re-verified on the new board", budget_used=budget.used())
+                events.emit("LOOK", "LOOK", f"level {level} -> {s.level}: the hypothesis must verify again on the new board", budget_used=budget.used())
                 level = s.level; rounds = 0; counterexamples = []; observed.clear()
+                if hyp is not None:
+                    hyp.verdict = None
             log = s.level_log()
             # verify the current hypothesis on this level's log
             if hyp is not None and log:
@@ -186,6 +188,8 @@ class HypothesisPolicy:
                 plan = self.plan(hyp, s, observed)
                 if plan is None or (plan == [] and not hyp.goal.is_goal(s.scene)):
                     events.emit("PLAN", "TEST", f"no plan under h{hyp.n} for goal '{getattr(hyp.goal, 'name', '?')}' -> test the doubts", budget_used=budget.used())
+                    counterexamples = (counterexamples + [f"Your model verified but the planner found NO action sequence from the current board to your goal '{getattr(hyp.goal, 'name', '?')}' using candidate_actions: the goal, the candidate actions or the dynamics are incomplete."])[-4:]
+                    hyp.verdict = None
                     usable = False
                 elif plan == []:
                     events.emit("PLAN", "TEST", "goal already true but no level-up: the win condition is wrong", budget_used=budget.used())
@@ -235,7 +239,7 @@ class HypothesisPolicy:
             if not cands:
                 continue
             best = cands[0]
-            if hyp is None or best.verdict.accuracy >= (hyp.verdict.accuracy if hyp.verdict else -1):
+            if hyp is None or hyp.verdict is None or best.verdict.accuracy >= hyp.verdict.accuracy:
                 hyp = best
             if hyp.verdict.counterexamples:
                 counterexamples = hyp.verdict.counterexamples[-4:]
@@ -246,14 +250,17 @@ class HypothesisPolicy:
             if not tests:
                 tests = [a for a in hyp.call("candidate_actions", s.scene, []) if isinstance(a, Action)][:2]
             if not tests:
-                events.emit("TEST", "HYPOTHESISE", f"h{hyp.n} names no test: revise with the verification counter-examples", budget_used=budget.used())
+                tests = _fallback_probe(s, tried_labels)
+                events.emit("TEST", "TEST", f"h{hyp.n} names no test -> fallback probe {[a.label() for a in tests]}", budget_used=budget.used())
+            if not tests:
+                events.emit("TEST", "HYPOTHESISE", f"h{hyp.n} names no test and nothing is left to probe: revise", budget_used=budget.used())
                 continue
             events.emit("VERIFY", "TEST", f"h{hyp.n} not verified (acc {hyp.verdict.accuracy:.2f}, n {hyp.verdict.n}) -> tests {[a.label() for a in tests]}", budget_used=budget.used())
             for a in tests:
                 t = act(a, "test")
                 if t is None:
                     break
-                tests_run += 1
+                tests_run += 1; tried_labels.add(a.label())
                 if t.status_change:
                     events.emit("TEST", "LOOK", f"{t.status_change} after test {a.label()}", transition_id=t.id, budget_used=budget.used()); break
         st = s.env.status()
@@ -267,3 +274,23 @@ class HypothesisPolicy:
                         "verified": bool(hyp.verdict and hyp.verdict.usable(self.min_acc)), "origin": "hypothesis"}] if hyp else [],
                       [{"name": getattr(hyp.goal, "name", "?"), "win": hyp.doc.get("win", "")}] if hyp and hyp.goal else [],
                       {"rounds": n_hyp, "plans": plans_executed, "tests": tests_run}, round(time.time() - t_start, 1))
+
+
+def _fallback_probe(s, tried: set) -> list:
+    """One click on an object class not tried yet on this level (buttons first if the game has them)."""
+    from ..probe.clickmap import object_key
+    avail = s.available_actions()
+    out = [a for a in avail if a.type == "BUTTON" and a.label() not in tried][:1]
+    if out or not any(a.type == "CLICK" for a in avail):
+        return out
+    seen = set()
+    strips = {r.id for r in s.scene.regions if r.kind_hint == "ui_strip"}
+    for o in sorted(s.scene.objects, key=lambda o: o.area):
+        k = object_key(o)
+        if o.region in strips or k in seen:
+            continue
+        seen.add(k)
+        a = Action.click(*o.center)
+        if a.label() not in tried:
+            return [a]
+    return []
