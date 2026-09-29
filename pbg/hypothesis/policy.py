@@ -236,8 +236,9 @@ class HypothesisPolicy:
     def goal_directed_step(self, h: Hypothesis, s: Session, observed: dict, tried_here: set, seen_states: set) -> Optional[Action]:
         """When a usable model yields no plan (docs/029 P1-4): the candidate action whose predicted outcome raises the goal's
         progress the most, or leads to a board not seen yet; unknown outcomes count as mildly informative."""
-        cands = [a for a in h.call("candidate_actions", s.scene, []) if isinstance(a, Action)]
-        for a in action_set(s.scene, s.available_actions()):
+        avail = s.available_actions()
+        cands = [a for a in h.call("candidate_actions", s.scene, []) if isinstance(a, Action) and _available(a, avail)]
+        for a in action_set(s.scene, avail):
             if a not in cands:
                 cands.append(a)
         sk = state_key(s.scene); cur = h.progress(s.scene)
@@ -269,7 +270,7 @@ class HypothesisPolicy:
         available = s.available_actions()
         def actions_fn(scene: Scene) -> list[Action]:
             cands = h.call("candidate_actions", scene, [])
-            cands = [a for a in cands if isinstance(a, Action)]
+            cands = [a for a in cands if isinstance(a, Action) and _available(a, available)]
             if not cands:
                 cands = [a for a in available if a.type == "BUTTON"]
             return cands[:48]
@@ -363,7 +364,10 @@ class HypothesisPolicy:
                         pred = hyp.model.predict(s.scene, a)
                         t = act(a, "plan")
                         if t is None:
-                            break
+                            # refused by the environment (or the clock ran out): never leave the game loop here; the action is not retried
+                            tried_here.add((state_key(s.scene), a.label()))
+                            events.emit("PLAN", "PLAN", f"goal-directed step {a.label()} refused by the environment", budget_used=budget.used())
+                            continue
                         tried_here.add((state_key(t.before), a.label()))
                         events.emit("PLAN", "EXECUTE", f"no plan under h{hyp.n} -> goal-directed step {a.label()} ({gd_steps}/{GD_STEPS_PER_LEVEL})", transition_id=t.id, budget_used=budget.used())
                         if t.status_change:
@@ -456,6 +460,12 @@ class HypothesisPolicy:
             tests = [a for a in src.call("test_actions", s.scene, []) if isinstance(a, Action)][:2]
             attempts = [a for a in src.call("attempt_actions", s.scene, []) if isinstance(a, Action) and a not in tests][:1]
             tests = tests + attempts          # learn AND try: one move toward the hypothesised win per round
+            avail_now = s.available_actions()
+            bad = [a.label() for a in tests if not _available(a, avail_now)]
+            if bad:
+                counterexamples = (counterexamples + [f"You proposed {bad}, but this game only offers {sorted({x.label() if x.type == 'BUTTON' else 'clicks' for x in avail_now})}: propose actions the game accepts."])[-4:]
+                events.emit("TEST", "TEST", f"dropped unavailable actions {bad}", budget_used=budget.used())
+            tests = [a for a in tests if _available(a, avail_now)]
             sk = state_key(s.scene)
             fresh = [a for a in tests if (sk, a.label()) not in tried_here]
             if len(fresh) < len(tests):
@@ -492,6 +502,15 @@ class HypothesisPolicy:
                         "verified": bool(hyp.verdict and hyp.verdict.usable(self.min_acc)), "origin": hyp.origin}] if hyp else [],
                       [{"name": getattr(hyp.goal, "name", "?"), "win": hyp.doc.get("win", "")}] if hyp and hyp.goal else [],
                       {"rounds": n_hyp, "plans": plans_executed, "tests": tests_run, "repeats_dropped": repeats_dropped, "gd_steps": gd_steps, "explore": explored}, round(time.time() - t_start, 1))
+
+
+def _available(a: Action, avail: list) -> bool:
+    """The environment refuses buttons it did not list and clicks in button-only games; an LLM hypothesis proposes both."""
+    if a.type == "CLICK":
+        return any(x.type == "CLICK" for x in avail)
+    if a.type == "BUTTON":
+        return any(x.type == "BUTTON" and x.id == a.id for x in avail)
+    return False
 
 
 def _fallback_probe(s, tried: set) -> list:

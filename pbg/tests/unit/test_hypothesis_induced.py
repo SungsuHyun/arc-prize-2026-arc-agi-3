@@ -119,3 +119,26 @@ def test_induced_ids_are_stable_across_rounds(tmp_path):
     a = pol.induced_candidates(s, s.level_log(), n=1, ids=ids)
     b = pol.induced_candidates(s, s.level_log(), n=7, ids=ids)
     assert a and b and {c.name: c.n for c in a} == {c.name: c.n for c in b if c.name in {x.name for x in a}}
+
+
+def test_goal_directed_step_never_returns_an_unavailable_action(tmp_path):
+    """lp85 (click-only) ended after 4 minutes: the LLM's candidate ACTION1 was refused and the game loop broke out."""
+    p = Perception(); s = _Session(p); pol = _policy(tmp_path)
+    s.available_actions = lambda: [Action("CLICK")]          # click-only game
+
+    class _Goal:
+        name = "g"
+        def is_goal(self, sc): return False
+        def progress(self, sc): return 0.0
+
+    class _Model:
+        def predict(self, sc, a): return sc.copy(objects=[o.moved(0, 1) for o in sc.objects])   # every action changes the board
+        def with_roles(self, sc): return sc
+
+    class _H:
+        goal = _Goal(); model = _Model(); goals = [goal]
+        def call(self, name, sc, default): return [Action.button(1), Action.button(4)] if name == "candidate_actions" else default
+        def progress(self, sc): return 0.0
+        def is_goal(self, sc): return False
+    a = pol.goal_directed_step(_H(), s, {}, set(), set())
+    assert a is None or a.type == "CLICK"
