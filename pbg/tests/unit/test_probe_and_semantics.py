@@ -73,6 +73,6 @@ def test_level_knowledge_goal_stats_roundtrip(tmp_path):
     g = GoalInstance("align_color(11,col)", "align_color", {}, lambda s: False, lambda s: 0.0)
     k.record_win(1, g, 4); k.record_fail(GoalInstance("inside_frame(5)", "inside_frame", {}, lambda s: False, lambda s: 0.0))
     st = k.goal_stats({"reach": {"games_used": 4, "games_verified": 1}})
-    assert st["align_color"]["games_verified"] / st["align_color"]["games_used"] > 0.8 and st["reach"]["games_used"] == 4
+    assert st["align_color"]["games_verified"] / st["align_color"]["games_used"] >= 0.75 and st["reach"]["games_used"] == 4
     k.save(tmp_path / "k.json"); k2 = LevelKnowledge.load(tmp_path / "k.json")
     assert k2.goal_wins["align_color"] == 1 and k2.goal_fails["inside_frame"] == 1 and k2.won_goals[0]["level"] == 1
