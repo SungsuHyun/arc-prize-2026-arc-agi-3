@@ -96,7 +96,7 @@ class Orchestrator:
         last_refine_n = -1; resets_without_progress = 0; game_overs = 0
         tried_experiments: set = set(); bumped: set = set(); clicked: set = set(); gated_rounds = 0
         idle_iters = 0; last_used = -1
-        walk_dry = 0; last_action = None; fresh_level = False
+        walk_dry = 0; last_action = None; fresh_level = False; llm_waits_this_level = 0
         while not s.finished():
             knowledge.clicks.extend(s.transitions[-8:])
             if budget.used() == last_used:
@@ -124,7 +124,7 @@ class Orchestrator:
                 self.memory.record_level_note(game_id, last_level, {"level": last_level, "actions_used": s.level_actions.get(last_level, 0),
                                                                      "novelty": novelty, "replaced_rules": [], "added_rules": []})
                 events.emit(state, "PLAN" if novelty == 0 else "PROBE", f"level {last_level} -> {s.level}, novelty {novelty}", budget_used=budget.used())
-                fresh_level = novelty > 0; knowledge.hyp_triggers = set(); knowledge.hyp_inert = set(); knowledge.clicks.skip_untried = set()
+                fresh_level = novelty > 0; knowledge.hyp_triggers = set(); knowledge.hyp_inert = set(); knowledge.clicks.skip_untried = set(); llm_waits_this_level = 0
                 last_level = s.level; prev_level_scene = s.scene; level_start_step = s.step_idx; walk_dry = 0
                 knowledge.levels_seen.add(s.level); knowledge.demoted = dict(goal_inf.demoted); knowledge.save(self.memory.knowledge_path(game_id))
                 planner.stuck.reset(); no_plan_rounds = 0; reprobe_rounds = 0; resets_without_progress = 0; touched.clear(); clicked.clear()
@@ -258,7 +258,16 @@ class Orchestrator:
                         # whose predicted outcome raises the top goal's progress) -- idling on the LLM is the last resort
                         why = "walk probe" if _walk_useful(knowledge, s) else "goal-directed step"
                         events.emit("PLAN", "PROBE", f"model score {H[0].score:.2f}/change {H[0].change_score:.2f} below gate -> {why}", budget_used=budget.used()); state = "PROBE"; continue
+                    a = _goal_directed_action(knowledge, s, H, G, last_action) if H else None
+                    if a is not None and llm_waits_this_level >= 1:
+                        t_ = s.act(a, "reprobe")
+                        if t_ is not None:
+                            last_action = a
+                            events.emit("PLAN", "HYPOTHESIZE", f"below gate, reprobe spent -> goal-directed step {a.label()}", transition_id=t_.id, budget_used=budget.used())
+                            semantics = classify_actions(s.transitions, semantics); knowledge.clicks.extend(s.transitions[-3:])
+                            state = "HYPOTHESIZE"; experiments_this_round = 0; continue
                     if wml.job_running():
+                        llm_waits_this_level += 1
                         events.emit("PLAN", "HYPOTHESIZE", "below gate, reprobe spent -> waiting for the llm job", budget_used=budget.used())
                         wml.wait_job(120.0); state = "HYPOTHESIZE"; continue
                     if not self.use_llm or not wml.job_running():

@@ -45,7 +45,13 @@ class BoardHypotheses:
         self.rides: dict[int, int] = {}               # mover -> bar it stands on
         self.marker_of: dict[int, int] = {}           # marker -> mover with the same colour
         self.tested: dict[int, str] = {}              # button -> "confirmed" | "refuted"
+        # ids can be re-assigned when the level is re-parsed after a test click (a panel turned out to be a bar):
+        # objects are recognised by colour + bbox, which the same frame keeps
+        self._key2id = {(o.color, tuple(o.bbox)): o.id for o in scene.objects}
         self._infer()
+
+    def _orig(self, o: Object) -> int:
+        return self._key2id.get((o.color, tuple(o.bbox)), o.id)
 
     # ── appearance -> roles ──
     def _infer(self) -> None:
@@ -125,28 +131,31 @@ class BoardHypotheses:
         if hit is None:
             return None
         c = core_diff(t)
-        changed = {i for i, _ in c["moved"]} | {x[0] for x in c["recolored"] + c["reshaped"]} | {o.id for o in c["disappeared"]}
-        h = self.roles.get(hit.id)
+        changed_ids = {i for i, _ in c["moved"]} | {x[0] for x in c["recolored"] + c["reshaped"]} | {o.id for o in c["disappeared"]}
+        changed = {self._orig(by[i]) for i in changed_ids if i in by}
+        hid = self._orig(hit)
+        h = self.roles.get(hid)
         if h is None:
             return None
         if h.role == "button":
             if changed:
-                expected = set(self.controls.get(hit.id, [])) | {m for m, b in self.rides.items() if b in self.controls.get(hit.id, [])}
+                expected = set(self.controls.get(hid, [])) | {m for m, b in self.rides.items() if b in self.controls.get(hid, [])}
                 agree = bool(expected & changed)
-                self.tested[hit.id] = "confirmed"; h.confirmed = True; h.p = 1.0
+                self.tested[hid] = "confirmed"; h.confirmed = True; h.p = 1.0
                 if not agree and expected:
                     # it is a trigger, but of other objects than the geometry suggested: keep the observed targets
-                    self.controls[hit.id] = [i for i in changed if i in by and self.roles.get(i, RoleHyp("", 0, "")).role == "bar"]
-                what = ", ".join(f"{by[i].color}@{by[i].bbox[0]},{by[i].bbox[1]}" for i in sorted(changed) if i in by)[:80]
-                return f"button {hit.id} confirmed ({'as predicted' if agree else 'other targets'}): changed {what}"
-            self.tested[hit.id] = "refuted"; h.confirmed = False; h.p *= 0.3
-            return f"button {hit.id} refuted: no change (blocked or not a trigger)"
+                    self.controls[hid] = [i for i in changed if self.roles.get(i, RoleHyp("", 0, "")).role == "bar"]
+                orig_by = {o.id: o for o in self.scene.objects}
+                what = ", ".join(f"{orig_by[i].color}@{orig_by[i].bbox[0]},{orig_by[i].bbox[1]}" for i in sorted(changed) if i in orig_by)[:80]
+                return f"button {hid} confirmed ({'as predicted' if agree else 'other targets'}): changed {what}"
+            self.tested[hid] = "refuted"; h.confirmed = False; h.p *= 0.3
+            return f"button {hid} refuted: no change (blocked or not a trigger)"
         if changed:
             # a supposedly passive object reacted: it is a trigger after all
-            self.roles[hit.id] = RoleHyp("button", 0.9, f"reacted when clicked (was {h.role})", confirmed=True)
-            self.tested[hit.id] = "confirmed"
-            return f"{h.role} {hit.id} reacted -> promoted to button"
-        return f"{h.role} {hit.id} inert as expected"
+            self.roles[hid] = RoleHyp("button", 0.9, f"reacted when clicked (was {h.role})", confirmed=True)
+            self.tested[hid] = "confirmed"
+            return f"{h.role} {hid} reacted -> promoted to button"
+        return f"{h.role} {hid} inert as expected"
 
     def confirmed_triggers(self) -> set[tuple]:
         by = {o.id: o for o in self.scene.objects}
