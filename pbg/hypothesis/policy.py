@@ -258,7 +258,7 @@ class HypothesisPolicy:
             out.append(InducedHypothesis(wh, G, ids.setdefault(wh.name, 1000 + len(ids)), actions_fn))
         return out
 
-    def equal_alternatives(self, hyp, s: Session, log: list, ids: dict, wml, goal_inf, click_map, min_acc: float, tol: float = 0.05, limit: int = 2) -> list:
+    def equal_alternatives(self, hyp, s: Session, log: list, ids: dict, wml, goal_inf, click_map, min_acc: float, tol: float = 0.05, limit: int = 3) -> list:
         """Induced models the log cannot tell apart from `hyp` (usable, change accuracy within `tol`), other than hyp's own
         variant. Where the top model has no plan because of an untested rule (ls20: a floor-colour rule forbade stepping onto
         the tile), an equally verified variant without that rule may plan; executing its plan tests the difference."""
@@ -270,7 +270,9 @@ class HypothesisPolicy:
             c.verdict = verify(c.model, log, c.ignore) if log else Verdict(0.0, 0.0, 0, 0, 0)
             if c.verdict.usable(min_acc) and c.verdict.change_accuracy >= ref - tol:
                 out.append(c)
-        out.sort(key=lambda c: c.verdict.rank_key(), reverse=True)
+        # simplest first (fewest rules): among models the log cannot tell apart, the one without the extra rule is the one
+        # whose untested assumption is not blocking the plan (ls20: move+collect before move+walls+floor+collect+push)
+        out.sort(key=lambda c: (len(c.model.rules()) if hasattr(c.model, "rules") else 99, -c.verdict.change_accuracy))
         return out[:limit]
 
     def goal_directed_step(self, h: Hypothesis, s: Session, observed: dict, tried_here: set, seen_states: set, click_map=None) -> Optional[Action]:
