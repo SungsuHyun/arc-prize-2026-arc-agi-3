@@ -353,7 +353,9 @@ class Scene:
         if self.backdrop is not None and self.backdrop.shape == g.shape:
             known = self.backdrop >= 0
             g[known] = self.backdrop[known]
-        for o in sorted(self.objects, key=lambda o: not o.occluded):     # hidden static objects first, movers on top
+        # z-order: hidden static objects first, then large before small (a floor parsed as one huge object must never paint
+        # over the piece the model just moved onto it — that hid ls20's agent in every prediction after step 27)
+        for o in sorted(self.objects, key=lambda o: (not o.occluded, -o.area, o.id)):
 
             r0, c0, r1, c1 = o.bbox
             rr0, cc0, rr1, cc1 = max(r0, 0), max(c0, 0), min(r1, h), min(c1, w)
