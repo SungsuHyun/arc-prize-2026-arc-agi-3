@@ -23,7 +23,7 @@ class _NoopModel:
 
 
 class _H:
-    n = 5; origin = "induced"; model = _NoopModel(); goal = None; goals = None; _goals_level = None
+    n = 5; origin = "induced"; model = _NoopModel(); goal = None; goals = None; _goals_level = None; _goals_version = 0
     def call(self, name, sc, default): return default
     def roled(self, sc): return sc
     def is_goal(self, sc): return bool(self.goal.is_goal(sc)) if self.goal else False
