@@ -193,6 +193,7 @@ class Object:
     color_mask: Optional[np.ndarray] = None   # bbox-sized int8 (-1 outside) for multi-colour objects
     parts: Optional[list] = None              # components a fused object was built from (tracking only, not serialised)
     composite: bool = False                   # adjacent components whose union is a filled rectangle (a pattern / canvas / button)
+    occluded: bool = False                    # a static object currently hidden under a moving one: kept in the scene at its last position
 
     @property
     def center(self) -> tuple[int, int]:
@@ -294,6 +295,10 @@ class Scene:
     regions: list[Region]
     objects: list[Object]
     aux: dict = field(default_factory=dict)   # hidden-state estimates (spec §8)
+    # the colour last seen at each cell while no object covered it (-1 = never seen), kept by Perception per level: a
+    # predicted scene paints the cells a moved object vacates from it, so a corridor / floor / decoration under a piece
+    # renders as what it is, not as the region background (docs/029: ls20's move model collapsed on exactly this)
+    backdrop: Optional[np.ndarray] = field(default=None, repr=False, compare=False)
 
     # ── lookups ──
     def get(self, obj_id: int) -> Optional[Object]:
@@ -332,7 +337,7 @@ class Scene:
 
     def copy(self, objects: Optional[list[Object]] = None, aux: Optional[dict] = None) -> "Scene":
         return Scene(self.frame_hash, self.grid_shape, list(self.regions), list(self.objects if objects is None else objects),
-                     dict(self.aux if aux is None else aux))
+                     dict(self.aux if aux is None else aux), self.backdrop)
 
     def render(self) -> np.ndarray:
         """Rasterise regions + objects back into a grid (background = region colours)."""
@@ -345,7 +350,11 @@ class Scene:
                 sub[reg.mask] = reg.bg_color
             else:
                 g[r0:r1, c0:c1] = reg.bg_color
-        for o in self.objects:
+        if self.backdrop is not None and self.backdrop.shape == g.shape:
+            known = self.backdrop >= 0
+            g[known] = self.backdrop[known]
+        for o in sorted(self.objects, key=lambda o: not o.occluded):     # hidden static objects first, movers on top
+
             r0, c0, r1, c1 = o.bbox
             rr0, cc0, rr1, cc1 = max(r0, 0), max(c0, 0), min(r1, h), min(c1, w)
             if rr1 <= rr0 or cc1 <= cc0:

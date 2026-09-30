@@ -335,7 +335,8 @@ def induce_hypotheses(log: list[Transition], semantics: dict, available: list[Ac
 
     out = []
     variants = [("induced:move+walls+floor+collect+push", True, True, True, True), ("induced:move+floor+collect", False, True, True, False),
-                ("induced:move+walls+collect", True, False, True, False), ("induced:move+floor", False, True, False, False), ("induced:move", False, False, False, False)]
+                ("induced:move+walls+collect", True, False, True, False), ("induced:move+floor", False, True, False, False), ("induced:move", False, False, False, False),
+                ("induced:move+collect", False, False, True, False)]     # region boundary blocks, no colour rule: corridors of the background colour are walkable
     for name, w, f, c, p in variants:
         role_fn = _role_fn_factory(agent_keys, wall_colors if w else set(), collectible_colors if c else set(), agent_colors, pushable_colors if p else set(),
                                    hints["indicator_boxes"], hints.get("indicator_regions", set()), hints.get("indicator_classes", set()))

@@ -41,6 +41,8 @@ class Perception:
         self._dynamic: set[tuple] = set()                    # (colour, axis, lo, hi): panels seen changing extent -> objects, not regions
         self.reparse_needed = False                          # a panel was just found dynamic: callers re-parse the level's transitions
         self.timings: list[float] = []
+        self._backdrop: Optional[np.ndarray] = None       # per level: colour last seen at each uncovered cell (Scene.backdrop)
+        self._ever_moved: set[int] = set()                # per level: tracking ids that changed position at least once
         self.merge_confirmed = False                         # a merge was confirmed OR a composite dissolved: callers refit past transitions
 
     # ── main entry points ──
@@ -75,7 +77,58 @@ class Perception:
                     fused.append(fuse(members, grid, regions)); consumed |= {m.id for m in members}
             tracked = [o for o in tracked if o.id not in consumed] + fused
         tracked.sort(key=lambda o: o.id)
-        scene = Scene(frame.hash, tuple(grid.shape), regions, tracked, {"_global_bg": global_bg, "_merge_candidates": sorted(cand), "_raw_regions": raw_regions})
+        if prev is None:
+            self._ever_moved = set()
+        all_cover = np.zeros(grid.shape, dtype=bool)
+        def paint(cover, o):
+            r0, c0, r1, c1 = o.bbox
+            rr0, cc0, rr1, cc1 = max(r0, 0), max(c0, 0), min(r1, grid.shape[0]), min(c1, grid.shape[1])
+            if rr1 > rr0 and cc1 > cc0:
+                cover[rr0:rr1, cc0:cc1] |= o.mask[rr0 - r0:rr1 - r0, cc0 - c0:cc1 - c0]
+        for o in tracked:
+            paint(all_cover, o)
+        movers: set[int] = set()
+        if prev is not None:
+            prev_by_id = {o.id: o for o in prev.objects}
+            for o in tracked:
+                p_ = prev_by_id.get(o.id)
+                if p_ is None:
+                    movers.add(o.id)                        # appeared: not scenery until it proves static
+                elif tuple(p_.bbox) != tuple(o.bbox):
+                    self._ever_moved.add(o.id)
+            movers |= self._ever_moved
+            mover_cover_now = np.zeros(grid.shape, dtype=bool)     # hidden = under a MOVER (a static object split by one is not hidden)
+            for o in tracked:
+                if o.id in movers:
+                    paint(mover_cover_now, o)
+            # a static object (never moved on this level) whose pixels all lie under other objects now is occluded, not gone:
+            # it stays in the scene at its position so a predicted scene shows it again once the mover leaves (docs/029)
+            present = {o.id for o in tracked}
+            for p_ in prev.objects:
+                if p_.id in present or p_.id in self._ever_moved:
+                    continue
+                r0, c0, r1, c1 = p_.bbox
+                rr0, cc0, rr1, cc1 = max(r0, 0), max(c0, 0), min(r1, grid.shape[0]), min(c1, grid.shape[1])
+                if rr1 <= rr0 or cc1 <= cc0:
+                    continue
+                m = p_.mask[rr0 - r0:rr1 - r0, cc0 - c0:cc1 - c0]
+                if m.any() and bool(np.all(mover_cover_now[rr0:rr1, cc0:cc1][m])):
+                    o = p_.moved(0, 0); o.occluded = True; o.role = None; tracked.append(o)
+            tracked.sort(key=lambda o: o.id)
+        # backdrop = the colour last seen at each cell while no MOVING object covered it: static scenery (floors, corridors,
+        # walls, decorations) is recorded, cells under a mover keep what was there before it arrived. The first frame of a
+        # level records only uncovered cells (nothing has moved yet, so any object may be a mover). A predicted scene paints vacated cells from it.
+        if prev is None or self._backdrop is None or self._backdrop.shape != grid.shape:
+            # first frame of a level: nothing has moved yet, so what is under any object is unknown (-1 -> region colour)
+            self._backdrop = grid.astype(np.int8).copy(); self._backdrop[all_cover] = -1
+        else:
+            mover_cover = np.zeros(grid.shape, dtype=bool)
+            for o in tracked:
+                if o.id in movers:
+                    paint(mover_cover, o)
+            self._backdrop[~mover_cover] = grid[~mover_cover]
+        scene = Scene(frame.hash, tuple(grid.shape), regions, tracked, {"_global_bg": global_bg, "_merge_candidates": sorted(cand), "_raw_regions": raw_regions},
+                      self._backdrop.copy())
         self.timings.append(time.perf_counter() - t0)
         return scene
 
