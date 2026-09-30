@@ -265,11 +265,13 @@ def induce_hypotheses(log: list[Transition], semantics: dict, available: list[Ac
     agent_keys = set(hints["agent"]); agent_colors = set(hints["agent_colors"])
     from .effects import induce_effect_model
     effects = induce_effect_model(log, semantics, available, knowledge)     # joint-effect table: every trigger, with resize guards
+    from .point import induce_point_hypotheses
+    points = induce_point_hypotheses(log, semantics, available, knowledge)  # click = destination, the piece steps toward it
     if not moves or not agent_keys:
-        return induce_click_hypotheses(log, semantics, available, knowledge) + effects
+        return induce_click_hypotheses(log, semantics, available, knowledge) + effects + points
     dirs = {int(k.replace("ACTION", "")): d for k, d in moves.items() if k.startswith("ACTION")}
     if not dirs:
-        return induce_click_hypotheses(log, semantics, available, knowledge) + effects
+        return induce_click_hypotheses(log, semantics, available, knowledge) + effects + points
     multi = induce_multi_agent(log, semantics, available)
     buttons = sorted({a.id for a in available if a.type == "BUTTON"})
     noop_buttons = tuple(b for b in buttons if f"ACTION{b}" in semantics and semantics[f"ACTION{b}"].get("class") == "NOOP")

@@ -242,7 +242,13 @@ class HypothesisPolicy:
         out: list[InducedHypothesis] = []
         for wh in H[:limit]:
             G = self.template_goals(s, log, wh.model, goal_inf)
-            actions_fn = (lambda scene, sem=sem, av=available: action_set(scene, av, semantics=sem))
+            if getattr(wh.model, "point_game", False):
+                # a point-select model plans over destinations: steering clicks around each mover plus the usual object clicks
+                from ..wml.point import point_click_candidates
+                actions_fn = (lambda scene, sem=sem, av=available, m=wh.model: point_click_candidates(m.with_roles(scene), getattr(m, "point_step", 1))
+                              + [a for a in action_set(scene, av, semantics=sem) if a.type == "CLICK"][:16])
+            else:
+                actions_fn = (lambda scene, sem=sem, av=available: action_set(scene, av, semantics=sem))
             out.append(InducedHypothesis(wh, G, ids.setdefault(wh.name, 1000 + len(ids)), actions_fn))
         return out
 
