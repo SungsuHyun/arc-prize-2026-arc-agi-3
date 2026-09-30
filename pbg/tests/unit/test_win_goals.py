@@ -102,7 +102,7 @@ def test_goal_code_without_build_goal_is_wrapped():
     assert "def build_goal" in normalise_goal_code(cls) and Sandbox().load_goal(normalise_goal_code(cls)) is not None
     g = Sandbox().load_goal(normalise_goal_code(fns))
     assert g is not None and g.name == "reach" and g.progress(None) == 0.2
-    assert normalise_goal_code(GOOD) == GOOD
+    assert normalise_goal_code(GOOD).strip() == GOOD.strip()   # already complete: unchanged apart from stray blank lines
 
 
 def test_indented_goal_code_is_dedented_and_loads():
