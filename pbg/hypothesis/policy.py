@@ -144,7 +144,8 @@ class InducedHypothesis(Hypothesis):
 GD_STEPS_PER_LEVEL = 6       # goal-directed steps a verified-but-planless model may take per level before the model is questioned
 APPROX_ACTIONS_PER_LEVEL = 24  # actions an approximate model may spend per level on closed-loop plans (ls20 spent 66 for nothing)
 LLM_COOLDOWN_ACTIONS = 4     # with a usable model that is merely stuck, at least this many new actions between two LLM rounds
-PLAN_SECONDS_TOTAL = 15.0    # one plan() call tries every untried goal within this budget (cheaper than one LLM round)
+PLAN_SECONDS_TOTAL = 24.0    # one plan() call tries every untried goal within this budget (cheaper than one LLM round)
+PLAN_FULL_TIME_GOALS = 2     # the top-ranked untried goals get the full plan_time each; the rest share what is left
 
 
 class HypothesisPolicy:
@@ -225,7 +226,7 @@ class HypothesisPolicy:
             return []
 
     def induced_candidates(self, s: Session, log: list[Transition], n: int, limit: int = 3, ids: Optional[dict] = None,
-                           wml=None, goal_inf=None) -> list[InducedHypothesis]:
+                           wml=None, goal_inf=None, click_map=None) -> list[InducedHypothesis]:
         """Prior-composed models induced from this level's log, each paired with every goal template ranked for its roles.
         `ids` keeps one number per model name across rounds, so a no-plan verdict against a model sticks to it."""
         if not log:
@@ -245,19 +246,21 @@ class HypothesisPolicy:
             if getattr(wh.model, "point_game", False):
                 # a point-select model plans over destinations: steering clicks around each mover plus the usual object clicks
                 from ..wml.point import point_click_candidates
-                actions_fn = (lambda scene, sem=sem, av=available, m=wh.model: point_click_candidates(m.with_roles(scene), getattr(m, "point_step", 1))
-                              + [a for a in action_set(scene, av, semantics=sem) if a.type == "CLICK"][:16])
+                actions_fn = (lambda scene, sem=sem, av=available, m=wh.model, cm=click_map: point_click_candidates(m.with_roles(scene), getattr(m, "point_step", 1))
+                              + [a for a in action_set(scene, av, semantics=sem, click_map=cm) if a.type == "CLICK"][:16])
             else:
-                actions_fn = (lambda scene, sem=sem, av=available: action_set(scene, av, semantics=sem))
+                # with a click map that has evidence, only classes that reacted (or were never tried) are candidates: 4-5 buttons
+                # instead of 40 object centres (vc33 level 2 never finished a plan over 40 clicks)
+                actions_fn = (lambda scene, sem=sem, av=available, cm=click_map: action_set(scene, av, semantics=sem, click_map=cm))
             out.append(InducedHypothesis(wh, G, ids.setdefault(wh.name, 1000 + len(ids)), actions_fn))
         return out
 
-    def goal_directed_step(self, h: Hypothesis, s: Session, observed: dict, tried_here: set, seen_states: set) -> Optional[Action]:
+    def goal_directed_step(self, h: Hypothesis, s: Session, observed: dict, tried_here: set, seen_states: set, click_map=None) -> Optional[Action]:
         """When a usable model yields no plan (docs/029 P1-4): the candidate action whose predicted outcome raises the goal's
         progress the most, or leads to a board not seen yet; unknown outcomes count as mildly informative."""
         avail = s.available_actions()
         cands = [a for a in h.call("candidate_actions", s.scene, []) if isinstance(a, Action) and _available(a, avail)]
-        for a in action_set(s.scene, avail):
+        for a in action_set(s.scene, avail, click_map=click_map):
             if a not in cands:
                 cands.append(a)
         sk = state_key(s.scene); cur = h.progress(s.scene)
@@ -314,11 +317,12 @@ class HypothesisPolicy:
                 if nxt is None:
                     continue
                 yield a, nxt
-        per_goal = min(self.plan_time, max(1.5, PLAN_SECONDS_TOTAL / len(goals)))
         t_end = time.time() + PLAN_SECONDS_TOTAL
-        for g in goals:
-            if time.time() > t_end:
+        for i, g in enumerate(goals):
+            left = t_end - time.time()
+            if left <= 0:
                 break
+            per_goal = min(self.plan_time, left) if i < PLAN_FULL_TIME_GOALS else max(1.5, min(3.0, left / max(1, len(goals) - i)))
             h.goal = g
             tried_goals.add((h.n, getattr(g, "name", "?"), sk))
             try:
@@ -388,6 +392,7 @@ class HypothesisPolicy:
                 if hyp is not None:
                     hyp.verdict = None; hyp.goals = None
             log = s.level_log()
+            knowledge.clicks.extend(log[-8:])       # click response map: which classes react (candidates for plans / goal-directed steps)
             # verify the current hypothesis on this level's log
             if hyp is not None and log:
                 hyp.verdict = verify(hyp.model, log, hyp.ignore)
@@ -400,7 +405,7 @@ class HypothesisPolicy:
                 plan = self.plan(hyp, s, observed, log, tried_goals, dead_goals, goal_inf)
                 if plan is None or (plan == [] and not hyp.is_goal(s.scene)):
                     seen_states = {state_key(t.before) for t in log} | {state_key(t.after) for t in log}
-                    a = self.goal_directed_step(hyp, s, observed, tried_here, seen_states) if gd_steps < GD_STEPS_PER_LEVEL else None
+                    a = self.goal_directed_step(hyp, s, observed, tried_here, seen_states, knowledge.clicks) if gd_steps < GD_STEPS_PER_LEVEL else None
                     if a is not None:
                         # act on the model instead of asking the LLM to rethink: one step that raises progress / reaches a new board
                         gd_steps += 1; last_goal = hyp.goal
@@ -471,7 +476,7 @@ class HypothesisPolicy:
             # the current hypothesis' accuracy even when its verdict was cleared (no plan): a worse candidate must not replace it
             cur_key = verify(hyp.model, log, hyp.ignore).rank_key() if (hyp is not None and log) else (-1.0,)
             # 1. the deterministic path first (docs/029 priority 1): a usable prior-composed model plans without any LLM round
-            induced = self.induced_candidates(s, log, n_hyp + 1, ids=induced_ids, wml=wml, goal_inf=goal_inf)
+            induced = self.induced_candidates(s, log, n_hyp + 1, ids=induced_ids, wml=wml, goal_inf=goal_inf, click_map=knowledge.clicks)
             for c in induced:
                 c.verdict = verify(c.model, log, c.ignore) if log else Verdict(0.0, 0.0, 0, 0, 0)
             best_ind = max(induced, key=lambda c: c.verdict.rank_key(), default=None)
