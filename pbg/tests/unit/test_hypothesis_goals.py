@@ -67,3 +67,39 @@ def test_level_win_credits_the_goal_that_became_true():
     # with no goal that flipped, the plan's goal is credited
     kn2 = LevelKnowledge(); h2 = _H(); h2.goals = [_goal("x(y)")]
     assert _record_level_win(kn2, h2, s.level_log(), 1, 3, _goal("fallback(q)")) == "fallback(q)"
+
+
+def test_plan_to_reaches_an_untouched_object_under_the_model(tmp_path):
+    """Contact exploration (ls20): with an exact move model and no goal that plans, the policy plans to an object the
+    agent has not touched yet; t_explore names it, plan_to finds the path."""
+    from pbg.goal.templates import t_explore
+    p = Perception(); s = _Session(p); pol = _policy(tmp_path); pol.plan_time = 3.0
+
+    class _Move:
+        """Buttons 1-4 move the two-colour agent by 4 cells; the board is otherwise static."""
+        D = {1: (-4, 0), 2: (4, 0), 3: (0, -4), 4: (0, 4)}
+        def predict(self, sc, a):
+            if a.type != "BUTTON" or a.id not in self.D:
+                return sc
+            dr, dc = self.D[a.id]
+            return sc.copy(objects=[o.moved(dr, dc) if o.color in (12, 9) else o for o in sc.objects])
+        def with_roles(self, sc):
+            objs = []
+            for o in sc.objects:
+                o = o.moved(0, 0); o.role = "agent" if o.color in (12, 9) else ("collectible" if o.color == 2 else "wall" if o.color == 5 else "unknown"); objs.append(o)
+            return sc.copy(objects=objs)
+
+    class _H:
+        n = 1; origin = "induced"; model = _Move(); goal = None; goals = None
+        def call(self, name, sc, default): return default
+        def roled(self, sc): return self.model.with_roles(sc)
+    h = _H()
+    ex = t_explore(h.roled(s.scene), {"touched": set()})
+    assert ex and ex[0].template == "explore"
+    plan = pol.plan_to(h, s, {}, ex[0])
+    assert plan, "a path to the untouched collectible must exist"
+    # walking the plan under the model ends next to / on an untouched object
+    sc = s.scene
+    for a in plan:
+        sc = h.model.predict(sc, a)
+    assert ex[0].is_goal(h.roled(sc))

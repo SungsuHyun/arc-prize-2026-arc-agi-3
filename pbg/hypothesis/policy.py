@@ -33,6 +33,7 @@ from ..planner.astar import astar
 from ..planner.common import action_set, state_key
 from ..probe.semantics import classify_actions
 from ..goal.infer import GoalInference
+from ..goal.templates import _adjacent, t_explore
 from ..wml.refine import WorldModelLab
 from ..wml.sandbox import Sandbox
 from .contract import hypothesis_prompt
@@ -143,6 +144,7 @@ class InducedHypothesis(Hypothesis):
 
 
 GD_STEPS_PER_LEVEL = 6       # goal-directed steps a verified-but-planless model may take per level before the model is questioned
+EXPLORE_PLANS_PER_LEVEL = 8  # contact-exploration plans (reach an object not touched yet) per level when no goal plans (ls20: tile, then lock)
 APPROX_ACTIONS_PER_LEVEL = 24  # actions an approximate model may spend per level on closed-loop plans (ls20 spent 66 for nothing)
 LLM_COOLDOWN_ACTIONS = 4     # with a usable model that is merely stuck, at least this many new actions between two LLM rounds
 PLAN_SECONDS_TOTAL = 24.0    # one plan() call tries every untried goal within this budget (cheaper than one LLM round)
@@ -283,6 +285,31 @@ class HypothesisPolicy:
                 best, best_score = a, score
         return best
 
+    def plan_to(self, h: Hypothesis, s: Session, observed: dict, goal, depth: int = 80) -> Optional[list[Action]]:
+        """A* under h's model to one given goal object (is_goal/progress on the roled scene)."""
+        available = s.available_actions()
+        def actions_fn(scene: Scene) -> list[Action]:
+            cands = [a for a in h.call("candidate_actions", scene, []) if isinstance(a, Action) and _available(a, available)]
+            return (cands or [a for a in available if a.type == "BUTTON"])[:48]
+        def successors(scene: Scene):
+            sk = state_key(scene)
+            for a in actions_fn(scene):
+                nxt = observed.get((sk, a.label()))
+                if nxt is None:
+                    try:
+                        nxt = h.model.predict(scene, a)
+                    except Exception:
+                        nxt = None
+                if nxt is not None:
+                    yield a, nxt
+        try:
+            if goal.is_goal(h.roled(s.scene)):
+                return []
+            return astar(s.scene, successors, lambda sc: goal.is_goal(h.roled(sc)), lambda sc: goal.progress(h.roled(sc)), depth=depth, time_limit=self.plan_time)
+        except Exception as e:
+            self.log(f"planning failed: {e!r}")
+            return None
+
     # ── planning on a verified hypothesis ──
     def plan(self, h: Hypothesis, s: Session, observed: dict, log: list = (), tried_goals: Optional[set] = None, dead_goals: Optional[set] = None,
              goal_inf=None, level_goals: list = (), goals_version: int = 0) -> Optional[list[Action]]:
@@ -371,12 +398,51 @@ class HypothesisPolicy:
         level_goals: list = []              # win predicates that passed verification on the evidence: planned first, carried to the next level
         goals_version = 0                   # bumped when level_goals change so every hypothesis rebuilds its goal list
         goal_rounds = 0; goal_feedback: list[str] = []; goal_rejected: list[str] = []
+        touched: set = set(); explore_plans = 0       # contact exploration: object identities the agent has overlapped / touched on this level
 
         def act(a: Action, kind: str) -> Optional[Transition]:
             t = s.act(a, kind)
             if t is not None and t.status_change is None and t.action.type != "RESET":
                 observed[(state_key(t.before), a.label())] = t.after
+                mark_touched(t.after)
             return t
+
+        def mark_touched(scene: Scene) -> None:
+            if hyp is None:
+                return
+            sc = hyp.roled(scene)
+            for ag in [o for o in sc.objects if o.role and "agent" in o.role]:
+                for o in sc.objects:
+                    if o.id != ag.id and (ag.overlaps(o) or _adjacent(ag, o)):
+                        touched.add(o.identity())
+
+        def run_plan(plan: list, exact: bool, why: str) -> str:
+            """Execute a plan step by step with the pixel check; returns 'levelup' | 'mismatch' | 'refused' | 'done'."""
+            nonlocal counterexamples, approx_actions
+            for a in (plan if exact else plan[:2]):
+                if not exact:
+                    approx_actions += 1
+                    if approx_actions == APPROX_ACTIONS_PER_LEVEL:
+                        events.emit("EXECUTE", "REVISE", f"approximate model spent {APPROX_ACTIONS_PER_LEVEL} actions on this level without a level-up: exact verification required from now on", budget_used=budget.used())
+                        counterexamples = (counterexamples + [f"Acting on your approximate model for {APPROX_ACTIONS_PER_LEVEL} actions did not end the level: the dynamics or the win condition are wrong in a way the closeness score hides."])[-4:]
+                pred = None
+                try:
+                    pred = hyp.model.predict(s.scene, a)
+                except Exception:
+                    pred = None
+                t = act(a, "plan")
+                if t is None:
+                    return "refused"
+                if t.status_change:
+                    events.emit("EXECUTE", "LOOK", f"{t.status_change} after {a.label()} ({why})", transition_id=t.id, budget_used=budget.used()); return "levelup"
+                if pred is not None:
+                    ok, n, win = pixel_equal(pred, t.after_frame.grid, _boxes(t.before, hyp.ignore))
+                    if not ok:
+                        ce = verify(hyp.model, [t], hyp.ignore).counterexamples
+                        counterexamples = (counterexamples + ce)[-4:]
+                        events.emit("EXECUTE", "REVISE", f"mismatch after {a.label()} ({n} px, {why}): counter-example recorded", transition_id=t.id, budget_used=budget.used())
+                        return "mismatch"
+            return "done"
 
         events.emit("START", "LOOK", "hypothesis policy: look, hypothesise, test, verify, revise, plan", budget_used=0)
         explored = None
@@ -409,6 +475,7 @@ class HypothesisPolicy:
                 events.emit("LOOK", "LOOK", f"level {level} -> {s.level}: the hypothesis must verify again on the new board" + (f"; win credited to goal '{won_name}'" if won_name else ""), budget_used=budget.used())
                 level = s.level; rounds = 0; idle_rounds = 0; approx_budget = 6; counterexamples = []; observed.clear(); tried_here.clear(); no_plan_n = None; gd_steps = 0; approx_actions = 0
                 tried_goals.clear(); dead_goals.clear(); last_goal = None; goal_rounds = 0; goal_feedback = []; goal_rejected = []
+                touched.clear(); explore_plans = 0
                 if hyp is not None:
                     hyp.verdict = None; hyp.goals = None
             log = s.level_log()
@@ -466,6 +533,31 @@ class HypothesisPolicy:
                                     (hd / f"goal_L{level}_r{goal_rounds}_{g.name[:24].replace('/', '_')}.py").write_text(g.code)
                             continue
                         events.emit("GOAL", "PLAN", f"no win predicate passed verification (round {goal_rounds}/{GOAL_ROUNDS}, {time.time() - t0:.0f}s)", budget_used=budget.used())
+                    if explore_plans < EXPLORE_PLANS_PER_LEVEL:
+                        # contact exploration under the model: reach an object the agent has not touched yet (nearest first). What a
+                        # touch does (pick up, unlock, nothing) is evidence the model and the goal lack; a sequence win (tile, then
+                        # lock) falls out of it without a sequence template.
+                        mark_touched(s.scene)
+                        ex = t_explore(hyp.roled(s.scene), {"touched": touched})
+                        eplan = None
+                        if ex:
+                            saved = hyp.goal
+                            try:
+                                hyp.goal = ex[0]
+                                eplan = self.plan_to(hyp, s, observed, ex[0])
+                            finally:
+                                hyp.goal = saved
+                        if eplan:
+                            explore_plans += 1
+                            events.emit("PLAN", "EXECUTE", f"no goal plans -> contact exploration {explore_plans}/{EXPLORE_PLANS_PER_LEVEL}: {len(eplan)} steps to an untouched object", budget_used=budget.used())
+                            r = run_plan(eplan, True, "explore")
+                            mark_touched(s.scene)
+                            if r == "done":
+                                # touched: the goal-directed step / next plan sees the new board; nothing to record here
+                                pass
+                            continue
+                        events.emit("PLAN", "PLAN", "contact exploration: no untouched object is reachable under the model", budget_used=budget.used())
+                        explore_plans = EXPLORE_PLANS_PER_LEVEL
                     events.emit("PLAN", "TEST", f"no plan under h{hyp.n} for goal '{getattr(hyp.goal, 'name', '?')}' -> test the doubts", budget_used=budget.used())
                     counterexamples = (counterexamples + [f"Your model verified but the planner found NO action sequence from the current board to your goal '{getattr(hyp.goal, 'name', '?')}' using candidate_actions: the goal, the candidate actions or the dynamics are incomplete."])[-4:]
                     hyp.verdict = None; no_plan_n = hyp.n
@@ -484,29 +576,7 @@ class HypothesisPolicy:
                     mode = "exact" if exact else f"approximate (approx {hyp.verdict.approx:.2f}): first 2 steps, then re-think"
                     events.emit("PLAN", "EXECUTE", f"plan of {len(plan)} under h{hyp.n} [{mode}]: {[a.label() for a in plan[:10]]}", budget_used=budget.used())
                     plans_executed += 1; last_goal = hyp.goal
-                    for a in (plan if exact else plan[:2]):
-                        if not exact:
-                            approx_actions += 1
-                            if approx_actions == APPROX_ACTIONS_PER_LEVEL:
-                                events.emit("EXECUTE", "REVISE", f"approximate model spent {APPROX_ACTIONS_PER_LEVEL} actions on this level without a level-up: exact verification required from now on", budget_used=budget.used())
-                                counterexamples = (counterexamples + [f"Acting on your approximate model for {APPROX_ACTIONS_PER_LEVEL} actions did not end the level: the dynamics or the win condition are wrong in a way the closeness score hides."])[-4:]
-                        pred = None
-                        try:
-                            pred = hyp.model.predict(s.scene, a)
-                        except Exception:
-                            pred = None
-                        t = act(a, "plan")
-                        if t is None:
-                            break
-                        if t.status_change:
-                            events.emit("EXECUTE", "LOOK", f"{t.status_change} after {a.label()}", transition_id=t.id, budget_used=budget.used()); break
-                        if pred is not None:
-                            ok, n, win = pixel_equal(pred, t.after_frame.grid, _boxes(t.before, hyp.ignore))
-                            if not ok:
-                                ce = verify(hyp.model, [t], hyp.ignore).counterexamples
-                                counterexamples = (counterexamples + ce)[-4:]
-                                events.emit("EXECUTE", "REVISE", f"mismatch after {a.label()} ({n} px): counter-example recorded", transition_id=t.id, budget_used=budget.used())
-                                break
+                    run_plan(plan, exact, f"goal '{getattr(hyp.goal, 'name', '?')}'")
                     continue
             # not usable: hypothesise (or revise), then run its tests
             if idle_rounds >= self.max_rounds:
@@ -620,7 +690,7 @@ class HypothesisPolicy:
                         "verified": bool(hyp.verdict and hyp.verdict.usable(self.min_acc)), "origin": hyp.origin}] if hyp else [],
                       [{"name": getattr(hyp.goal, "name", "?"), "win": hyp.doc.get("win", "")}] if hyp and hyp.goal else [],
                       {"rounds": n_hyp, "plans": plans_executed, "tests": tests_run, "repeats_dropped": repeats_dropped, "gd_steps": gd_steps, "llm_rounds_skipped": llm_rounds_skipped,
-                       "win_goals": [g.name for g in level_goals], "goal_rounds": goal_rounds, "explore": explored}, round(time.time() - t_start, 1))
+                       "win_goals": [g.name for g in level_goals], "goal_rounds": goal_rounds, "explore_plans": explore_plans, "explore": explored}, round(time.time() - t_start, 1))
 
 
 def _record_level_win(knowledge, hyp, prev_log: list, level: int, actions: int, last_goal) -> Optional[str]:
