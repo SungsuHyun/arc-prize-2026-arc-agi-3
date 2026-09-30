@@ -69,10 +69,10 @@ def test_level_win_credits_the_goal_that_became_true():
     assert _record_level_win(kn2, h2, s.level_log(), 1, 3, _goal("fallback(q)")) == "fallback(q)"
 
 
-def test_plan_to_reaches_an_untouched_object_under_the_model(tmp_path):
-    """Contact exploration (ls20): with an exact move model and no goal that plans, the policy plans to an object the
-    agent has not touched yet; t_explore names it, plan_to finds the path."""
-    from pbg.goal.templates import t_explore
+def test_contact_exploration_walks_onto_the_nearest_untouched_object(tmp_path):
+    """Contact exploration (ls20): with an exact move model and no goal that plans, the policy plans to put the agent ON
+    the nearest object it has not touched yet (overlap), falling back to standing next to it."""
+    from pbg.hypothesis.policy import ContactGoal, contact_targets
     p = Perception(); s = _Session(p); pol = _policy(tmp_path); pol.plan_time = 3.0
 
     class _Move:
@@ -94,12 +94,13 @@ def test_plan_to_reaches_an_untouched_object_under_the_model(tmp_path):
         def call(self, name, sc, default): return default
         def roled(self, sc): return self.model.with_roles(sc)
     h = _H()
-    ex = t_explore(h.roled(s.scene), {"touched": set()})
-    assert ex and ex[0].template == "explore"
-    plan = pol.plan_to(h, s, {}, ex[0])
-    assert plan, "a path to the untouched collectible must exist"
-    # walking the plan under the model ends next to / on an untouched object
+    targets = contact_targets(h.roled(s.scene), set(), set())
+    assert targets and all(o.role != "wall" for o in targets)
+    goal = ContactGoal(targets[0], "overlap")
+    plan = pol.plan_to(h, s, {}, goal, time_limit=2.5)
+    assert plan, "a path onto the nearest untouched object must exist"
     sc = s.scene
     for a in plan:
         sc = h.model.predict(sc, a)
-    assert ex[0].is_goal(h.roled(sc))
+    assert goal.is_goal(h.roled(sc))
+    assert not ContactGoal(targets[0], "overlap").is_goal(h.roled(s.scene))     # not touched at the start

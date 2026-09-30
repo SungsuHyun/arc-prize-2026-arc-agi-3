@@ -285,7 +285,7 @@ class HypothesisPolicy:
                 best, best_score = a, score
         return best
 
-    def plan_to(self, h: Hypothesis, s: Session, observed: dict, goal, depth: int = 80) -> Optional[list[Action]]:
+    def plan_to(self, h: Hypothesis, s: Session, observed: dict, goal, depth: int = 80, time_limit: Optional[float] = None) -> Optional[list[Action]]:
         """A* under h's model to one given goal object (is_goal/progress on the roled scene)."""
         available = s.available_actions()
         def actions_fn(scene: Scene) -> list[Action]:
@@ -305,7 +305,7 @@ class HypothesisPolicy:
         try:
             if goal.is_goal(h.roled(s.scene)):
                 return []
-            return astar(s.scene, successors, lambda sc: goal.is_goal(h.roled(sc)), lambda sc: goal.progress(h.roled(sc)), depth=depth, time_limit=self.plan_time)
+            return astar(s.scene, successors, lambda sc: goal.is_goal(h.roled(sc)), lambda sc: goal.progress(h.roled(sc)), depth=depth, time_limit=time_limit or self.plan_time)
         except Exception as e:
             self.log(f"planning failed: {e!r}")
             return None
@@ -399,6 +399,7 @@ class HypothesisPolicy:
         goals_version = 0                   # bumped when level_goals change so every hypothesis rebuilds its goal list
         goal_rounds = 0; goal_feedback: list[str] = []; goal_rejected: list[str] = []
         touched: set = set(); explore_plans = 0       # contact exploration: object identities the agent has overlapped / touched on this level
+        unreachable: set = set()                      # targets no plan reached on this level (skipped until the level changes)
 
         def act(a: Action, kind: str) -> Optional[Transition]:
             t = s.act(a, kind)
@@ -475,7 +476,7 @@ class HypothesisPolicy:
                 events.emit("LOOK", "LOOK", f"level {level} -> {s.level}: the hypothesis must verify again on the new board" + (f"; win credited to goal '{won_name}'" if won_name else ""), budget_used=budget.used())
                 level = s.level; rounds = 0; idle_rounds = 0; approx_budget = 6; counterexamples = []; observed.clear(); tried_here.clear(); no_plan_n = None; gd_steps = 0; approx_actions = 0
                 tried_goals.clear(); dead_goals.clear(); last_goal = None; goal_rounds = 0; goal_feedback = []; goal_rejected = []
-                touched.clear(); explore_plans = 0
+                touched.clear(); explore_plans = 0; unreachable.clear()
                 if hyp is not None:
                     hyp.verdict = None; hyp.goals = None
             log = s.level_log()
@@ -538,25 +539,23 @@ class HypothesisPolicy:
                         # touch does (pick up, unlock, nothing) is evidence the model and the goal lack; a sequence win (tile, then
                         # lock) falls out of it without a sequence template.
                         mark_touched(s.scene)
-                        ex = t_explore(hyp.roled(s.scene), {"touched": touched})
-                        eplan = None
-                        if ex:
-                            saved = hyp.goal
-                            try:
-                                hyp.goal = ex[0]
-                                eplan = self.plan_to(hyp, s, observed, ex[0])
-                            finally:
-                                hyp.goal = saved
+                        eplan = None; egoal = None
+                        for target in contact_targets(hyp.roled(s.scene), touched, unreachable)[:6]:
+                            for mode in ("overlap", "adjacent"):        # walk ONTO it if the model allows (a pick-up needs overlap), else next to it
+                                g = ContactGoal(target, mode)
+                                pl = self.plan_to(hyp, s, observed, g, time_limit=2.5)
+                                if pl:
+                                    eplan, egoal = pl, g; break
+                            if eplan:
+                                break
+                            unreachable.add(target.identity())
                         if eplan:
                             explore_plans += 1
-                            events.emit("PLAN", "EXECUTE", f"no goal plans -> contact exploration {explore_plans}/{EXPLORE_PLANS_PER_LEVEL}: {len(eplan)} steps to an untouched object", budget_used=budget.used())
-                            r = run_plan(eplan, True, "explore")
+                            events.emit("PLAN", "EXECUTE", f"no goal plans -> contact exploration {explore_plans}/{EXPLORE_PLANS_PER_LEVEL}: {len(eplan)} steps, {egoal.name}", budget_used=budget.used())
+                            run_plan(eplan, True, egoal.name)
                             mark_touched(s.scene)
-                            if r == "done":
-                                # touched: the goal-directed step / next plan sees the new board; nothing to record here
-                                pass
                             continue
-                        events.emit("PLAN", "PLAN", "contact exploration: no untouched object is reachable under the model", budget_used=budget.used())
+                        events.emit("PLAN", "PLAN", f"contact exploration: no untouched object is reachable under the model ({len(unreachable)} targets tried)", budget_used=budget.used())
                         explore_plans = EXPLORE_PLANS_PER_LEVEL
                     events.emit("PLAN", "TEST", f"no plan under h{hyp.n} for goal '{getattr(hyp.goal, 'name', '?')}' -> test the doubts", budget_used=budget.used())
                     counterexamples = (counterexamples + [f"Your model verified but the planner found NO action sequence from the current board to your goal '{getattr(hyp.goal, 'name', '?')}' using candidate_actions: the goal, the candidate actions or the dynamics are incomplete."])[-4:]
@@ -691,6 +690,47 @@ class HypothesisPolicy:
                       [{"name": getattr(hyp.goal, "name", "?"), "win": hyp.doc.get("win", "")}] if hyp and hyp.goal else [],
                       {"rounds": n_hyp, "plans": plans_executed, "tests": tests_run, "repeats_dropped": repeats_dropped, "gd_steps": gd_steps, "llm_rounds_skipped": llm_rounds_skipped,
                        "win_goals": [g.name for g in level_goals], "goal_rounds": goal_rounds, "explore_plans": explore_plans, "explore": explored}, round(time.time() - t_start, 1))
+
+
+class ContactGoal:
+    """Contact exploration target: put the agent ON an object (overlap) or, failing that, next to it. Objects are identified
+    by identity (colour, bbox, shape), so a static target keeps its identity while the agent moves."""
+    template = "explore"
+
+    def __init__(self, target, mode: str):
+        self.identity = target.identity(); self.center = target.center; self.mode = mode
+        self.name = f"contact:{mode}:{target.color}@{target.bbox[0]},{target.bbox[1]}"
+
+    def _agents(self, sc):
+        return [o for o in sc.objects if o.role and "agent" in o.role]
+
+    def _target(self, sc):
+        return next((o for o in sc.objects if o.identity() == self.identity), None)
+
+    def is_goal(self, sc) -> bool:
+        t = self._target(sc)
+        if t is None:
+            return True                                   # it vanished (picked up): contact happened
+        return any(a.overlaps(t) if self.mode == "overlap" else (a.overlaps(t) or _adjacent(a, t)) for a in self._agents(sc))
+
+    def progress(self, sc) -> float:
+        ag = self._agents(sc)
+        if not ag:
+            return 0.0
+        d = min(abs(a.center[0] - self.center[0]) + abs(a.center[1] - self.center[1]) for a in ag)
+        return max(0.0, 1.0 - d / 128.0)
+
+
+def contact_targets(roled_scene, touched: set, unreachable: set) -> list:
+    """Untouched, reachable-so-far objects the agent could go and touch, nearest first."""
+    ag = [o for o in roled_scene.objects if o.role and "agent" in o.role]
+    if not ag:
+        return []
+    strips = {r.id for r in roled_scene.regions if r.kind_hint == "ui_strip"}
+    out = [o for o in roled_scene.objects if o.id not in {a.id for a in ag} and o.role not in ("wall", "indicator", "decoration") and o.region not in strips
+           and o.identity() not in touched and o.identity() not in unreachable and o.area < 400]
+    a0 = ag[0].center
+    return sorted(out, key=lambda o: abs(o.center[0] - a0[0]) + abs(o.center[1] - a0[1]))
 
 
 def _record_level_win(knowledge, hyp, prev_log: list, level: int, actions: int, last_goal) -> Optional[str]:
