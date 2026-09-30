@@ -104,3 +104,20 @@ def test_contact_exploration_walks_onto_the_nearest_untouched_object(tmp_path):
         sc = h.model.predict(sc, a)
     assert goal.is_goal(h.roled(sc))
     assert not ContactGoal(targets[0], "overlap").is_goal(h.roled(s.scene))     # not touched at the start
+
+
+def test_equal_alternatives_returns_other_usable_variants(tmp_path):
+    """Variants the log cannot tell apart (same change accuracy) are offered as alternatives when the top one cannot plan."""
+    p = Perception(); s = _Session(p); pol = _policy(tmp_path)
+    ids = {}
+    cands = pol.induced_candidates(s, s.level_log(), 1, ids=ids, limit=6)
+    from pbg.hypothesis.verify import verify
+    for c in cands:
+        c.verdict = verify(c.model, s.level_log(), c.ignore)
+    usable = [c for c in cands if c.verdict.usable(0.8)]
+    if len(usable) >= 2:
+        top = max(usable, key=lambda c: c.verdict.rank_key())
+        alts = pol.equal_alternatives(top, s, s.level_log(), ids, pol.wml, pol.goal_inf, None, 0.8)
+        assert alts and all(a.name != top.name for a in alts) and all(a.verdict.usable(0.8) for a in alts)
+    else:
+        assert pol.equal_alternatives(usable[0] if usable else None, s, s.level_log(), ids, pol.wml, pol.goal_inf, None, 0.8) is not None

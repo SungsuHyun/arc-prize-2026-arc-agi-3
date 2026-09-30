@@ -126,7 +126,7 @@ class InducedHypothesis(Hypothesis):
         self.name = wh.name
         self.doc = {"summary": f"induced model '{wh.name}' composed from the action semantics and the mechanism priors",
                     "win": goals[0].name if goals else "(no goal template fits)", "uncertain": []}
-        self.model = GuardedModel(wh.model, MODEL_SECONDS)
+        self.model = wh.model               # library code composed by the induction: no per-call trace guard (it costs 5-10x in A*)
         self.goals = list(goals)
         self.goal = self.goals[0] if self.goals else None
         self.verdict: Optional[Verdict] = None
@@ -257,6 +257,21 @@ class HypothesisPolicy:
                 actions_fn = (lambda scene, sem=sem, av=available, cm=click_map: action_set(scene, av, semantics=sem, click_map=cm))
             out.append(InducedHypothesis(wh, G, ids.setdefault(wh.name, 1000 + len(ids)), actions_fn))
         return out
+
+    def equal_alternatives(self, hyp, s: Session, log: list, ids: dict, wml, goal_inf, click_map, min_acc: float, tol: float = 0.05, limit: int = 2) -> list:
+        """Induced models the log cannot tell apart from `hyp` (usable, change accuracy within `tol`), other than hyp's own
+        variant. Where the top model has no plan because of an untested rule (ls20: a floor-colour rule forbade stepping onto
+        the tile), an equally verified variant without that rule may plan; executing its plan tests the difference."""
+        out = []
+        ref = hyp.verdict.change_accuracy if (hyp is not None and hyp.verdict is not None) else 0.0
+        for c in self.induced_candidates(s, log, ids.get("_n", 0), ids=ids, wml=wml, goal_inf=goal_inf, click_map=click_map, limit=6):
+            if hyp is not None and getattr(c, "name", None) == getattr(hyp, "name", None):
+                continue
+            c.verdict = verify(c.model, log, c.ignore) if log else Verdict(0.0, 0.0, 0, 0, 0)
+            if c.verdict.usable(min_acc) and c.verdict.change_accuracy >= ref - tol:
+                out.append(c)
+        out.sort(key=lambda c: c.verdict.rank_key(), reverse=True)
+        return out[:limit]
 
     def goal_directed_step(self, h: Hypothesis, s: Session, observed: dict, tried_here: set, seen_states: set, click_map=None) -> Optional[Action]:
         """When a usable model yields no plan (docs/029 P1-4): the candidate action whose predicted outcome raises the goal's
@@ -514,6 +529,17 @@ class HypothesisPolicy:
                                 counterexamples = (counterexamples + verify(hyp.model, [t], hyp.ignore).counterexamples)[-4:]
                                 events.emit("EXECUTE", "REVISE", f"mismatch after goal-directed {a.label()} ({n} px): counter-example recorded", transition_id=t.id, budget_used=budget.used())
                         continue
+                    # an equally verified variant may plan where hyp cannot (its extra rule is an untested assumption)
+                    switched = False
+                    for alt in self.equal_alternatives(hyp, s, log, induced_ids, wml, goal_inf, knowledge.clicks, self.min_acc):
+                        aplan = self.plan(alt, s, observed, log, tried_goals, dead_goals, goal_inf, level_goals, goals_version)
+                        if aplan:
+                            events.emit("PLAN", "EXECUTE", f"h{hyp.n} has no plan but the equally verified h{alt.n} ('{alt.name}') plans {len(aplan)} steps to '{getattr(alt.goal, 'name', '?')}': executing it tests the rule they differ on", budget_used=budget.used())
+                            hyp = alt; plans_executed += 1; last_goal = alt.goal
+                            run_plan(aplan, True, f"goal '{getattr(alt.goal, 'name', '?')}' under alternative")
+                            switched = True; break
+                    if switched:
+                        continue
                     ev = win_evidence.get(level - 1)
                     if ev is not None and goal_rounds < GOAL_ROUNDS and not self.llm.exhausted():
                         # an exact model and no goal that plans: the win condition is not in the library. Infer it from the
@@ -539,22 +565,31 @@ class HypothesisPolicy:
                         # touch does (pick up, unlock, nothing) is evidence the model and the goal lack; a sequence win (tile, then
                         # lock) falls out of it without a sequence template.
                         mark_touched(s.scene)
-                        eplan = None; egoal = None
-                        for target in contact_targets(hyp.roled(s.scene), touched, unreachable)[:6]:
-                            for mode in ("overlap", "adjacent"):        # walk ONTO it if the model allows (a pick-up needs overlap), else next to it
-                                g = ContactGoal(target, mode)
-                                pl = self.plan_to(hyp, s, observed, g, time_limit=2.5)
-                                if pl:
-                                    eplan, egoal = pl, g; break
+                        eplan = None; egoal = None; emodel = None
+                        models = [hyp] + self.equal_alternatives(hyp, s, log, induced_ids, wml, goal_inf, knowledge.clicks, self.min_acc)
+                        for m_ in models:
+                            for target in contact_targets(m_.roled(s.scene), touched, unreachable)[:4]:
+                                for mode, tl in (("overlap", 6.0), ("adjacent", 3.0)):   # walk ONTO it if the model allows (a pick-up needs overlap), else next to it
+                                    g = ContactGoal(target, mode)
+                                    pl = self.plan_to(m_, s, observed, g, time_limit=tl)
+                                    if pl:
+                                        eplan, egoal, emodel = pl, g, m_; break
+                                if eplan:
+                                    break
                             if eplan:
                                 break
-                            unreachable.add(target.identity())
                         if eplan:
                             explore_plans += 1
+                            if emodel is not hyp:
+                                events.emit("PLAN", "PLAN", f"contact exploration: h{hyp.n} reaches nothing, the equally verified h{emodel.n} ('{emodel.name}') does", budget_used=budget.used())
+                                hyp = emodel
                             events.emit("PLAN", "EXECUTE", f"no goal plans -> contact exploration {explore_plans}/{EXPLORE_PLANS_PER_LEVEL}: {len(eplan)} steps, {egoal.name}", budget_used=budget.used())
                             run_plan(eplan, True, egoal.name)
                             mark_touched(s.scene)
                             continue
+                        for m_ in models:
+                            for target in contact_targets(m_.roled(s.scene), touched, unreachable)[:4]:
+                                unreachable.add(target.identity())
                         events.emit("PLAN", "PLAN", f"contact exploration: no untouched object is reachable under the model ({len(unreachable)} targets tried)", budget_used=budget.used())
                         explore_plans = EXPLORE_PLANS_PER_LEVEL
                     events.emit("PLAN", "TEST", f"no plan under h{hyp.n} for goal '{getattr(hyp.goal, 'name', '?')}' -> test the doubts", budget_used=budget.used())
