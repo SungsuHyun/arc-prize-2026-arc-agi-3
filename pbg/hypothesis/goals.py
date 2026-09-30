@@ -9,6 +9,7 @@ level, where the new win evidence re-checks them."""
 from __future__ import annotations
 
 import re
+import textwrap
 import threading
 from dataclasses import dataclass, field
 from typing import Callable, Optional
@@ -44,7 +45,8 @@ def build_goal():
         def progress(self, scene) -> float: ...   # 0..1, how close the board is to the condition (higher = closer)
     return Goal()
 
-Reply with exactly ONE ```python block. Rules: describe the condition through object RELATIONS (roles, colours, counts,
+Reply with exactly ONE ```python block of at most 40 lines and NO comments: do your reasoning before the block, never
+inside it (a reply cut off by the length limit is worthless). Rules: describe the condition through object RELATIONS (roles, colours, counts,
 alignment, containment, adjacency, equality of positions/shapes), never through coordinates of this level: the same
 predicate must apply to the next level, where objects sit elsewhere and there may be more of them. Scene, Object and
 numpy (as np) are already defined; do not import. Objects carry .role (from the model), .color, .colors, .bbox
@@ -126,6 +128,7 @@ def normalise_goal_code(code: str) -> str:
     """The local model often writes the predicate without the build_goal() wrapper (v7: 9 of 14 rejections were
     'build_goal missing'): a top-level class with is_goal/progress, or bare is_goal(scene)/progress(scene) functions,
     is wrapped so the sandbox can load it. Code that already defines build_goal is returned unchanged."""
+    code = textwrap.dedent(code).strip("\n") + "\n"      # the local model often indents the whole block (IndentationError)
     if "def build_goal" in code:
         return code
     if "def is_goal" in code and "def progress" in code:
@@ -166,9 +169,14 @@ def propose_goals(llm, sandbox, ev: WinEvidence, roled: Callable[[Scene], Scene]
     accepted, reasons = [], []
     for code in codes:
         code = normalise_goal_code(code)
+        ns = sandbox.load_namespace(code)                       # sets last_error with the real cause (syntax, static check, ...)
+        if ns is None:
+            reasons.append(f"the code did not load: {sandbox.last_error or 'unknown error'} -- reply with one complete, unindented python block"); continue
+        if "build_goal" not in ns:
+            reasons.append("the code defines no build_goal() (and no is_goal/progress to wrap): follow the contract"); continue
         goal = sandbox.load_goal(code)
         if goal is None:
-            reasons.append(f"the code did not load: {sandbox.last_error or 'build_goal missing'}"); continue
+            reasons.append("build_goal() raised or returned an object without is_goal/progress"); continue
         ok, why = verify_goal(goal, roled, ev, current)
         if ok:
             goal.origin = "llm"; goal.code = code; goal.confidence = 0.9; goal.template = f"win:{goal.name}"

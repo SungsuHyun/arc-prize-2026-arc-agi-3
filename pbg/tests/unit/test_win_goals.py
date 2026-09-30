@@ -103,3 +103,10 @@ def test_goal_code_without_build_goal_is_wrapped():
     g = Sandbox().load_goal(normalise_goal_code(fns))
     assert g is not None and g.name == "reach" and g.progress(None) == 0.2
     assert normalise_goal_code(GOOD) == GOOD
+
+
+def test_indented_goal_code_is_dedented_and_loads():
+    from pbg.hypothesis.goals import normalise_goal_code
+    indented = "\n".join("    " + l if l else l for l in GOOD.strip("\n").splitlines())
+    code = normalise_goal_code(indented)
+    assert code.startswith("def build_goal") and Sandbox().load_goal(code) is not None
