@@ -8,6 +8,7 @@ current board). Only predicates that pass become goals; they are tried first by 
 level, where the new win evidence re-checks them."""
 from __future__ import annotations
 
+import re
 import threading
 from dataclasses import dataclass, field
 from typing import Callable, Optional
@@ -118,6 +119,28 @@ def verify_goal(goal, roled: Callable[[Scene], Scene], ev: WinEvidence, current:
     return True, "ok"
 
 
+_CLASS_RE = re.compile(r"^class\s+(\w+)\b", re.M)
+
+
+def normalise_goal_code(code: str) -> str:
+    """The local model often writes the predicate without the build_goal() wrapper (v7: 9 of 14 rejections were
+    'build_goal missing'): a top-level class with is_goal/progress, or bare is_goal(scene)/progress(scene) functions,
+    is wrapped so the sandbox can load it. Code that already defines build_goal is returned unchanged."""
+    if "def build_goal" in code:
+        return code
+    if "def is_goal" in code and "def progress" in code:
+        classes = [m.group(1) for m in _CLASS_RE.finditer(code)]
+        if classes:
+            return code + f"\n\ndef build_goal():\n    return {classes[-1]}()\n"
+        name = "inferred_goal"
+        m = re.search(r"^name\s*=\s*['\"]([^'\"]+)['\"]", code, re.M)
+        if m:
+            name = m.group(1)
+        return code + ('\n\nclass _InferredGoal:\n    name = %r\n    def is_goal(self, scene):\n        return bool(is_goal(scene))\n'
+                       '    def progress(self, scene):\n        return float(progress(scene))\n\ndef build_goal():\n    return _InferredGoal()\n' % name)
+    return code
+
+
 def propose_goals(llm, sandbox, ev: WinEvidence, roled: Callable[[Scene], Scene], current: Scene, current_grid: np.ndarray, *, K: int = 2,
                   rejected: list = (), feedback: list = (), log=None) -> tuple[list, list[str]]:
     """Ask the model for K win predicates; return (accepted GoalInstances, verification failure reasons)."""
@@ -142,6 +165,7 @@ def propose_goals(llm, sandbox, ev: WinEvidence, roled: Callable[[Scene], Scene]
         t.join(timeout=float(getattr(llm, "cfg", {}).get("timeout", 300)) + 30)
     accepted, reasons = [], []
     for code in codes:
+        code = normalise_goal_code(code)
         goal = sandbox.load_goal(code)
         if goal is None:
             reasons.append(f"the code did not load: {sandbox.last_error or 'build_goal missing'}"); continue

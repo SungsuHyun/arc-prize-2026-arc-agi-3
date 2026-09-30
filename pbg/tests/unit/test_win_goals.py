@@ -93,3 +93,13 @@ def test_propose_goals_keeps_only_verified_predicates():
     assert [g.name for g in accepted] == ["agent_reaches_right"]
     assert accepted[0].is_goal(ev.after) and not accepted[0].is_goal(nxt) and accepted[0].template.startswith("win:")
     assert len(reasons) == 1 and "before" in reasons[0]
+
+
+def test_goal_code_without_build_goal_is_wrapped():
+    from pbg.hypothesis.goals import normalise_goal_code
+    cls = "class Goal:\n    name = 'x'\n    def is_goal(self, scene): return False\n    def progress(self, scene): return 0.0\n"
+    fns = "name = 'reach'\ndef is_goal(scene):\n    return False\ndef progress(scene):\n    return 0.2\n"
+    assert "def build_goal" in normalise_goal_code(cls) and Sandbox().load_goal(normalise_goal_code(cls)) is not None
+    g = Sandbox().load_goal(normalise_goal_code(fns))
+    assert g is not None and g.name == "reach" and g.progress(None) == 0.2
+    assert normalise_goal_code(GOOD) == GOOD
