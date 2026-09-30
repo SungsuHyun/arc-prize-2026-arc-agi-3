@@ -25,6 +25,7 @@ from ..core.events import EventLog
 from ..core.types import Action, Scene, Transition
 from ..memory.priors.mechanisms import mechanism_signatures
 from ..memory.store import Memory
+from ..orchestrator.knowledge import LevelKnowledge
 from ..orchestrator.loop import Result
 from ..orchestrator.session import Session
 from ..perception import Perception
@@ -142,6 +143,8 @@ class InducedHypothesis(Hypothesis):
 
 GD_STEPS_PER_LEVEL = 6       # goal-directed steps a verified-but-planless model may take per level before the model is questioned
 APPROX_ACTIONS_PER_LEVEL = 24  # actions an approximate model may spend per level on closed-loop plans (ls20 spent 66 for nothing)
+LLM_COOLDOWN_ACTIONS = 4     # with a usable model that is merely stuck, at least this many new actions between two LLM rounds
+PLAN_SECONDS_TOTAL = 15.0    # one plan() call tries every untried goal within this budget (cheaper than one LLM round)
 
 
 class HypothesisPolicy:
@@ -158,6 +161,7 @@ class HypothesisPolicy:
         self.load_errors: list[str] = []
         # the deterministic induction of wml/ and the goal template library run without an LLM: their models are
         # candidates next to the LLM's, verified by the same pixel verifier (docs/029 P1)
+        # defaults for the helpers; play() creates a fresh pair per game (GoalInference carries per-game demotions)
         self.wml = WorldModelLab(llm=None, memory=memory, log=self.log)
         self.goal_inf = GoalInference(memory, None, self.wml.sandbox, log=self.log)
 
@@ -191,7 +195,8 @@ class HypothesisPolicy:
                                  previous_code=prev_code, counterexamples=hints, level=s.level,
                                  ignore_boxes=prev.ignore(s.scene) if prev else (), rejected=rejected)
         codes: list = []
-        threads = [threading.Thread(target=self._generate, args=(msgs, k, codes), daemon=True) for k in range(self.K)]
+        k_count = 1 if (prev is not None and prev.verdict is not None and prev.verdict.change_accuracy >= 0.9) else self.K
+        threads = [threading.Thread(target=self._generate, args=(msgs, k, codes), daemon=True) for k in range(k_count)]
         for t in threads:
             t.start()
         for t in threads:
@@ -209,28 +214,36 @@ class HypothesisPolicy:
         return out
 
     # ── deterministic candidates (docs/029 P1-3) ──
-    def induced_candidates(self, s: Session, log: list[Transition], n: int, limit: int = 3, ids: Optional[dict] = None) -> list[InducedHypothesis]:
-        """Prior-composed models induced from this level's log, each paired with the goal templates ranked for its roles.
+    def template_goals(self, s: Session, log: list[Transition], model, goal_inf=None) -> list:
+        """Every goal template instantiated for `model`'s roles, ranked (won templates of this game first via LevelKnowledge)."""
+        goal_inf = goal_inf or self.goal_inf
+        roles_fn = getattr(model, "with_roles", None)
+        try:
+            return list(goal_inf.refine(log, [], self.memory.priors("goals"), s.level, s.scene, roles_fn=roles_fn, model=model))
+        except Exception as e:
+            self.log(f"goal inference failed: {e!r}")
+            return []
+
+    def induced_candidates(self, s: Session, log: list[Transition], n: int, limit: int = 3, ids: Optional[dict] = None,
+                           wml=None, goal_inf=None) -> list[InducedHypothesis]:
+        """Prior-composed models induced from this level's log, each paired with every goal template ranked for its roles.
         `ids` keeps one number per model name across rounds, so a no-plan verdict against a model sticks to it."""
         if not log:
             return []
         ids = ids if ids is not None else {}
+        wml = wml or self.wml
         try:
             sem = classify_actions(log)
             available = s.available_actions()
-            H = self.wml.refine(log, [], self.memory.priors("mechanisms"), scene=s.scene, semantics=sem, available=available, use_llm=False)
+            H = wml.refine(log, [], self.memory.priors("mechanisms"), scene=s.scene, semantics=sem, available=available, use_llm=False)
         except Exception as e:
             self.log(f"induction failed: {e!r}")
             return []
         out: list[InducedHypothesis] = []
         for wh in H[:limit]:
-            roles_fn = wh.model.with_roles if isinstance(wh.model, RuleModel) else None
-            try:
-                G = self.goal_inf.refine(log, [], self.memory.priors("goals"), s.level, s.scene, roles_fn=roles_fn, model=wh.model)
-            except Exception as e:
-                self.log(f"goal inference failed: {e!r}"); G = []
+            G = self.template_goals(s, log, wh.model, goal_inf)
             actions_fn = (lambda scene, sem=sem, av=available: action_set(scene, av, semantics=sem))
-            out.append(InducedHypothesis(wh, G[:3], ids.setdefault(wh.name, 1000 + len(ids)), actions_fn))
+            out.append(InducedHypothesis(wh, G, ids.setdefault(wh.name, 1000 + len(ids)), actions_fn))
         return out
 
     def goal_directed_step(self, h: Hypothesis, s: Session, observed: dict, tried_here: set, seen_states: set) -> Optional[Action]:
@@ -261,10 +274,19 @@ class HypothesisPolicy:
         return best
 
     # ── planning on a verified hypothesis ──
-    def plan(self, h: Hypothesis, s: Session, observed: dict) -> Optional[list[Action]]:
-        """Shortest path under h's model to its goal; an induced hypothesis carries several template goals and the first
-        one that yields a plan becomes its goal."""
-        goals = [g for g in (getattr(h, "goals", None) or [h.goal]) if g is not None]
+    def plan(self, h: Hypothesis, s: Session, observed: dict, log: list = (), tried_goals: Optional[set] = None, dead_goals: Optional[set] = None,
+             goal_inf=None) -> Optional[list[Action]]:
+        """Shortest path under h's model to a goal. Tries every goal not yet tried from THIS board (an LLM hypothesis' own goal
+        first, then the goal templates for its roles; an induced one its templates), within PLAN_SECONDS_TOTAL; the goal that
+        yields a plan becomes h.goal. Goals whose predicate held without a level-up (`dead_goals`) are skipped."""
+        tried_goals = tried_goals if tried_goals is not None else set()
+        dead_goals = dead_goals if dead_goals is not None else set()
+        if getattr(h, "goals", None) is None or getattr(h, "_goals_level", None) != s.level:
+            own = [h.goal] if h.goal is not None else []
+            h.goals = own + [g for g in self.template_goals(s, log, h.model, goal_inf) if getattr(g, "name", None) not in {getattr(o, "name", None) for o in own}]
+            h._goals_level = s.level
+        sk = state_key(s.scene)
+        goals = [g for g in h.goals if g is not None and getattr(g, "name", "?") not in dead_goals and (h.n, getattr(g, "name", "?"), sk) not in tried_goals]
         if not goals:
             return None
         available = s.available_actions()
@@ -286,9 +308,13 @@ class HypothesisPolicy:
                 if nxt is None:
                     continue
                 yield a, nxt
-        per_goal = max(3.0, self.plan_time / len(goals))
-        for g in goals[:3]:
+        per_goal = min(self.plan_time, max(1.5, PLAN_SECONDS_TOTAL / len(goals)))
+        t_end = time.time() + PLAN_SECONDS_TOTAL
+        for g in goals:
+            if time.time() > t_end:
+                break
             h.goal = g
+            tried_goals.add((h.n, getattr(g, "name", "?"), sk))
             try:
                 if h.is_goal(s.scene):
                     return []
@@ -297,7 +323,7 @@ class HypothesisPolicy:
                 self.log(f"planning failed: {e!r}"); plan = None
             if plan:
                 return plan
-        h.goal = goals[0]
+        h.goal = h.goals[0] if h.goals else None
         return None
 
     # ── the loop ──
@@ -308,6 +334,10 @@ class HypothesisPolicy:
         events = EventLog((self.events_dir / f"{game_id}.events.jsonl") if self.events_dir else None)
         s = Session(env, game_id, perception, self.memory, budget, log=self.log, max_seconds=self.max_seconds)
         s.start()
+        wml = WorldModelLab(llm=None, memory=self.memory, log=self.log)
+        goal_inf = GoalInference(self.memory, None, wml.sandbox, log=self.log)
+        knowledge = LevelKnowledge.load(self.memory.knowledge_path(game_id))     # goal templates that won earlier levels rank first
+        goal_inf.knowledge = knowledge; goal_inf.demoted.update(knowledge.demoted)
         hyp: Optional[Hypothesis] = None
         counterexamples: list[str] = []; rejected: list[str] = []
         observed: dict = {}
@@ -320,6 +350,10 @@ class HypothesisPolicy:
         approx_actions = 0                  # actions spent under approximate plans on this level (P2-6)
         no_plan_n: Optional[int] = None     # hypothesis that verified but produced no plan (keep it only while nothing verifies better)
         repeats_dropped = 0
+        tried_goals: set = set(); dead_goals: set = set()   # (hyp, goal, board) planned already / goals that held without a level-up
+        last_goal = None                    # goal of the last plan / goal-directed action (a level-up credits it)
+        last_llm_used = -10 ** 6            # budget.used() at the last LLM round (cooldown while a usable model is merely stuck)
+        llm_rounds_skipped = 0
 
         def act(a: Action, kind: str) -> Optional[Transition]:
             t = s.act(a, kind)
@@ -340,10 +374,13 @@ class HypothesisPolicy:
                 events.emit("LOOK", "LOOK", "game over -> RESET (hypothesis kept)", budget_used=budget.used())
                 s.act(Action.reset(), "reset"); continue
             if s.level != level:
-                events.emit("LOOK", "LOOK", f"level {level} -> {s.level}: the hypothesis must verify again on the new board", budget_used=budget.used())
+                won_name = _record_level_win(knowledge, hyp, s.level_log(level), level, s.level_actions.get(level, 0), last_goal) if s.level > level else None
+                knowledge.levels_seen.add(s.level); knowledge.demoted = dict(goal_inf.demoted); knowledge.save(self.memory.knowledge_path(game_id))
+                events.emit("LOOK", "LOOK", f"level {level} -> {s.level}: the hypothesis must verify again on the new board" + (f"; win credited to goal '{won_name}'" if won_name else ""), budget_used=budget.used())
                 level = s.level; rounds = 0; idle_rounds = 0; approx_budget = 6; counterexamples = []; observed.clear(); tried_here.clear(); no_plan_n = None; gd_steps = 0; approx_actions = 0
+                tried_goals.clear(); dead_goals.clear(); last_goal = None
                 if hyp is not None:
-                    hyp.verdict = None
+                    hyp.verdict = None; hyp.goals = None
             log = s.level_log()
             # verify the current hypothesis on this level's log
             if hyp is not None and log:
@@ -354,13 +391,13 @@ class HypothesisPolicy:
             if usable:
                 if approx:
                     approx_budget -= 1
-                plan = self.plan(hyp, s, observed)
+                plan = self.plan(hyp, s, observed, log, tried_goals, dead_goals, goal_inf)
                 if plan is None or (plan == [] and not hyp.is_goal(s.scene)):
                     seen_states = {state_key(t.before) for t in log} | {state_key(t.after) for t in log}
                     a = self.goal_directed_step(hyp, s, observed, tried_here, seen_states) if gd_steps < GD_STEPS_PER_LEVEL else None
                     if a is not None:
                         # act on the model instead of asking the LLM to rethink: one step that raises progress / reaches a new board
-                        gd_steps += 1
+                        gd_steps += 1; last_goal = hyp.goal
                         pred = hyp.model.predict(s.scene, a)
                         t = act(a, "plan")
                         if t is None:
@@ -383,14 +420,17 @@ class HypothesisPolicy:
                     hyp.verdict = None; no_plan_n = hyp.n
                     usable = False
                 elif plan == []:
-                    events.emit("PLAN", "TEST", "goal already true but no level-up: the win condition is wrong", budget_used=budget.used())
-                    counterexamples.append("The goal predicate you wrote is already TRUE on the current board, yet the level did not end: the win condition is different.")
-                    rejected.append(f"win='{str(hyp.doc.get('win', ''))[:80]}'")
-                    usable = False
+                    gname = getattr(hyp.goal, "name", "?")
+                    events.emit("PLAN", "PLAN", f"goal '{gname}' already true but no level-up: not the win condition -> demoted", budget_used=budget.used())
+                    _demote_goal(goal_inf, knowledge, hyp.goal); dead_goals.add(gname)
+                    if hyp.origin == "llm" and hyp.goal is not None and not hasattr(hyp.goal, "template"):
+                        counterexamples.append("The goal predicate you wrote is already TRUE on the current board, yet the level did not end: the win condition is different.")
+                        rejected.append(f"win='{str(hyp.doc.get('win', ''))[:80]}'")
+                    continue                      # other goals remain for this model: plan again before asking the LLM
                 else:
                     mode = "exact" if exact else f"approximate (approx {hyp.verdict.approx:.2f}): first 2 steps, then re-think"
                     events.emit("PLAN", "EXECUTE", f"plan of {len(plan)} under h{hyp.n} [{mode}]: {[a.label() for a in plan[:10]]}", budget_used=budget.used())
-                    plans_executed += 1
+                    plans_executed += 1; last_goal = hyp.goal
                     for a in (plan if exact else plan[:2]):
                         if not exact:
                             approx_actions += 1
@@ -421,13 +461,37 @@ class HypothesisPolicy:
                 stop = "UNRESOLVED"; events.emit("LOOK", "END", f"{idle_rounds} hypothesis rounds without any action", budget_used=budget.used()); break
             if self.llm.exhausted():
                 stop = "llm_exhausted"; events.emit("LOOK", "END", "LLM call cap reached", budget_used=budget.used()); break
-            rounds += 1; n_hyp += 1
             used_before = budget.used()
             # the current hypothesis' accuracy even when its verdict was cleared (no plan): a worse candidate must not replace it
             cur_key = verify(hyp.model, log, hyp.ignore).rank_key() if (hyp is not None and log) else (-1.0,)
+            # 1. the deterministic path first (docs/029 priority 1): a usable prior-composed model plans without any LLM round
+            induced = self.induced_candidates(s, log, n_hyp + 1, ids=induced_ids, wml=wml, goal_inf=goal_inf)
+            for c in induced:
+                c.verdict = verify(c.model, log, c.ignore) if log else Verdict(0.0, 0.0, 0, 0, 0)
+            best_ind = max(induced, key=lambda c: c.verdict.rank_key(), default=None)
+            if best_ind is not None and best_ind.verdict.usable(self.min_acc) and best_ind.n != no_plan_n and (hyp is None or best_ind.verdict.rank_key() >= cur_key):
+                hyp = best_ind; llm_rounds_skipped += 1
+                events.emit("HYPOTHESISE", "PLAN", f"deterministic model h{hyp.n} usable (chg {hyp.verdict.change_accuracy:.2f}/acc {hyp.verdict.accuracy:.2f}) -> plan, no LLM round", budget_used=budget.used())
+                idle_rounds = idle_rounds + 1 if budget.used() == used_before else 0
+                continue
+            # 2. a usable model that is merely stuck (no plan, goal-directed steps spent): act cheaply before the next LLM round
+            stuck = hyp is not None and no_plan_n == hyp.n
+            if stuck and budget.used() - last_llm_used < LLM_COOLDOWN_ACTIONS:
+                probe = _fallback_probe(s, tried_labels)
+                if probe:
+                    t = act(probe[0], "test")
+                    if t is not None:
+                        tests_run += 1; tried_labels.add(probe[0].label()); tried_here.add((state_key(t.before), probe[0].label())); last_goal = None; llm_rounds_skipped += 1
+                        events.emit("TEST", "TEST", f"LLM cooldown ({budget.used() - last_llm_used}/{LLM_COOLDOWN_ACTIONS} actions since the last round) -> probe {probe[0].label()}", transition_id=t.id, budget_used=budget.used())
+                        if t.status_change:
+                            events.emit("TEST", "LOOK", f"{t.status_change} after probe {probe[0].label()}", transition_id=t.id, budget_used=budget.used())
+                        idle_rounds = 0
+                        continue
+            rounds += 1; n_hyp += 1
             t0 = time.time()
             cands = self.hypothesise(s, log, hyp, counterexamples, n_hyp, rejected)
-            cands += self.induced_candidates(s, log, n_hyp, ids=induced_ids)
+            last_llm_used = budget.used()
+            cands += induced
             for c in cands:
                 c.verdict = verify(c.model, log, c.ignore) if log else Verdict(0.0, 0.0, 0, 0, 0)
                 if c.timeout_note():
@@ -487,7 +551,7 @@ class HypothesisPolicy:
                 t = act(a, "test")
                 if t is None:
                     break
-                tests_run += 1; tried_labels.add(a.label()); tried_here.add((state_key(t.before), a.label()))
+                tests_run += 1; tried_labels.add(a.label()); tried_here.add((state_key(t.before), a.label())); last_goal = None
                 if t.status_change:
                     events.emit("TEST", "LOOK", f"{t.status_change} after test {a.label()}", transition_id=t.id, budget_used=budget.used()); break
             idle_rounds = idle_rounds + 1 if budget.used() == used_before else 0
@@ -495,13 +559,43 @@ class HypothesisPolicy:
         if not stop:
             stop = st.state if st.state in ("WIN", "GAME_OVER") else ("timeout" if s.timed_out() else "budget")
         events.emit("LOOK", "END", stop, budget_used=budget.used())
+        knowledge.demoted = dict(goal_inf.demoted); knowledge.save(self.memory.knowledge_path(game_id))
         self.memory.save()
         return Result(game_id, st.state, st.level - 1 if st.state != "WIN" else (st.levels_total or st.level), st.levels_total, st.actions_used, budget.snapshot(),
                       self.llm.calls - llm_calls0, len(events.events), stop, dict(s.level_actions),
                       [{"name": f"h{hyp.n}", "score": round(hyp.verdict.accuracy, 3) if hyp.verdict else 0.0, "coverage": round(hyp.verdict.coverage, 3) if hyp.verdict else 0.0,
                         "verified": bool(hyp.verdict and hyp.verdict.usable(self.min_acc)), "origin": hyp.origin}] if hyp else [],
                       [{"name": getattr(hyp.goal, "name", "?"), "win": hyp.doc.get("win", "")}] if hyp and hyp.goal else [],
-                      {"rounds": n_hyp, "plans": plans_executed, "tests": tests_run, "repeats_dropped": repeats_dropped, "gd_steps": gd_steps, "explore": explored}, round(time.time() - t_start, 1))
+                      {"rounds": n_hyp, "plans": plans_executed, "tests": tests_run, "repeats_dropped": repeats_dropped, "gd_steps": gd_steps, "llm_rounds_skipped": llm_rounds_skipped, "explore": explored}, round(time.time() - t_start, 1))
+
+
+def _record_level_win(knowledge, hyp, prev_log: list, level: int, actions: int, last_goal) -> Optional[str]:
+    """docs/029 priority 2: which goal predicate held when the level ended (true on the last board, false on the one before)
+    becomes this game's prior for the next level (LevelKnowledge.goal_wins). Falls back to the goal the plan was executing."""
+    won = None
+    if hyp is not None and prev_log:
+        before, after = prev_log[-1].before, prev_log[-1].after
+        for g in (getattr(hyp, "goals", None) or [hyp.goal]):
+            if g is None or not hasattr(g, "template"):
+                continue
+            try:
+                if g.is_goal(hyp.roled(after)) and not g.is_goal(hyp.roled(before)):
+                    won = g; break
+            except Exception:
+                continue
+    if won is None and last_goal is not None and hasattr(last_goal, "template"):
+        won = last_goal
+    knowledge.record_win(level, won, actions)
+    return getattr(won, "name", None)
+
+
+def _demote_goal(goal_inf, knowledge, goal, penalty: float = -0.6) -> None:
+    """The goal's predicate held and the level did not end: it is not the win condition (stronger than 'unreachable')."""
+    name = getattr(goal, "name", None)
+    if name:
+        goal_inf.demoted[name] = goal_inf.demoted.get(name, 0.0) + penalty
+    if hasattr(goal, "template"):
+        knowledge.record_fail(goal)
 
 
 def _available(a: Action, avail: list) -> bool:
