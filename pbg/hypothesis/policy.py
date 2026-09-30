@@ -417,6 +417,8 @@ class HypothesisPolicy:
         goal_rounds = 0; goal_feedback: list[str] = []; goal_rejected: list[str] = []
         touched: set = set(); explore_plans = 0       # contact exploration: object identities the agent has overlapped / touched on this level
         unreachable: set = set()                      # targets no plan reached on this level (skipped until the level changes)
+        failed_modes: set = set()                     # (target identity, mode) whose plan mispredicted: overlap -> adjacent -> unreachable
+        rerank = False                                # a plan under an alternative mispredicted: re-rank the induced variants next round
 
         def act(a: Action, kind: str) -> Optional[Transition]:
             t = s.act(a, kind)
@@ -493,7 +495,7 @@ class HypothesisPolicy:
                 events.emit("LOOK", "LOOK", f"level {level} -> {s.level}: the hypothesis must verify again on the new board" + (f"; win credited to goal '{won_name}'" if won_name else ""), budget_used=budget.used())
                 level = s.level; rounds = 0; idle_rounds = 0; approx_budget = 6; counterexamples = []; observed.clear(); tried_here.clear(); no_plan_n = None; gd_steps = 0; approx_actions = 0
                 tried_goals.clear(); dead_goals.clear(); last_goal = None; goal_rounds = 0; goal_feedback = []; goal_rejected = []
-                touched.clear(); explore_plans = 0; unreachable.clear()
+                touched.clear(); explore_plans = 0; unreachable.clear(); failed_modes.clear(); rerank = False
                 if hyp is not None:
                     hyp.verdict = None; hyp.goals = None
             log = s.level_log()
@@ -501,6 +503,17 @@ class HypothesisPolicy:
             # verify the current hypothesis on this level's log
             if hyp is not None and log:
                 hyp.verdict = verify(hyp.model, log, hyp.ignore)
+            if rerank and hyp is not None and log:
+                # the alternative's plan mispredicted: the log now tells the variants apart, let the best one lead again
+                rerank = False
+                best_alt = None
+                for c in self.induced_candidates(s, log, n_hyp + 1, ids=induced_ids, wml=wml, goal_inf=goal_inf, click_map=knowledge.clicks, limit=6):
+                    c.verdict = verify(c.model, log, c.ignore)
+                    if c.verdict.usable(self.min_acc) and (best_alt is None or c.verdict.rank_key() > best_alt.verdict.rank_key()):
+                        best_alt = c
+                if best_alt is not None and best_alt.name != getattr(hyp, "name", None) and best_alt.verdict.rank_key() > hyp.verdict.rank_key():
+                    events.emit("VERIFY", "PLAN", f"after the mismatch h{best_alt.n} ('{best_alt.name}') verifies better ({best_alt.verdict.change_accuracy:.2f}/{best_alt.verdict.accuracy:.2f}) than h{hyp.n}: it leads again", budget_used=budget.used())
+                    best_alt.goals = None; hyp = best_alt
             exact = hyp is not None and hyp.verdict is not None and hyp.verdict.usable(self.min_acc)
             approx = (not exact) and hyp is not None and hyp.verdict is not None and hyp.verdict.approximate() and approx_budget > 0 and approx_actions < APPROX_ACTIONS_PER_LEVEL
             usable = exact or approx
@@ -538,7 +551,8 @@ class HypothesisPolicy:
                         if aplan:
                             events.emit("PLAN", "EXECUTE", f"h{hyp.n} has no plan but the equally verified h{alt.n} ('{alt.name}') plans {len(aplan)} steps to '{getattr(alt.goal, 'name', '?')}': executing it tests the rule they differ on", budget_used=budget.used())
                             hyp = alt; plans_executed += 1; last_goal = alt.goal
-                            run_plan(aplan, True, f"goal '{getattr(alt.goal, 'name', '?')}' under alternative")
+                            if run_plan(aplan, True, f"goal '{getattr(alt.goal, 'name', '?')}' under alternative") == "mismatch":
+                                rerank = True
                             switched = True; break
                     if switched:
                         continue
@@ -572,6 +586,8 @@ class HypothesisPolicy:
                         for m_ in models:
                             for target in contact_targets(m_.roled(s.scene), touched, unreachable)[:4]:
                                 for mode, tl in (("overlap", 6.0), ("adjacent", 3.0)):   # walk ONTO it if the model allows (a pick-up needs overlap), else next to it
+                                    if (target.identity(), mode) in failed_modes:
+                                        continue                                          # that plan mispredicted before: the model cannot do it
                                     g = ContactGoal(target, mode)
                                     pl = self.plan_to(m_, s, observed, g, time_limit=tl)
                                     if pl:
@@ -586,8 +602,13 @@ class HypothesisPolicy:
                                 events.emit("PLAN", "PLAN", f"contact exploration: h{hyp.n} reaches nothing, the equally verified h{emodel.n} ('{emodel.name}') does", budget_used=budget.used())
                                 hyp = emodel
                             events.emit("PLAN", "EXECUTE", f"no goal plans -> contact exploration {explore_plans}/{EXPLORE_PLANS_PER_LEVEL}: {len(eplan)} steps, {egoal.name}", budget_used=budget.used())
-                            run_plan(eplan, True, egoal.name)
+                            r = run_plan(eplan, True, egoal.name)
                             mark_touched(s.scene)
+                            if r == "mismatch":
+                                failed_modes.add((egoal.identity, egoal.mode)); rerank = True
+                                if egoal.mode == "adjacent" or (egoal.identity, "adjacent") in failed_modes:
+                                    unreachable.add(egoal.identity)
+                                events.emit("PLAN", "PLAN", f"contact plan mispredicted: {egoal.name} -> {'target dropped' if egoal.identity in unreachable else 'try standing next to it instead'}", budget_used=budget.used())
                             continue
                         for m_ in models:
                             for target in contact_targets(m_.roled(s.scene), touched, unreachable)[:4]:
