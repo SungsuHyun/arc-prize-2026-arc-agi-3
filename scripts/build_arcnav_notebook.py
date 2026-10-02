@@ -39,6 +39,7 @@ PRESETS = {
     "qwen38fn": {"kernel": "sungsuhyun/arc3-arcnav-q38fn", "title": "arc3-arcnav-q38fn", "out": "arcnav-q38fn",
                  "dataset_model": None, "model_source": "nvidia/qwen3-8-flash-next-nvfp4/pyTorch/v1/1",
                  "wheelhouse": "codywhatleymd/arc3-vllm-0271-sm120-wheelhouse",   # vLLM 0.27.1 (cu130, sm120, cp312)
+                 "wheel_install": ["vllm"],   # this wheelhouse's requirements.lock over-pins accelerate==1.14.0 (not in the wheels); resolve vllm from the wheels instead
                  "vllm_flags": ["--tool-call-parser", "qwen3_coder", "--reasoning-parser", "qwen3"],
                  "extra_body": {"chat_template_kwargs": {"enable_thinking": False}}, "max_tokens": 5000, "cfg_extra": {}},
 }
@@ -74,6 +75,7 @@ def markdown_cell(src: str) -> dict:
 def build() -> dict:
     sources = {name: (PKG / name).read_text() for name in SOURCE_FILES}
     wheelhouse_ref = PRESET.get("wheelhouse") or WHEELHOUSE_REF   # a preset may pin its own vLLM wheelhouse (qwen4_exp needs > 0.19)
+    wheel_install = PRESET.get("wheel_install")   # e.g. ["vllm"]: resolve from the wheels and ignore a requirements.lock that over-pins packages absent from the wheelhouse
 
     setup_cell = code_cell(dedent(f"""\
         import json, os, subprocess, sys, time
@@ -113,7 +115,8 @@ def build() -> dict:
         print(subprocess.run(['nvidia-smi', '--query-gpu=name,memory.total', '--format=csv,noheader'], capture_output=True, text=True).stdout.strip())
         if not os.path.exists(SITE + '/vllm'):
             _lock = WHEELHOUSE + '/requirements.lock'
-            _spec = (['--requirement', _lock] if os.path.exists(_lock) else ['vllm'])   # some wheelhouses ship no lock: resolve vllm + deps from the wheels
+            # a preset may force resolving from the wheels ({wheel_install!r}); else use the lock when present, else just vllm
+            _spec = {wheel_install!r} or (['--requirement', _lock] if os.path.exists(_lock) else ['vllm'])
             subprocess.run([sys.executable, '-m', 'pip', 'install', '--no-index', '--find-links', WHEELHOUSE] + _spec +
                            ['--target', SITE, '--upgrade', '--ignore-installed', '--only-binary', ':all:', '--no-compile', '--disable-pip-version-check',
                             '--no-warn-conflicts', '-q'], check=True)
