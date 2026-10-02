@@ -147,7 +147,9 @@ def image_vllm_cell() -> dict:
             try:
                 urllib.request.urlopen('http://127.0.0.1:1234/v1/models', timeout=5).read(); break
             except Exception:
-                if time.time() - t0 > 1800:
+                # ~9 min weight load + minutes of FlashInfer MoE autotuning before the port opens; v12 reached graph
+                # capture but the 1800 s wait cut it off. Give startup an hour.
+                if time.time() - t0 > 3600:
                     raise TimeoutError(open(f'{{WORK}}/vllm-server.log').read()[-4000:])
                 time.sleep(5)
         print(f'vLLM ready after {{time.time()-t0:.0f}}s')
