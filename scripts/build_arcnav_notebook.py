@@ -34,11 +34,14 @@ PRESETS = {
                    "env": {"TIKTOKEN_RS_CACHE_DIR": "/kaggle/input/datasets/sungsuhyun/tiktoken-o200k-cache"},
                    "extra_body": {"reasoning_effort": "high"}, "max_tokens": 8192, "cfg_extra": {"tool_choice_required": False}},   # v7: low effort + required tool choice acted a lot but poorly
     # Qwen3.8-Flash-Next: 125B MoE (qwen4_exp / Qwen4ExpForConditionalGeneration), NVIDIA ModelOpt NVFP4 (FP8 PLE/MTP).
-    # ~63 GB NVFP4 fits the 96 GB RTX Pro 6000 (sm120); FP8 (~125 GB) would not. qwen4_exp needs a vLLM newer than the
-    # qwen27b wheelhouse's 0.19, so this preset pins its own vLLM 0.27.1 sm120 wheelhouse.
+    # ~63 GB NVFP4 fits the 96 GB RTX Pro 6000 (sm120); FP8 (~125 GB) would not. No released vLLM+Transformers wheelhouse
+    # knows qwen4_exp (even transformers 5.15.1 / vllm 0.27.1 reject it), so the ONLY runtime that loads it is the official
+    # `vllm/vllm-openai:qwen38-flash-next` Docker image, attached as its exported layer blobs and extracted at run time
+    # (runtime == "image"; the pbg builder emits a dedicated vLLM cell for this).
     "qwen38fn": {"kernel": "sungsuhyun/arc3-arcnav-q38fn", "title": "arc3-arcnav-q38fn", "out": "arcnav-q38fn",
                  "dataset_model": None, "model_source": "nvidia/qwen3-8-flash-next-nvfp4/pyTorch/v1/1",
-                 "wheelhouse": "codywhatleymd/arc3-vllm-0271-sm120-wheelhouse",   # vLLM 0.27.1 (cu130, sm120, cp312); wheels live in wheels/wheelhouse/ (auto-detected)
+                 "wheelhouse": "keithtyser/qwen38-flash-next-vllm-nvfp4-runtime-v1",   # exported layers of vllm/vllm-openai:qwen38-flash-next
+                 "runtime": "image",
                  "vllm_flags": ["--tool-call-parser", "qwen3_coder", "--reasoning-parser", "qwen3"],
                  "extra_body": {"chat_template_kwargs": {"enable_thinking": False}}, "max_tokens": 5000, "cfg_extra": {}},
 }

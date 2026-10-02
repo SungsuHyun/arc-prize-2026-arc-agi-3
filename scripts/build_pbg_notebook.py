@@ -57,6 +57,95 @@ def sources() -> dict[str, str]:
     return out
 
 
+def image_vllm_cell() -> dict:
+    """vLLM launched from an exported Docker image (vllm/vllm-openai:qwen38-flash-next), the only runtime that knows the
+    qwen4_exp architecture. The image layers are attached as blobs; extract them, then run the image's vLLM (its own
+    Transformers/vLLM) against the separately attached NVFP4 weights. Serves local-model on 127.0.0.1:1234 like the
+    wheelhouse cell, so the play cell and the gateway config are unchanged."""
+    runtime_ref = PRESET["wheelhouse"]
+    model_ref = PRESET["model_source"]
+    return base.code_cell(dedent(f"""\
+        import glob, json, os, subprocess, sys, tarfile, time, urllib.request
+        WORK = '/kaggle/working'
+        def _find(ref):
+            owner, slug = ref.split('/', 1)
+            for p in (f'/kaggle/input/{{slug}}', f'/kaggle/input/datasets/{{owner}}/{{slug}}'):
+                if os.path.exists(p):
+                    return p
+            raise FileNotFoundError(ref)
+        RUNTIME = _find('{runtime_ref}')
+        _mp = glob.glob('/kaggle/input/models/**/config.json', recursive=True)
+        MODEL_PATH = os.path.dirname(_mp[0]) if _mp else _find('{model_ref}')
+        cfgs = glob.glob(MODEL_PATH + '/**/config.json', recursive=True)
+        MODEL_PATH = os.path.dirname(cfgs[0]) if cfgs else MODEL_PATH
+        print('runtime:', RUNTIME, '| model:', MODEL_PATH)
+        print(subprocess.run(['nvidia-smi', '--query-gpu=name,memory.total', '--format=csv,noheader'], capture_output=True, text=True).stdout.strip())
+
+        # Extract the exported image layers (manifest order; later layers overlay earlier ones) into a scratch root.
+        ROOT = '/tmp/vllm-image'
+        if not os.path.exists(ROOT + '/.done'):
+            man = json.load(open(RUNTIME + '/runtime-manifest.json'))
+            layers = sorted(man['selected_layers'], key=lambda l: l['index'])
+            os.makedirs(ROOT, exist_ok=True)
+            for l in layers:
+                cands = [RUNTIME + '/' + l['file'] + '.blob', RUNTIME + '/' + l['file']] + glob.glob(RUNTIME + '/layer-%d-*' % l['index'])
+                blob = next(p for p in cands if os.path.exists(p))
+                print('extract', os.path.basename(blob), f"({{l['size']//(1<<20)}} MiB) ...", flush=True)
+                with tarfile.open(blob, 'r:gz') as tf:
+                    for _mem in tf:   # per-member so one odd entry (device, absolute symlink, .wh. whiteout) never kills the layer
+                        try:
+                            tf.extract(_mem, ROOT, filter='tar')
+                        except Exception:
+                            pass
+            open(ROOT + '/.done', 'w').write('ok')
+        print('image root size MiB:', subprocess.run(['du', '-sm', ROOT], capture_output=True, text=True).stdout.split()[0])
+
+        # Locate the image's python site-packages (the dir that holds vllm). Its native extensions must match this kernel's
+        # python ABI (both cp312 for vllm/vllm-openai + Kaggle); warn otherwise.
+        _v = glob.glob(ROOT + '/**/site-packages/vllm/__init__.py', recursive=True)
+        if not _v:
+            raise RuntimeError('no vllm in the extracted image. site-packages dirs: ' + str(glob.glob(ROOT + '/**/site-packages', recursive=True))[:800])
+        SITE = os.path.dirname(os.path.dirname(_v[0]))
+        import re as _re
+        _m = _re.search(r'python3\\.(\\d+)', SITE)
+        if _m and int(_m.group(1)) != sys.version_info.minor:
+            print(f'WARNING: image python 3.{{_m.group(1)}} != kernel python 3.{{sys.version_info.minor}} (ABI mismatch likely)')
+        print('image vllm site-packages:', SITE)
+        # CUDA libs: torch ships its own under site-packages/nvidia/*/lib; add them plus the Kaggle driver stub.
+        _nvlibs = ':'.join(sorted(set(os.path.dirname(p) for p in glob.glob(SITE + '/nvidia/**/lib', recursive=True)) |
+                                  set(glob.glob(SITE + '/nvidia/*/lib'))))
+        _ld = '/usr/local/nvidia/lib64:' + _nvlibs + ':' + SITE + '/torch/lib:' + os.environ.get('LD_LIBRARY_PATH', '')
+        env = dict(os.environ, PYTHONPATH=SITE, USE_TF='0', TRANSFORMERS_NO_TF='1', TRANSFORMERS_NO_TORCHVISION='1',
+                   VLLM_NO_USAGE_STATS='1', LIBRARY_PATH='/usr/local/nvidia/lib64:' + os.environ.get('LIBRARY_PATH', ''), LD_LIBRARY_PATH=_ld)
+        cmd = [sys.executable, '-m', 'vllm.entrypoints.openai.api_server', '--model', MODEL_PATH, '--served-model-name', '{base.SERVED_MODEL}',
+               '--host', '127.0.0.1', '--port', '1234', '--max-model-len', '65536', '--gpu-memory-utilization', '0.92',
+               '--enable-auto-tool-choice', '--enable-prefix-caching', '--generation-config', 'vllm'] + {PRESET["vllm_flags"]!r}
+        log = open(f'{{WORK}}/vllm-server.log', 'w')
+        VLLM = subprocess.Popen(cmd, env=env, stdout=log, stderr=subprocess.STDOUT)
+        t0 = time.time()
+        while True:
+            if VLLM.poll() is not None:
+                _log = open(f'{{WORK}}/vllm-server.log').read()
+                _err = [l for l in _log.splitlines() if any(k in l for k in ('FAILED', 'error:', 'Error', 'cannot find', 'RuntimeError', 'assert', 'not recognize'))]
+                raise RuntimeError('vLLM exited. Error lines:\\n' + '\\n'.join(_err[:40]) + '\\n--- tail ---\\n' + _log[-3000:])
+            try:
+                urllib.request.urlopen('http://127.0.0.1:1234/v1/models', timeout=5).read(); break
+            except Exception:
+                if time.time() - t0 > 1800:
+                    raise TimeoutError(open(f'{{WORK}}/vllm-server.log').read()[-4000:])
+                time.sleep(5)
+        print(f'vLLM ready after {{time.time()-t0:.0f}}s')
+        req = urllib.request.Request('http://127.0.0.1:1234/v1/chat/completions', data=json.dumps({{'model': '{base.SERVED_MODEL}', 'max_tokens': 400,
+              'messages': [{{'role': 'user', 'content': 'Say hello in five words.'}}], **{PRESET["extra_body"]!r}}}).encode(),
+              headers={{'Content-Type': 'application/json'}})
+        try:
+            _msg = json.loads(urllib.request.urlopen(req, timeout=300).read())['choices'][0]['message']
+            print('smoke:', repr((_msg.get('content') or '')[:200]))
+        except Exception as _e:
+            print('smoke chat failed:', repr(_e)[:300])
+        """))
+
+
 def build(explore: int) -> dict:
     files = sources()
     setup_cell = base.code_cell(dedent(f"""\
@@ -75,7 +164,7 @@ def build(explore: int) -> dict:
         import arc_agi, yaml, pbg.harness.online_runner, pbg.hypothesis.policy
         print(f'pbg embedded ({{len(FILES)}} files) | arc_agi ok |', f'{{time.time()-T0:.0f}}s')
         """))
-    vllm_cell = base.build()["cells"][2]      # identical vLLM launch (same wheelhouse / model / flags)
+    vllm_cell = image_vllm_cell() if PRESET.get("runtime") == "image" else base.build()["cells"][2]
     play_cell = base.code_cell(dedent(f"""\
         import math, os, sys, time, urllib.request, logging
         from pathlib import Path
