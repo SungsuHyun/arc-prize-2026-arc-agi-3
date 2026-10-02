@@ -38,8 +38,7 @@ PRESETS = {
     # qwen27b wheelhouse's 0.19, so this preset pins its own vLLM 0.27.1 sm120 wheelhouse.
     "qwen38fn": {"kernel": "sungsuhyun/arc3-arcnav-q38fn", "title": "arc3-arcnav-q38fn", "out": "arcnav-q38fn",
                  "dataset_model": None, "model_source": "nvidia/qwen3-8-flash-next-nvfp4/pyTorch/v1/1",
-                 "wheelhouse": "codywhatleymd/arc3-vllm-0271-sm120-wheelhouse",   # vLLM 0.27.1 (cu130, sm120, cp312)
-                 "wheel_install": ["vllm"],   # this wheelhouse's requirements.lock over-pins accelerate==1.14.0 (not in the wheels); resolve vllm from the wheels instead
+                 "wheelhouse": "codywhatleymd/arc3-vllm-0271-sm120-wheelhouse",   # vLLM 0.27.1 (cu130, sm120, cp312); wheels live in wheels/wheelhouse/ (auto-detected)
                  "vllm_flags": ["--tool-call-parser", "qwen3_coder", "--reasoning-parser", "qwen3"],
                  "extra_body": {"chat_template_kwargs": {"enable_thinking": False}}, "max_tokens": 5000, "cfg_extra": {}},
 }
@@ -114,10 +113,13 @@ def build() -> dict:
         print('wheelhouse:', WHEELHOUSE, '| model:', MODEL_PATH)
         print(subprocess.run(['nvidia-smi', '--query-gpu=name,memory.total', '--format=csv,noheader'], capture_output=True, text=True).stdout.strip())
         if not os.path.exists(SITE + '/vllm'):
-            _lock = WHEELHOUSE + '/requirements.lock'
-            # a preset may force resolving from the wheels ({wheel_install!r}); else use the lock when present, else just vllm
-            _spec = {wheel_install!r} or (['--requirement', _lock] if os.path.exists(_lock) else ['vllm'])
-            subprocess.run([sys.executable, '-m', 'pip', 'install', '--no-index', '--find-links', WHEELHOUSE] + _spec +
+            _whls = glob.glob(WHEELHOUSE + '/**/*.whl', recursive=True)   # wheels may sit in a subdir; --find-links is non-recursive
+            WHEEL_DIR = os.path.dirname(_whls[0]) if _whls else WHEELHOUSE
+            _locks = glob.glob(WHEEL_DIR + '/requirements.lock') or glob.glob(WHEELHOUSE + '/**/requirements.lock', recursive=True)
+            # a preset may force resolving from the wheels ({wheel_install!r}); else use the co-located lock, else just vllm
+            _spec = {wheel_install!r} or (['--requirement', _locks[0]] if _locks else ['vllm'])
+            print('wheel dir:', WHEEL_DIR, '| lock:', (_locks[0] if _locks else None), '| wheels:', len(_whls))
+            subprocess.run([sys.executable, '-m', 'pip', 'install', '--no-index', '--find-links', WHEEL_DIR] + _spec +
                            ['--target', SITE, '--upgrade', '--ignore-installed', '--only-binary', ':all:', '--no-compile', '--disable-pip-version-check',
                             '--no-warn-conflicts', '-q'], check=True)
         # FlashInfer JIT-compiles sm120 kernels and links -lcuda: the driver stub lives in /usr/local/nvidia/lib64 on Kaggle
