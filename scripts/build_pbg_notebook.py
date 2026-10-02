@@ -102,9 +102,12 @@ def image_vllm_cell() -> dict:
 
         # Locate the image's python site-packages (the dir that holds vllm). Its native extensions must match this kernel's
         # python ABI (both cp312 for vllm/vllm-openai + Kaggle); warn otherwise.
-        _v = glob.glob(ROOT + '/**/site-packages/vllm/__init__.py', recursive=True)
+        _v = (glob.glob(ROOT + '/**/site-packages/vllm/__init__.py', recursive=True) or
+              glob.glob(ROOT + '/**/dist-packages/vllm/__init__.py', recursive=True) or   # vllm/vllm-openai installs into dist-packages
+              glob.glob(ROOT + '/**/vllm/__init__.py', recursive=True))
+        _v = [p for p in _v if os.path.isdir(os.path.dirname(p) + '/entrypoints')] or _v   # a real install, not a nested copy
         if not _v:
-            raise RuntimeError('no vllm in the extracted image. site-packages dirs: ' + str(glob.glob(ROOT + '/**/site-packages', recursive=True))[:800])
+            raise RuntimeError('no vllm in the extracted image. python dirs: ' + str(glob.glob(ROOT + '/**/python3*/', recursive=True)[:20]))
         SITE = os.path.dirname(os.path.dirname(_v[0]))
         import re as _re
         _m = _re.search(r'python3\\.(\\d+)', SITE)
