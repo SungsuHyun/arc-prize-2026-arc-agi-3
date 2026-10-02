@@ -118,10 +118,15 @@ def image_vllm_cell() -> dict:
         _nvlibs = ':'.join(sorted(set(os.path.dirname(p) for p in glob.glob(SITE + '/nvidia/**/lib', recursive=True)) |
                                   set(glob.glob(SITE + '/nvidia/*/lib'))))
         _ld = '/usr/local/nvidia/lib64:' + _nvlibs + ':' + SITE + '/torch/lib:' + os.environ.get('LD_LIBRARY_PATH', '')
+        _ram_gb = round(int(next(l.split()[1] for l in open('/proc/meminfo') if l.startswith('MemTotal'))) / (1 << 20), 1)
+        print(f'host RAM: {{_ram_gb}} GiB (the FP8 PLE n-gram table offloaded to CPU needs ~48 GiB + headroom; recipe wants >= 64)')
+        # Qwen3.8-Flash-Next has a 51B-param PLE n-gram embedding. On one 96 GB GPU it must be offloaded to host RAM
+        # (VLLM_PLE_CPU_OFFLOAD=1): NVFP4 experts then use ~89 GiB VRAM. Recipe: max-model-len 32768, max-num-seqs 36.
         env = dict(os.environ, PYTHONPATH=SITE, USE_TF='0', TRANSFORMERS_NO_TF='1', TRANSFORMERS_NO_TORCHVISION='1',
-                   VLLM_NO_USAGE_STATS='1', LIBRARY_PATH='/usr/local/nvidia/lib64:' + os.environ.get('LIBRARY_PATH', ''), LD_LIBRARY_PATH=_ld)
+                   VLLM_NO_USAGE_STATS='1', VLLM_PLE_CPU_OFFLOAD='1', PYTORCH_CUDA_ALLOC_CONF='expandable_segments:True',
+                   LIBRARY_PATH='/usr/local/nvidia/lib64:' + os.environ.get('LIBRARY_PATH', ''), LD_LIBRARY_PATH=_ld)
         cmd = [sys.executable, '-m', 'vllm.entrypoints.openai.api_server', '--model', MODEL_PATH, '--served-model-name', '{base.SERVED_MODEL}',
-               '--host', '127.0.0.1', '--port', '1234', '--max-model-len', '65536', '--gpu-memory-utilization', '0.92',
+               '--host', '127.0.0.1', '--port', '1234', '--max-model-len', '32768', '--max-num-seqs', '36', '--gpu-memory-utilization', '0.93',
                '--enable-auto-tool-choice', '--enable-prefix-caching', '--generation-config', 'vllm'] + {PRESET["vllm_flags"]!r}
         log = open(f'{{WORK}}/vllm-server.log', 'w')
         VLLM = subprocess.Popen(cmd, env=env, stdout=log, stderr=subprocess.STDOUT)
