@@ -33,6 +33,14 @@ PRESETS = {
                    "extra_datasets": ["sungsuhyun/tiktoken-o200k-cache"],   # o200k_base vocab under its sha1 name: harmony loads it offline
                    "env": {"TIKTOKEN_RS_CACHE_DIR": "/kaggle/input/datasets/sungsuhyun/tiktoken-o200k-cache"},
                    "extra_body": {"reasoning_effort": "high"}, "max_tokens": 8192, "cfg_extra": {"tool_choice_required": False}},   # v7: low effort + required tool choice acted a lot but poorly
+    # Qwen3.8-Flash-Next: 125B MoE (qwen4_exp / Qwen4ExpForConditionalGeneration), NVIDIA ModelOpt NVFP4 (FP8 PLE/MTP).
+    # ~63 GB NVFP4 fits the 96 GB RTX Pro 6000 (sm120); FP8 (~125 GB) would not. qwen4_exp needs a vLLM newer than the
+    # qwen27b wheelhouse's 0.19, so this preset pins its own vLLM 0.27.1 sm120 wheelhouse.
+    "qwen38fn": {"kernel": "sungsuhyun/arc3-arcnav-q38fn", "title": "arc3-arcnav-q38fn", "out": "arcnav-q38fn",
+                 "dataset_model": None, "model_source": "nvidia/qwen3-8-flash-next-nvfp4/pyTorch/v1/1",
+                 "wheelhouse": "codywhatleymd/arc3-vllm-0271-sm120-wheelhouse",   # vLLM 0.27.1 (cu130, sm120, cp312)
+                 "vllm_flags": ["--tool-call-parser", "qwen3_coder", "--reasoning-parser", "qwen3"],
+                 "extra_body": {"chat_template_kwargs": {"enable_thinking": False}}, "max_tokens": 5000, "cfg_extra": {}},
 }
 PRESET = PRESETS[_ARGS.preset]
 KERNEL_ID = PRESET["kernel"]
@@ -65,6 +73,7 @@ def markdown_cell(src: str) -> dict:
 
 def build() -> dict:
     sources = {name: (PKG / name).read_text() for name in SOURCE_FILES}
+    wheelhouse_ref = PRESET.get("wheelhouse") or WHEELHOUSE_REF   # a preset may pin its own vLLM wheelhouse (qwen4_exp needs > 0.19)
 
     setup_cell = code_cell(dedent(f"""\
         import json, os, subprocess, sys, time
@@ -94,7 +103,7 @@ def build() -> dict:
                 if os.path.exists(p):
                     return p
             raise FileNotFoundError(ref)
-        WHEELHOUSE = _find('{WHEELHOUSE_REF}')
+        WHEELHOUSE = _find('{wheelhouse_ref}')
         _mp = glob.glob('/kaggle/input/models/**/config.json', recursive=True)
         MODEL_PATH = os.path.dirname(_mp[0]) if ({PRESET["model_source"] is not None!r} and _mp) else _find('{MODEL_REF}')
         cfgs = glob.glob(MODEL_PATH + '/**/config.json', recursive=True)
@@ -103,8 +112,10 @@ def build() -> dict:
         print('wheelhouse:', WHEELHOUSE, '| model:', MODEL_PATH)
         print(subprocess.run(['nvidia-smi', '--query-gpu=name,memory.total', '--format=csv,noheader'], capture_output=True, text=True).stdout.strip())
         if not os.path.exists(SITE + '/vllm'):
-            subprocess.run([sys.executable, '-m', 'pip', 'install', '--no-index', '--find-links', WHEELHOUSE, '--requirement', WHEELHOUSE + '/requirements.lock',
-                            '--target', SITE, '--upgrade', '--ignore-installed', '--only-binary', ':all:', '--no-compile', '--disable-pip-version-check',
+            _lock = WHEELHOUSE + '/requirements.lock'
+            _spec = (['--requirement', _lock] if os.path.exists(_lock) else ['vllm'])   # some wheelhouses ship no lock: resolve vllm + deps from the wheels
+            subprocess.run([sys.executable, '-m', 'pip', 'install', '--no-index', '--find-links', WHEELHOUSE] + _spec +
+                           ['--target', SITE, '--upgrade', '--ignore-installed', '--only-binary', ':all:', '--no-compile', '--disable-pip-version-check',
                             '--no-warn-conflicts', '-q'], check=True)
         # FlashInfer JIT-compiles sm120 kernels and links -lcuda: the driver stub lives in /usr/local/nvidia/lib64 on Kaggle
         env = dict(os.environ, PYTHONPATH=SITE, USE_TF='0', TRANSFORMERS_NO_TF='1', TRANSFORMERS_NO_TORCHVISION='1', VLLM_NO_USAGE_STATS='1', **{PRESET.get("env", {})!r},
@@ -202,7 +213,7 @@ def main() -> None:
     METADATA_PATH.write_text(json.dumps({
         "id": KERNEL_ID, "title": KERNEL_TITLE, "code_file": NOTEBOOK_PATH.name, "language": "python", "kernel_type": "notebook",
         "is_private": True, "enable_gpu": True, "enable_tpu": False, "enable_internet": False, "keywords": [],
-        "dataset_sources": [WHEELHOUSE_REF] + ([PRESET["dataset_model"]] if PRESET["dataset_model"] else []) + PRESET.get("extra_datasets", []), "kernel_sources": [],
+        "dataset_sources": [PRESET.get("wheelhouse") or WHEELHOUSE_REF] + ([PRESET["dataset_model"]] if PRESET["dataset_model"] else []) + PRESET.get("extra_datasets", []), "kernel_sources": [],
         "competition_sources": ["arc-prize-2026-arc-agi-3"],
         "model_sources": [PRESET["model_source"]] if PRESET["model_source"] else [], "machine_shape": MACHINE_SHAPE}, indent=2) + "\n")
     print(f"wrote {NOTEBOOK_PATH.relative_to(ROOT)} ({NOTEBOOK_PATH.stat().st_size // 1024} KB) and {METADATA_PATH.relative_to(ROOT)}")

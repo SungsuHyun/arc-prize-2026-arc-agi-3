@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """Build notebooks/pbg/pbg_submission.ipynb: the pbg hypothesis policy (look -> hypothesise -> test -> verify at pixel level ->
-revise -> plan, with level-1 exploration) and an in-notebook vLLM server (Qwen3.6-27B-FP8) for the ARC-AGI-3 competition rerun.
+revise -> plan, with level-1 exploration) and an in-notebook vLLM server (Qwen3.8-Flash-Next NVFP4) for the ARC-AGI-3 competition rerun.
 
 Attached inputs (kernel-metadata.json): the competition (arc-agi wheels + environment_files), the vLLM wheelhouse dataset and the
 HF snapshot of the model. The pbg package is embedded (sources, yaml configs, priors), so no source dataset is needed.
@@ -33,7 +33,13 @@ RERUN_JOBS = 12
 RERUN_TOTAL_MINUTES = 470          # Kaggle rerun limit is 540 min including the model load
 RERUN_MAX_MINUTES_PER_GAME = 120
 LLM_CALLS_PER_GAME = 600           # the local run used ~6 calls/min/game (r11l: 58 calls in 10 min)
-PRESET = base.PRESETS["qwen27b"]
+# Qwen3.8-Flash-Next (qwen4_exp, NVFP4) on the 96 GB RTX Pro 6000. The vLLM cell comes from base.build(), which reads
+# base's module globals, so point them all at this preset before calling it (the preset also pins a vLLM 0.27.1 wheelhouse,
+# since qwen4_exp needs a vLLM newer than the qwen27b wheelhouse's 0.19).
+PRESET = base.PRESETS["qwen38fn"]
+base.PRESET = PRESET
+base.WHEELHOUSE_REF = PRESET.get("wheelhouse") or base.WHEELHOUSE_REF
+base.MODEL_REF = PRESET["model_source"] or PRESET["dataset_model"]
 
 
 def sources() -> dict[str, str]:
@@ -113,7 +119,7 @@ def build(explore: int) -> dict:
     nb = base.build()
     nb["cells"] = [base.markdown_cell("# ARC-AGI-3 — pbg hypothesis agent submission (SungsuHyun)\n\n"
                                       "pbg treats an unseen game as a science problem: explore level 1 briefly (random buttons that never repeat the last one, "
-                                      f"one click per object class; at most {explore} actions), then Qwen3.6-27B-FP8 (vLLM in the notebook) writes a hypothesis of the "
+                                      f"one click per object class; at most {explore} actions), then Qwen3.8-Flash-Next (NVFP4, vLLM in the notebook) writes a hypothesis of the "
                                       "whole game as executable code (roles, rules, win condition, tests); the prediction is checked against the real next frame pixel "
                                       "by pixel, counter-examples go back to the model, and A* plans only on a verified hypothesis. Sources are embedded from `pbg/` "
                                       "by `scripts/build_pbg_notebook.py`; do not edit cells here.\n\n"
@@ -131,8 +137,9 @@ def main() -> None:
     METADATA_PATH.write_text(json.dumps({
         "id": KERNEL_ID, "title": KERNEL_TITLE, "code_file": NOTEBOOK_PATH.name, "language": "python", "kernel_type": "notebook",
         "is_private": True, "enable_gpu": True, "enable_tpu": False, "enable_internet": False, "keywords": [],
-        "dataset_sources": [base.WHEELHOUSE_REF, PRESET["dataset_model"]], "kernel_sources": [],
-        "competition_sources": ["arc-prize-2026-arc-agi-3"], "model_sources": [], "machine_shape": base.MACHINE_SHAPE}, indent=2) + "\n")
+        "dataset_sources": [base.WHEELHOUSE_REF] + ([PRESET["dataset_model"]] if PRESET["dataset_model"] else []) + PRESET.get("extra_datasets", []), "kernel_sources": [],
+        "competition_sources": ["arc-prize-2026-arc-agi-3"],
+        "model_sources": [PRESET["model_source"]] if PRESET.get("model_source") else [], "machine_shape": base.MACHINE_SHAPE}, indent=2) + "\n")
     print(f"wrote {NOTEBOOK_PATH.relative_to(ROOT)} ({NOTEBOOK_PATH.stat().st_size // 1024} KB, explore={a.explore}) and {METADATA_PATH.relative_to(ROOT)}")
 
 
