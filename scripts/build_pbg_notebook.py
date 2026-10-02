@@ -117,14 +117,22 @@ def image_vllm_cell() -> dict:
         # CUDA libs: torch ships its own under site-packages/nvidia/*/lib; add them plus the Kaggle driver stub.
         _nvlibs = ':'.join(sorted(set(os.path.dirname(p) for p in glob.glob(SITE + '/nvidia/**/lib', recursive=True)) |
                                   set(glob.glob(SITE + '/nvidia/*/lib'))))
-        _ld = '/usr/local/nvidia/lib64:' + _nvlibs + ':' + SITE + '/torch/lib:' + os.environ.get('LD_LIBRARY_PATH', '')
+        # The image's own CUDA toolkit (nvcc) must be used: FlashInfer JIT-compiles the NVFP4 MoE kernel for sm120 at
+        # startup, and Kaggle's base nvcc is too old ("No supported CUDA architectures found for major versions [12]").
+        _nvcc = glob.glob(ROOT + '/**/cuda*/bin/nvcc', recursive=True) or glob.glob(ROOT + '/**/bin/nvcc', recursive=True)
+        CUDA_HOME = os.path.dirname(os.path.dirname(_nvcc[0])) if _nvcc else '/usr/local/cuda'
+        print('image nvcc:', _nvcc[0] if _nvcc else 'NOT FOUND (JIT will likely fail)', '| CUDA_HOME:', CUDA_HOME)
+        _ld = '/usr/local/nvidia/lib64:' + CUDA_HOME + '/lib64:' + _nvlibs + ':' + SITE + '/torch/lib:' + os.environ.get('LD_LIBRARY_PATH', '')
         _ram_gb = round(int(next(l.split()[1] for l in open('/proc/meminfo') if l.startswith('MemTotal'))) / (1 << 20), 1)
         print(f'host RAM: {{_ram_gb}} GiB (the FP8 PLE n-gram table offloaded to CPU needs ~48 GiB + headroom; recipe wants >= 64)')
         # Qwen3.8-Flash-Next has a 51B-param PLE n-gram embedding. On one 96 GB GPU it must be offloaded to host RAM
         # (VLLM_PLE_CPU_OFFLOAD=1): NVFP4 experts then use ~89 GiB VRAM. Recipe: max-model-len 32768, max-num-seqs 36.
+        # sm120 FlashInfer JIT needs the arch declared explicitly (FLASHINFER_CUDA_ARCH_LIST=12.0f, FLASHINFER_FORCE_SM=120f).
         env = dict(os.environ, PYTHONPATH=SITE, USE_TF='0', TRANSFORMERS_NO_TF='1', TRANSFORMERS_NO_TORCHVISION='1',
                    VLLM_NO_USAGE_STATS='1', VLLM_PLE_CPU_OFFLOAD='1', PYTORCH_CUDA_ALLOC_CONF='expandable_segments:True',
-                   LIBRARY_PATH='/usr/local/nvidia/lib64:' + os.environ.get('LIBRARY_PATH', ''), LD_LIBRARY_PATH=_ld)
+                   FLASHINFER_CUDA_ARCH_LIST='12.0f', FLASHINFER_FORCE_SM='120f', TORCH_CUDA_ARCH_LIST='12.0',
+                   CUDA_HOME=CUDA_HOME, PATH=CUDA_HOME + '/bin:' + os.environ.get('PATH', ''),
+                   LIBRARY_PATH='/usr/local/nvidia/lib64:' + CUDA_HOME + '/lib64:' + os.environ.get('LIBRARY_PATH', ''), LD_LIBRARY_PATH=_ld)
         cmd = [sys.executable, '-m', 'vllm.entrypoints.openai.api_server', '--model', MODEL_PATH, '--served-model-name', '{base.SERVED_MODEL}',
                '--host', '127.0.0.1', '--port', '1234', '--max-model-len', '32768', '--max-num-seqs', '36', '--gpu-memory-utilization', '0.93',
                '--enable-auto-tool-choice', '--enable-prefix-caching', '--generation-config', 'vllm'] + {PRESET["vllm_flags"]!r}
