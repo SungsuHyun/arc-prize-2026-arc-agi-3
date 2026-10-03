@@ -132,14 +132,32 @@ def image_vllm_cell() -> dict:
         CUDA_HOME = os.path.dirname(os.path.dirname(_nvcc[0])) if _nvcc else '/usr/local/cuda'
         print('image nvcc:', _nvcc[0] if _nvcc else 'NOT FOUND (JIT will likely fail)', '| CUDA_HOME:', CUDA_HOME)
         _ld = '/usr/local/nvidia/lib64:' + CUDA_HOME + '/lib64:' + _nvlibs + ':' + SITE + '/torch/lib:' + os.environ.get('LD_LIBRARY_PATH', '')
+        # Every vLLM process (API server, engine core, GPU worker, PLE worker) is a fresh interpreter that imports
+        # sitecustomize first, so this opts each of them in to ptrace by any process: the PLE worker rebuilds the GPU
+        # worker's CUDA tensors with pidfd_getfd, which Yama refuses between siblings unless the exporter calls
+        # prctl(PR_SET_PTRACER, PR_SET_PTRACER_ANY) (peakcrosser7/vllm#12 "ptrace opt-in"). Scoped to our own processes.
+        PRELUDE = '/tmp/vllm-prelude'
+        os.makedirs(PRELUDE, exist_ok=True)
+        open(PRELUDE + '/sitecustomize.py', 'w').write(
+            'import ctypes\\n'
+            'try:\\n'
+            '    _libc = ctypes.CDLL("libc.so.6", use_errno=True)\\n'
+            '    _libc.prctl.restype = ctypes.c_int\\n'
+            '    _libc.prctl.argtypes = [ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong]\\n'
+            '    _libc.prctl(0x59616d61, ctypes.c_ulong(-1).value, 0, 0, 0)   # PR_SET_PTRACER, PR_SET_PTRACER_ANY\\n'
+            'except Exception:\\n'
+            '    pass\\n')
         _ram_gb = round(int(next(l.split()[1] for l in open('/proc/meminfo') if l.startswith('MemTotal'))) / (1 << 20), 1)
         print(f'host RAM: {{_ram_gb}} GiB (the FP8 PLE n-gram table offloaded to CPU needs ~48 GiB + headroom; recipe wants >= 64)')
         # Qwen3.8-Flash-Next has a 51B-param PLE n-gram embedding. On one 96 GB GPU it must be offloaded to host RAM
         # (VLLM_PLE_CPU_OFFLOAD=1): NVFP4 experts then use ~89 GiB VRAM. Recipe: max-model-len 32768, max-num-seqs 36.
         # sm120 FlashInfer JIT needs the arch declared explicitly (FLASHINFER_CUDA_ARCH_LIST=12.0f, FLASHINFER_FORCE_SM=120f).
-        env = dict(os.environ, PYTHONPATH=SITE, USE_TF='0', TRANSFORMERS_NO_TF='1', TRANSFORMERS_NO_TORCHVISION='1',
-                   VLLM_NO_USAGE_STATS='1', VLLM_PLE_CPU_OFFLOAD='1', PYTORCH_CUDA_ALLOC_CONF='expandable_segments:True',
-                   VLLM_PLE_OFFLOAD_READY_TIMEOUT='5400',   # the offload worker reads the ~48 GiB PLE table over slow NFS; the 600 s default can expire first
+        env = dict(os.environ, PYTHONPATH=PRELUDE + ':' + SITE, USE_TF='0', TRANSFORMERS_NO_TF='1', TRANSFORMERS_NO_TORCHVISION='1',
+                   # NO PYTORCH_CUDA_ALLOC_CONF=expandable_segments: expandable segments share CUDA memory through fd handles,
+                   # which the PLE worker imports with pidfd_getfd -> "Operation not permitted" in the Kaggle sandbox (v16).
+                   # The default allocator shares via cudaIpcMemHandle (no fd, no ptrace). Memory did not need it anyway.
+                   VLLM_NO_USAGE_STATS='1', VLLM_PLE_CPU_OFFLOAD='1',
+                   VLLM_PLE_OFFLOAD_READY_TIMEOUT='5400',   # the offload worker reads the ~95 GiB BF16 PLE table over slow NFS; the 600 s default can expire first
                    FLASHINFER_CUDA_ARCH_LIST='12.0f', FLASHINFER_FORCE_SM='120f', TORCH_CUDA_ARCH_LIST='12.0',
                    CUDA_HOME=CUDA_HOME, PATH=CUDA_HOME + '/bin:' + os.environ.get('PATH', ''),
                    LIBRARY_PATH='/usr/local/nvidia/lib64:' + CUDA_HOME + '/lib64:' + os.environ.get('LIBRARY_PATH', ''), LD_LIBRARY_PATH=_ld)
