@@ -130,14 +130,17 @@ def image_vllm_cell() -> dict:
         # sm120 FlashInfer JIT needs the arch declared explicitly (FLASHINFER_CUDA_ARCH_LIST=12.0f, FLASHINFER_FORCE_SM=120f).
         env = dict(os.environ, PYTHONPATH=SITE, USE_TF='0', TRANSFORMERS_NO_TF='1', TRANSFORMERS_NO_TORCHVISION='1',
                    VLLM_NO_USAGE_STATS='1', VLLM_PLE_CPU_OFFLOAD='1', PYTORCH_CUDA_ALLOC_CONF='expandable_segments:True',
+                   VLLM_PLE_OFFLOAD_READY_TIMEOUT='5400',   # the offload worker reads the ~48 GiB PLE table over slow NFS; the 600 s default can expire first
                    FLASHINFER_CUDA_ARCH_LIST='12.0f', FLASHINFER_FORCE_SM='120f', TORCH_CUDA_ARCH_LIST='12.0',
                    CUDA_HOME=CUDA_HOME, PATH=CUDA_HOME + '/bin:' + os.environ.get('PATH', ''),
                    LIBRARY_PATH='/usr/local/nvidia/lib64:' + CUDA_HOME + '/lib64:' + os.environ.get('LIBRARY_PATH', ''), LD_LIBRARY_PATH=_ld)
-        # --no-enable-flashinfer-autotune: with autotune on, startup deadlocks on an RTX Pro 6000 right after CUDA graph
-        # capture (v12/v13 sat 37+ min with no log and never bound the port); autotuned MoE tactics also corrupt output on sm120.
+        # --distributed-executor-backend mp is load-bearing on ONE GPU (vllm#53960): the default single-GPU executor never
+        # spawns the PLE n-gram offload worker, so the warmup forward waits on it forever -- v12/v13/v14 all went silent right
+        # after "Free memory on device" and never bound the port. --no-enable-flashinfer-autotune: autotuned MoE tactics
+        # corrupt output on sm120 (flashinfer#4841).
         cmd = [sys.executable, '-m', 'vllm.entrypoints.openai.api_server', '--model', MODEL_PATH, '--served-model-name', '{base.SERVED_MODEL}',
                '--host', '127.0.0.1', '--port', '1234', '--max-model-len', '32768', '--max-num-seqs', '36', '--gpu-memory-utilization', '0.93',
-               '--no-enable-flashinfer-autotune',
+               '--distributed-executor-backend', 'mp', '--no-enable-flashinfer-autotune',
                '--enable-auto-tool-choice', '--enable-prefix-caching', '--generation-config', 'vllm'] + {PRESET["vllm_flags"]!r}
         log = open(f'{{WORK}}/vllm-server.log', 'w')
         VLLM = subprocess.Popen(cmd, env=env, stdout=log, stderr=subprocess.STDOUT)
@@ -150,14 +153,15 @@ def image_vllm_cell() -> dict:
             try:
                 urllib.request.urlopen('http://127.0.0.1:1234/v1/models', timeout=5).read(); break
             except Exception:
-                # ~10-18 min weight load (NFS) before the port opens; give startup an hour. A heartbeat every 5 min shows the
-                # last server log line, so a silent stall is visible without waiting for the timeout.
+                # 10-24 min weight load (NFS speed varies) plus the PLE worker's ~48 GiB table load before the port opens;
+                # give startup 90 min. A heartbeat every 5 min shows the last server log line, so a silent stall is visible
+                # without waiting for the timeout.
                 _el = time.time() - t0
                 if _el - _hb >= 300:
                     _hb = _el
                     _lines = [l for l in open(f'{{WORK}}/vllm-server.log').read().splitlines() if l.strip()]
                     print(f'[wait {{_el/60:.0f}} min] last: {{(_lines[-1] if _lines else "")[:200]}}', flush=True)
-                if _el > 3600:
+                if _el > 5400:
                     raise TimeoutError(open(f'{{WORK}}/vllm-server.log').read()[-4000:])
                 time.sleep(5)
         print(f'vLLM ready after {{time.time()-t0:.0f}}s')
