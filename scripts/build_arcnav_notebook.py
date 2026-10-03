@@ -39,7 +39,12 @@ PRESETS = {
     # `vllm/vllm-openai:qwen38-flash-next` Docker image, attached as its exported layer blobs and extracted at run time
     # (runtime == "image"; the pbg builder emits a dedicated vLLM cell for this).
     "qwen38fn": {"kernel": "sungsuhyun/arc3-arcnav-q38fn", "title": "arc3-arcnav-q38fn", "out": "arcnav-q38fn",
-                 "dataset_model": None, "model_source": "nvidia/qwen3-8-flash-next-nvfp4/pyTorch/v1/1",
+                 # Swift 1.5 conversion (ukisai, mirrored by lordhansolo; Swift Open License v1.0): ModelOpt NVFP4 experts with the
+                 # PLE embeddings kept in BF16 (hf_quant_config excludes layers.1.ple*). The official nvidia NVFP4 checkpoint
+                 # quantizes its PLE table to FP8 and cannot be CPU-offloaded on one GPU -- vllm#54765 (unmerged): the offload
+                 # path builds a plain embedding with no weight_scale slot ("no module or parameter named
+                 # ngram_embedding.weight_scale", kernel v15). BF16 PLE ~95-100 GiB in host RAM (131 GiB on the Kaggle box).
+                 "dataset_model": None, "model_source": "lordhansolo/swift-1-5-qwen3-8-flash-next-nvfp4/pyTorch/hf-nvfp4/1",
                  "wheelhouse": "keithtyser/qwen38-flash-next-vllm-nvfp4-runtime-v1",   # exported layers of vllm/vllm-openai:qwen38-flash-next
                  "runtime": "image",
                  "vllm_flags": ["--tool-call-parser", "qwen3_coder", "--reasoning-parser", "qwen3"],

@@ -74,10 +74,19 @@ def image_vllm_cell() -> dict:
                     return p
             raise FileNotFoundError(ref)
         RUNTIME = _find('{runtime_ref}')
+        # The model dir is the one whose config.json sits next to the quant config / safetensors: some mirrors also ship a
+        # config.json in sub-folders (visual, mtp), and glob order is not a safe tie-breaker.
+        def _model_dir(cands):
+            dirs = [os.path.dirname(c) for c in cands]
+            for d in dirs:
+                if os.path.exists(d + '/hf_quant_config.json') or glob.glob(d + '/*.safetensors'):
+                    return d
+            return dirs[0] if dirs else None
         _mp = glob.glob('/kaggle/input/models/**/config.json', recursive=True)
-        MODEL_PATH = os.path.dirname(_mp[0]) if _mp else _find('{model_ref}')
-        cfgs = glob.glob(MODEL_PATH + '/**/config.json', recursive=True)
-        MODEL_PATH = os.path.dirname(cfgs[0]) if cfgs else MODEL_PATH
+        MODEL_PATH = _model_dir(_mp) or _find('{model_ref}')
+        MODEL_PATH = _model_dir(glob.glob(MODEL_PATH + '/**/config.json', recursive=True)) or MODEL_PATH
+        print('model files:', len(glob.glob(MODEL_PATH + '/*.safetensors')), 'safetensors |',
+              'hf_quant_config:', os.path.exists(MODEL_PATH + '/hf_quant_config.json'))
         print('runtime:', RUNTIME, '| model:', MODEL_PATH)
         print(subprocess.run(['nvidia-smi', '--query-gpu=name,memory.total', '--format=csv,noheader'], capture_output=True, text=True).stdout.strip())
 
