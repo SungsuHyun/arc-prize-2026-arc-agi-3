@@ -23,7 +23,7 @@ SITE_PORT       ?= 8080
 EVAL_PORT       ?= 8090
 STEPS           ?= 200
 
-.PHONY: help setup pbg pbg-replay pbg-test pbg-lint pbg-import-logs pbg-human-log pbg-metrics pbg-postmortem pbg-dataset pbg-notebook pbg-submit arcnav rulebook rulebook-bench rulebook-notebook rulebook-submit play-local pull-sample notebook submit status kaggle-log wheels llm-venv smoke-local verify-local serve exp-new exp-run exp-summary bench dashboard site site-publish eval-site eval-site-install eval-site-uninstall clean _check-kaggle
+.PHONY: help setup pbg pbg-replay pbg-test pbg-lint pbg-import-logs pbg-human-log pbg-metrics pbg-postmortem pbg-dataset pbg-notebook pbg-verify pbg-submit arcnav rulebook rulebook-bench rulebook-notebook rulebook-submit play-local pull-sample notebook submit status kaggle-log wheels llm-venv smoke-local verify-local serve exp-new exp-run exp-summary bench dashboard site site-publish eval-site eval-site-install eval-site-uninstall clean _check-kaggle
 
 _check-kaggle:
 	@if [ ! -s .kaggle/access_token ]; then \
@@ -74,7 +74,10 @@ pbg: ## pbg system (perception -> probe -> world-model lab -> goal -> planner, d
 pbg-notebook: ## Build notebooks/pbg/pbg_submission.ipynb (pbg hypothesis policy + in-notebook vLLM): make pbg-notebook [EXPLORE=20]
 	$(VENV_PY) scripts/build_pbg_notebook.py --explore $(or $(EXPLORE),20)
 
-pbg-submit: pbg-notebook _check-kaggle ## Build and push the pbg kernel (commit = 2-game smoke); then submit a version: kaggle competitions submit -k sungsuhyun/arc3-pbg -v N
+pbg-verify: ## Refuse to push an inconsistent pbg notebook (cells parse, metadata == preset, PLE-offload launch flags, no expandable_segments)
+	$(VENV_PY) scripts/verify_pbg_notebook.py
+
+pbg-submit: pbg-notebook pbg-verify _check-kaggle ## Build, verify and push the pbg kernel (commit = 2-game smoke); then submit a version: kaggle competitions submit -k sungsuhyun/arc3-pbg -v N
 	$(KAGGLE) kernels push -p notebooks/pbg/
 
 pbg-replay: ## Replay harness over recorded logs (perception/semantics/induction/goals/plans, no live env): make pbg-replay [LOG=pbg/data/human_logs/agent/ls20/raw.jsonl] [LLM=1]
