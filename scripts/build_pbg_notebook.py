@@ -133,12 +133,15 @@ def image_vllm_cell() -> dict:
                    FLASHINFER_CUDA_ARCH_LIST='12.0f', FLASHINFER_FORCE_SM='120f', TORCH_CUDA_ARCH_LIST='12.0',
                    CUDA_HOME=CUDA_HOME, PATH=CUDA_HOME + '/bin:' + os.environ.get('PATH', ''),
                    LIBRARY_PATH='/usr/local/nvidia/lib64:' + CUDA_HOME + '/lib64:' + os.environ.get('LIBRARY_PATH', ''), LD_LIBRARY_PATH=_ld)
+        # --no-enable-flashinfer-autotune: with autotune on, startup deadlocks on an RTX Pro 6000 right after CUDA graph
+        # capture (v12/v13 sat 37+ min with no log and never bound the port); autotuned MoE tactics also corrupt output on sm120.
         cmd = [sys.executable, '-m', 'vllm.entrypoints.openai.api_server', '--model', MODEL_PATH, '--served-model-name', '{base.SERVED_MODEL}',
                '--host', '127.0.0.1', '--port', '1234', '--max-model-len', '32768', '--max-num-seqs', '36', '--gpu-memory-utilization', '0.93',
+               '--no-enable-flashinfer-autotune',
                '--enable-auto-tool-choice', '--enable-prefix-caching', '--generation-config', 'vllm'] + {PRESET["vllm_flags"]!r}
         log = open(f'{{WORK}}/vllm-server.log', 'w')
         VLLM = subprocess.Popen(cmd, env=env, stdout=log, stderr=subprocess.STDOUT)
-        t0 = time.time()
+        t0 = time.time(); _hb = 0
         while True:
             if VLLM.poll() is not None:
                 _log = open(f'{{WORK}}/vllm-server.log').read()
@@ -147,9 +150,14 @@ def image_vllm_cell() -> dict:
             try:
                 urllib.request.urlopen('http://127.0.0.1:1234/v1/models', timeout=5).read(); break
             except Exception:
-                # ~9 min weight load + minutes of FlashInfer MoE autotuning before the port opens; v12 reached graph
-                # capture but the 1800 s wait cut it off. Give startup an hour.
-                if time.time() - t0 > 3600:
+                # ~10-18 min weight load (NFS) before the port opens; give startup an hour. A heartbeat every 5 min shows the
+                # last server log line, so a silent stall is visible without waiting for the timeout.
+                _el = time.time() - t0
+                if _el - _hb >= 300:
+                    _hb = _el
+                    _lines = [l for l in open(f'{{WORK}}/vllm-server.log').read().splitlines() if l.strip()]
+                    print(f'[wait {{_el/60:.0f}} min] last: {{(_lines[-1] if _lines else "")[:200]}}', flush=True)
+                if _el > 3600:
                     raise TimeoutError(open(f'{{WORK}}/vllm-server.log').read()[-4000:])
                 time.sleep(5)
         print(f'vLLM ready after {{time.time()-t0:.0f}}s')
