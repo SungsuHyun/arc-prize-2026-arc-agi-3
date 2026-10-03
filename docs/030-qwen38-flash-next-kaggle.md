@@ -77,5 +77,9 @@
   expandable_segments 금지, ptrace opt-in.
 - 비용: 기동이 길다(추출 + 로드 + 워밍업). 경쟁 재실행(540분 한도, `RERUN_TOTAL_MINUTES=470`)에서 게임 시간이 그만큼 줄어든다
   — 재실행 예산 재점검 필요.
-- 리더보드 제출은 수동(`kaggle competitions submit -k sungsuhyun/arc3-pbg -v 17`); 이 문서 작성 시점에 제출하지 않았다.
-  27B 대비 실제 점수 차이는 미측정.
+- 리더보드: 사용자 승인 후 **submission 56788709**(2026-10-03 03:45 UTC, 커널 v17 = cb51ae4) 제출, 제출 시점 상태 PENDING.
+  점수는 채점 재실행 완료 후 확인. 이 제출로 당일 쿼터 소진("0 submissions remaining today").
+  CLI 주의: 코드 대회 제출은 `-f submission.parquet`가 없으면 메시지 없는 `400 Bad Request`가 나고 제출이 생성되지 않는다 —
+  동작하는 전체 형식은 `scripts/submit_when_allowed.sh`와 같이
+  `kaggle competitions submit -c arc-prize-2026-arc-agi-3 -k sungsuhyun/arc3-pbg -v N -f submission.parquet -m "..."`.
+  27B 대비 실제 점수 차이는 이 채점 결과가 나와야 측정된다.

@@ -77,7 +77,7 @@ pbg-notebook: ## Build notebooks/pbg/pbg_submission.ipynb (pbg hypothesis policy
 pbg-verify: ## Refuse to push an inconsistent pbg notebook (cells parse, metadata == preset, PLE-offload launch flags, no expandable_segments)
 	$(VENV_PY) scripts/verify_pbg_notebook.py
 
-pbg-submit: pbg-notebook pbg-verify _check-kaggle ## Build, verify and push the pbg kernel (commit = 2-game smoke); then submit a version: kaggle competitions submit -k sungsuhyun/arc3-pbg -v N
+pbg-submit: pbg-notebook pbg-verify _check-kaggle ## Build, verify and push the pbg kernel (commit = 2-game smoke); then submit a version: kaggle competitions submit -c arc-prize-2026-arc-agi-3 -k sungsuhyun/arc3-pbg -v N -f submission.parquet -m "..." (without -f the API answers a bare 400)
 	$(KAGGLE) kernels push -p notebooks/pbg/
 
 pbg-replay: ## Replay harness over recorded logs (perception/semantics/induction/goals/plans, no live env): make pbg-replay [LOG=pbg/data/human_logs/agent/ls20/raw.jsonl] [LLM=1]
