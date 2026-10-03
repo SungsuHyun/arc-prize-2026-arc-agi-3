@@ -42,3 +42,4 @@
 | 027 | [pbg 자율 추론 시스템](027-pbg-system.md) | 2026-09-28 | SW 명세서 구현: `pbg/` 지각→프로브→세계모델 랩→목표 추론→계획 상태 기계, 리플레이 하네스·린트·테스트, 무LLM 기준선 |
 | 028 | [분류별 대표 게임 사후 분석](028-category-postmortem.md) | 2026-09-28 | ls20·lp85·m0r0·sb26 20분 시뮬레이션: LLM 대기가 시간의 90%+, 목표 추론이 최약 모듈, 지각 1px 카운터, 순환 이동·숨은 상태 프라이어 부재 |
 | 029 | [레벨 1 무작위 탐색과 게임 재시작](029-random-exploration-restart.md) | 2026-09-29 | 같은 play 무작위 탐색은 vc33 L1 2.73→0.05; 게임 재시작 요령은 로컬 전용 — Kaggle 대회 모드는 재시작·재생성 차단(대회 모드 서버로 확인); 레벨 1 가중치 1.8~4.8%라 탐색 레벨로 쓸 만함; 무작위 정보는 이동형 풍부·클릭형 거의 없음 |
+| 030 | [Qwen3.8-Flash-Next를 Kaggle 단일 RTX Pro 6000에서 서빙](030-qwen38-flash-next-kaggle.md) | 2026-10-03 | 커널 v6→v17 블로커 11개 순차 해결: pip 휠하우스 불가(qwen4_exp 미지원)→공식 vllm-openai 이미지 레이어 추출, 51B PLE 테이블 host RAM 오프로드, sm120 JIT arch, TP=1 PLE 워커 교착(mp executor), FP8-PLE 체크포인트 불가→Swift BF16-PLE, pidfd_getfd EPERM(expandable_segments 제거+ptrace opt-in); v17 첫 완주: ready 945s, r11l L1 4.76·vc33 L1 0.28(27B smoke와 동일 L1), 에러 0; make pbg-verify 게이트 |
